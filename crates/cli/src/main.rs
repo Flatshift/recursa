@@ -127,9 +127,17 @@ async fn main() {
         Some(Cmd::Calibrate) => {
             let c = tokio::task::spawn_blocking(|| calibrate::run(1000)).await.unwrap().expect("calibration");
             println!("clock            {}", c.clock);
-            println!("kernel rx stamps {}", if c.kernel_rx { "yes" } else { "no (userspace fallback)" });
+            let stamps = match (c.kernel_rx, c.stamped) {
+                (false, _) => "no (userspace fallback)".to_string(),
+                (true, 0) => "enabled, none on loopback (the stack stamps at the adapter)".to_string(),
+                (true, n) if n == c.samples => "yes".to_string(),
+                (true, n) => format!("yes, on {n} of {} answers", c.samples),
+            };
+            println!("kernel rx stamps {stamps}");
             println!("loopback floor   p50 {:.1} µs   p99 {:.1} µs   ({} samples)", c.floor_p50_us, c.floor_p99_us, c.samples);
-            println!("wake-up removed  p50 {:.1} µs   p99 {:.1} µs", c.wake_p50_us, c.wake_p99_us);
+            if c.stamped > 0 {
+                println!("wake-up removed  p50 {:.1} µs   p99 {:.1} µs", c.wake_p50_us, c.wake_p99_us);
+            }
         }
         Some(Cmd::Check) => {
             let v = tokio::task::spawn_blocking(intercept::check).await.unwrap();

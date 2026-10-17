@@ -160,9 +160,11 @@ process records monitoring for a given database.
 ## Limits
 
 * DoQ, DNSCrypt and ODoH are shown from operator documentation only; they aren't measured.
-* Windows before 10 2004 has no kernel receive stamps, so the engine falls back to userspace stamps there and the
-  floor is higher. The Windows link check times each echo in userspace, and reports only how late its own ticks ran,
-  not loopback echoes or interface counters.
+* On Windows the stack stamps a packet where the adapter hands it up, so stamps need an adapter whose driver has
+  software timestamping turned on (the **Software Timestamp** advanced property, off by default on most drivers) and
+  Windows 10 2004 or later. Answers without a stamp are timed in userspace, loopback answers always are, and the
+  Method page says which applied. The Windows link check times each echo in userspace, and reports only how late its
+  own ticks ran, not loopback echoes or interface counters.
 * Background monitoring runs while Recursa is running; it isn't installed as a system service.
 
 ## License
