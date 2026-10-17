@@ -316,6 +316,7 @@ interface Calibration {
   clock: string;
   kernel_rx: boolean;
   samples: number;
+  stamped: number;
   floor_p50_us: number | null;
   floor_p99_us: number | null;
   wake_p50_us: number | null;

@@ -72,13 +72,20 @@
         each query before the clock starts. It takes the send stamp immediately before the <code>send()</code> system call. The
         <b>kernel</b> gives the receive stamp when the packet arrives (<code>SO_TIMESTAMP_MONOTONIC</code> on macOS,
         <code>SO_TIMESTAMPNS</code> on Linux, <code>SIO_TIMESTAMPING</code> on Windows 10 2004 and later). The time that the
-        scheduler needs to wake the thread is not part of the result. Where the stamp is unavailable, the receive stamp is taken
-        when the thread reads the packet.
+        scheduler needs to wake the thread is not part of the result. Windows stamps where the adapter hands the packet up, so
+        it needs the adapter's software timestamping turned on. Where a stamp is unavailable, the receive stamp is taken when
+        the thread reads the packet.
       </p>
       <div class="instrument">
         <dl>
           <div><dt>Clock</dt><dd class="mono">{env?.clock ?? '—'}</dd></div>
-          <div><dt>Kernel receive stamps</dt><dd>{env?.kernel_rx ? 'On' : 'Unavailable on this system: userspace stamps'}</dd></div>
+          <div><dt>Kernel receive stamps</dt><dd>
+              {env?.kernel_rx
+                ? env?.platform === 'windows'
+                  ? 'On: answers are stamped where the adapter hands them up (loopback is not)'
+                  : 'On'
+                : 'Unavailable on this system: userspace stamps'}
+            </dd></div>
           <div><dt>Loopback floor (median)</dt><dd class="num">{us(cal?.floor_p50_us)}</dd></div>
           <div><dt>Loopback floor (99th pct)</dt><dd class="num">{us(cal?.floor_p99_us)}</dd></div>
           <div><dt>Wake-up delay removed (median)</dt><dd class="num">{us(cal?.wake_p50_us)}</dd></div>

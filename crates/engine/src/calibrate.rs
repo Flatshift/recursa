@@ -19,8 +19,12 @@ use std::time::Duration;
 #[derive(Clone, Debug, Serialize)]
 pub struct Calibration {
     pub clock: &'static str,
+    /// The socket asked for kernel receive stamps and got them turned on.
     pub kernel_rx: bool,
     pub samples: u32,
+    /// How many of the samples actually carried a kernel stamp. Windows stamps packets where the adapter
+    /// hands them up, so loopback answers never carry one there and the wake-up figures are empty.
+    pub stamped: u32,
     pub floor_p50_us: f64,
     pub floor_p99_us: f64,
     pub wake_p50_us: f64,
@@ -71,6 +75,7 @@ pub fn run(samples: u32) -> std::io::Result<Calibration> {
         clock: clock::SOURCE,
         kernel_rx,
         samples: rtt.len() as u32,
+        stamped: wake.len() as u32,
         floor_p50_us: pct(&mut rtt, 0.5),
         floor_p99_us: pct(&mut rtt, 0.99),
         wake_p50_us: pct(&mut wake, 0.5),
@@ -101,4 +106,40 @@ fn measure(addr: SocketAddr, samples: u32) -> std::io::Result<(bool, Vec<f64>, V
         std::thread::sleep(Duration::from_micros(500));
     }
     Ok((kernel_rx, rtt, wake))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The same measurement against a public resolver, for a machine whose loopback is not stamped
+    /// (Windows): `cargo test -p recursa-engine --release -- --ignored --nocapture stamps_on_the_network`.
+    #[test]
+    #[ignore = "asks a public resolver"]
+    fn stamps_on_the_network() {
+        clock::prioritize_thread();
+        let mut client = UdpX::connect("1.1.1.1:53".parse().unwrap()).unwrap();
+        let kernel_rx = client.kernel_timestamps();
+        let q = dns::encode_query(0, &dns::QuerySpec::new("calibration.recursa.invalid", dns::TYPE_A)).unwrap();
+        let (mut rtt, mut user, mut gap) = (Vec::new(), Vec::new(), Vec::new());
+        for i in 0..100u16 {
+            let mut msg = q.clone();
+            dns::set_id(&mut msg, i);
+            if let Ok(r) = client.exchange(&msg, Duration::from_millis(500)) {
+                rtt.push(r.rtt_ns as f64 / 1000.0);
+                user.push(r.user_rtt_ns as f64 / 1000.0);
+                if r.kernel_stamp {
+                    gap.push(r.user_rtt_ns.saturating_sub(r.rtt_ns) as f64 / 1000.0);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        println!("clock            {}", clock::SOURCE);
+        println!("kernel rx stamps {}", if kernel_rx { "enabled" } else { "no (userspace fallback)" });
+        println!("replies          {} of 100, {} kernel-stamped", rtt.len(), gap.len());
+        println!("rtt              p50 {:.1} µs   p99 {:.1} µs", pct(&mut rtt, 0.5), pct(&mut rtt, 0.99));
+        println!("userspace rtt    p50 {:.1} µs   p99 {:.1} µs", pct(&mut user, 0.5), pct(&mut user, 0.99));
+        println!("wake-up removed  p50 {:.1} µs   p99 {:.1} µs", pct(&mut gap, 0.5), pct(&mut gap, 0.99));
+        assert!(!rtt.is_empty(), "no answer from 1.1.1.1");
+    }
 }

@@ -480,7 +480,11 @@ mod win {
             }
             if h.cmsg_level == SOL_SOCKET && h.cmsg_type == SO_TIMESTAMP as i32 && h.cmsg_len >= hdr + 8 {
                 let ticks = unsafe { std::ptr::read_unaligned(base.add(off + hdr) as *const u64) };
-                stamp = Some(clock::ticks_to_ns(ticks));
+                // The stack stamps where the adapter hands the packet up (the NDIS boundary), so loopback
+                // traffic, and adapters without software timestamping, carry a zero stamp: no stamp at all.
+                if ticks != 0 {
+                    stamp = Some(clock::ticks_to_ns(ticks));
+                }
             }
             off += h.cmsg_len.next_multiple_of(size_of::<usize>());
         }

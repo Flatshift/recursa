@@ -42,6 +42,10 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --release -- -D warnings
       - run: cargo test --workspace --release
+      - name: Timing floor
+        run: cargo run -p recursa --release -- calibrate
+      - name: Kernel stamps on the network
+        run: cargo test -p recursa-engine --release -- --ignored --nocapture stamps_on_the_network
 
   windows:
     runs-on: windows-latest
@@ -64,6 +68,15 @@ jobs:
       - run: cargo test --workspace --release
       - name: Timing floor
         run: cargo run -p recursa --release -- calibrate
+      # Windows stamps packets where the adapter hands them up, and only when the driver's software timestamping
+      # is on (off by default). Turn it on for the runner's adapter so the stamps can be seen on real traffic.
+      - name: Adapter software timestamps
+        shell: pwsh
+        run: |
+          Get-NetAdapter -Physical | Set-NetAdapterAdvancedProperty -RegistryKeyword '*SoftwareTimestamp' -RegistryValue 1
+          Get-NetAdapterAdvancedProperty -AllProperties | Where-Object RegistryKeyword -like '*Timestamp*' | Format-Table Name, RegistryKeyword, RegistryValue
+      - name: Kernel stamps on the network
+        run: cargo test -p recursa-engine --release -- --ignored --nocapture stamps_on_the_network
 
   # Unsigned NSIS installers for testing, on manual runs only; tag pushes build them in release.yml. ARM64 is
   # cross-compiled on the x64 runner with the MSVC ARM64 tools it ships.

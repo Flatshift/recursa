@@ -181,7 +181,8 @@
       {#if cal}
         · floor <span class="mono">{us(cal.floor_p50_us)}</span>
         <small>
-          The loopback round trip through the same code: the most the tool itself can add.{env?.kernel_rx
+          The loopback round trip through the same code: the most the tool itself can add.{env?.kernel_rx &&
+          cal.stamped > 0
             ? ` Kernel stamps remove the ${us(cal.wake_p50_us)} wake-up delay.`
             : ''}
         </small>
