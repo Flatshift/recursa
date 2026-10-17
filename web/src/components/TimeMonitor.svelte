@@ -313,12 +313,6 @@
     align-items: center;
     font-size: var(--t-sm);
   }
-  .toggle input {
-    accent-color: var(--ink);
-    width: 16px;
-    height: 16px;
-    margin: 0;
-  }
   .inline {
     display: inline-flex;
     gap: 8px;

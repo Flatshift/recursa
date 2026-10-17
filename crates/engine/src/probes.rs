@@ -556,10 +556,11 @@ const ECS_ECHOERS: &[Echoer] = &[
 /// without one) and the authorities whose test didn't answer.
 fn ecs_check(seen: &BTreeMap<String, Option<String>>, unanswered: &[(&str, &XErr)]) -> Check {
     if seen.is_empty() {
-        return match unanswered.first() {
-            Some((_, e)) => unknown("ecs", e),
-            None => check("ecs", Status::Unknown, None, "Couldn't test", "no ECS echo service configured"),
+        let detail = match unanswered {
+            [] => "no ECS echo service configured".to_string(),
+            _ => unanswered.iter().map(|(who, e)| format!("{who}'s test didn't answer: {e}")).collect::<Vec<_>>().join("; "),
         };
+        return check("ecs", Status::Unknown, None, "Couldn't test", detail);
     }
     let detail = seen
         .iter()

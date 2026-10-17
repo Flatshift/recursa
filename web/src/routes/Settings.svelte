@@ -130,11 +130,15 @@
     ...(app.env?.rpki_local ? [{ id: 'routes', label: 'Route origins', icon: 'lock' as const }] : []),
     { id: 'about', label: 'About', icon: 'info' },
   ]);
-  type PaneId = (typeof panes)[number]['id'];
-  let pane = $state<string>(location.hash.slice(1));
-  const current = $derived<PaneId>(panes.some((p) => p.id === pane) ? (pane as PaneId) : 'general');
+  let pane = $state(location.hash.slice(1));
+  const current = $derived(panes.some((p) => p.id === pane) ? pane : 'general');
   $effect(() => {
-    const onHash = () => (pane = location.hash.slice(1));
+    void app.route; // In-app navigation pushes the hash with the path, which fires no hashchange.
+    const onHash = () => {
+      pane = location.hash.slice(1);
+      error = null;
+    };
+    onHash();
     addEventListener('hashchange', onHash);
     return () => removeEventListener('hashchange', onHash);
   });
@@ -430,10 +434,6 @@
   }
   .check {
     gap: 9px;
-  }
-  .check input {
-    margin: 0;
-    accent-color: var(--accent);
   }
   .note {
     font-size: var(--t-xs);

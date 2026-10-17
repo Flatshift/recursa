@@ -14,7 +14,7 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
   trash button and the Inspector's Save button. Delete or Backspace on a focused run deletes it.
 - **Settings window**: a resizable window with sections down the left (General, Benchmark, Monitoring, Run
   history, Route origins, About) instead of one long scroll, always opening at its designed size. About shows the
-  mark. The desktop File menu gains **Save Run** (⌘S / Ctrl+S), **Delete Run…** (⌘⌫ / Ctrl+Backspace) and
+  mark. The desktop File menu gains **Save Run** (⌘S / Ctrl+S), **Delete Run…** (⌘⌫ on a Mac) and
   **Clear All Runs…**.
 - **Measurement conditions** opens above the chevron that opens it, at the right end of the status bar.
 - **Check progress**: the progress rail sweeps only until a check reports, then fills with what it reports; the

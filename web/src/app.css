@@ -363,6 +363,53 @@ select:focus-visible {
   border-color: var(--focus);
 }
 
+/* Checkboxes are drawn from the tokens, not by the platform: a native control repaints in the window's inactive
+   style (box and mark swapped) while a menu or popover has the focus. */
+input[type='checkbox'] {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  vertical-align: middle;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+input[type='checkbox']::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  background: var(--accent-ink);
+  clip-path: polygon(12% 48%, 0 64%, 38% 100%, 100% 22%, 86% 7%, 38% 70%);
+  transform: scale(0);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+input[type='checkbox']:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+input[type='checkbox']:checked::before {
+  transform: scale(1);
+}
+input[type='checkbox']:disabled {
+  opacity: 0.45;
+}
+input[type='checkbox']:focus-visible {
+  outline-offset: 1px;
+  border-color: var(--focus);
+}
+@media (prefers-reduced-motion: reduce) {
+  input[type='checkbox'],
+  input[type='checkbox']::before {
+    transition: none;
+  }
+}
+
 .visually-hidden {
   position: absolute !important;
   width: 1px;
@@ -564,6 +611,8 @@ select:focus-visible {
   position: absolute;
   opacity: 0;
   inset: 0;
+  width: 100%; /* over the drawn checkbox's box */
+  height: 100%;
   cursor: default;
 }
 button.segbtn,

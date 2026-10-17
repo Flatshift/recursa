@@ -946,13 +946,6 @@
     font-size: var(--t-sm);
     cursor: default;
   }
-  .toggle input,
-  .picker input {
-    accent-color: var(--accent);
-    margin: 0;
-    width: 15px;
-    height: 15px;
-  }
 
   .list {
     display: grid;

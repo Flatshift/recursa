@@ -593,10 +593,6 @@
   }
   .rrow input {
     grid-area: box;
-    accent-color: var(--accent);
-    width: 15px;
-    height: 15px;
-    margin: 0;
   }
   .rname {
     grid-area: name;
@@ -717,13 +713,6 @@
     align-items: center;
     padding: 4px 0;
     cursor: default;
-  }
-  .testrow input,
-  .toggle input {
-    accent-color: var(--accent);
-    margin: 0;
-    width: 15px;
-    height: 15px;
   }
   .testrow .key {
     grid-area: key;
