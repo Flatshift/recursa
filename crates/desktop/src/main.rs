@@ -56,7 +56,13 @@ fn main() {
     }
     builder
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_window_state::Builder::new().with_state_flags(StateFlags::all() & !StateFlags::VISIBLE).build())
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
+                // Settings is a dialog with a designed size; a size remembered from an older build must not shrink it.
+                .with_denylist(&[shell::SETTINGS])
+                .build(),
+        )
         .plugin(tauri_plugin_autostart::Builder::new().app_name("Recursa").args(["--hidden"]).build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())

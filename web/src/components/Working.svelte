@@ -1,8 +1,7 @@
 <script lang="ts">
   // After the latency rounds the run keeps working with no new samples to show: the path check, the capability
-  // probes, the CDN mapping and the network intel. This line names the check under way, and beside it a sample
-  // streams in and lands, the way answers did while measuring, so the quiet reads as work, not a stall. Under reduced
-  // motion the sample has landed.
+  // probes, the CDN mapping and the network intel. This line names the check under way; the progress rail above
+  // carries the motion, so the two never disagree.
   import { fade } from 'svelte/transition';
   import { reduceMotion } from '../lib/motion';
   import type { RunState } from '../lib/types';
@@ -21,16 +20,12 @@
 
 {#if text}
   <p class="working" transition:fade={{ duration: reduceMotion ? 0 : 200 }}>
-    <span class="trace" aria-hidden="true"><i class="sample"></i></span>
     <span class="text">Latency measured. {text}{count}</span>
   </p>
 {/if}
 
 <style>
   .working {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
     margin: 0;
     padding: 6px 0;
     font-size: var(--t-xs);
@@ -39,54 +34,5 @@
   }
   .text {
     text-wrap: pretty;
-  }
-  /* A short plot edge: the sample enters from the left, decelerates onto its value, rests, and the next one follows. */
-  .trace {
-    --run: 38px;
-    flex: none;
-    position: relative;
-    margin-top: 0.7em;
-    width: 44px;
-    height: 1px;
-    background: var(--rule-2);
-  }
-  .sample {
-    position: absolute;
-    left: 0;
-    top: -2.5px;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--ink);
-    opacity: 0;
-    animation: land 2000ms var(--ease-out) infinite;
-  }
-  @keyframes land {
-    0% {
-      transform: translateX(0);
-      opacity: 0;
-    }
-    10% {
-      opacity: 1;
-    }
-    62% {
-      transform: translateX(var(--run));
-      opacity: 1;
-    }
-    86% {
-      transform: translateX(var(--run));
-      opacity: 1;
-    }
-    100% {
-      transform: translateX(var(--run));
-      opacity: 0;
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .sample {
-      animation: none;
-      transform: translateX(var(--run));
-      opacity: 1;
-    }
   }
 </style>

@@ -152,8 +152,9 @@ export function notifyDone(title: string, body: string) {
 }
 
 /** Desktop only: open the Settings window. */
-export function openSettings() {
-  if (desktop) invoke('open_settings').catch(() => {});
+/** Open the Settings window, on `section` (a Settings pane id) when given. */
+export function openSettings(section?: string) {
+  if (desktop) invoke('open_settings', { section: section ?? null }).catch(() => {});
 }
 
 export interface MenuItem {

@@ -2,11 +2,13 @@
   // App settings. In the desktop app this is its own window (⌘, or Ctrl+,); in the browser, a page.
   import { app } from '../lib/store.svelte';
   import { api, desktop, loginItem } from '../lib/api';
+  import type { ComponentProps } from 'svelte';
   import type { Housekeeping, MonitorConfig, RpkiStatus } from '../lib/types';
   import { ago, pct, plural } from '../lib/format';
   import { HIT_SHARE, MIX_LABEL, type Mix } from '../lib/verdict';
   import Toolbar from '../components/Toolbar.svelte';
   import Icon from '../components/Icon.svelte';
+  import Mark from '../components/Mark.svelte';
 
   const mixes: Mix[] = ['home', 'office', 'lab'];
   const themes = [
@@ -117,6 +119,40 @@
 
   const standalone = desktop;
 
+  // One pane at a time, picked from the list on the left; the URL hash names the pane, so
+  // other parts of the app can open Settings on one (the sidebar's run history menu, say).
+  type Pane = { id: string; label: string; icon: ComponentProps<typeof Icon>['name'] };
+  const panes: Pane[] = $derived([
+    { id: 'general', label: 'General', icon: 'gear' },
+    { id: 'benchmark', label: 'Benchmark', icon: 'play' },
+    { id: 'monitoring', label: 'Monitoring', icon: 'pulse' },
+    { id: 'history', label: 'Run history', icon: 'clock' },
+    ...(app.env?.rpki_local ? [{ id: 'routes', label: 'Route origins', icon: 'lock' as const }] : []),
+    { id: 'about', label: 'About', icon: 'info' },
+  ]);
+  type PaneId = (typeof panes)[number]['id'];
+  let pane = $state<string>(location.hash.slice(1));
+  const current = $derived<PaneId>(panes.some((p) => p.id === pane) ? (pane as PaneId) : 'general');
+  $effect(() => {
+    const onHash = () => (pane = location.hash.slice(1));
+    addEventListener('hashchange', onHash);
+    return () => removeEventListener('hashchange', onHash);
+  });
+  function pick(id: string) {
+    pane = id;
+    history.replaceState(null, '', `#${id}`);
+  }
+  // Up and Down move through the list, as in any tab list.
+  function paneKey(e: KeyboardEvent) {
+    const d = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+    if (!d) return;
+    e.preventDefault();
+    const i = panes.findIndex((p) => p.id === current);
+    const next = panes[(i + d + panes.length) % panes.length];
+    pick(next.id);
+    (document.getElementById(`pane-tab-${next.id}`) as HTMLElement | null)?.focus();
+  }
+
   // Third-party notices: their licenses require them to ship with the app. Loaded only
   // when asked for (about 200 KB of text).
   let noticesDialog = $state<HTMLDialogElement>();
@@ -128,104 +164,132 @@
 </script>
 
 {#snippet body()}
-  <div class="settings">
-    <section>
-      <h2>Appearance</h2>
-      <div class="row">
-        <span class="lbl" id="theme-l">Theme</span>
-        <div class="segmented" role="radiogroup" aria-labelledby="theme-l">
-          {#each themes as t}
-            <button role="radio" aria-checked={app.theme === t.v} class:on={app.theme === t.v} onclick={() => app.setTheme(t.v)}>
-              <Icon name={t.icon} size={13} />{t.label}
-            </button>
-          {/each}
-        </div>
+  <div class="panes">
+    <nav class="nav" aria-label="Settings sections">
+      <div role="tablist" aria-orientation="vertical">
+        {#each panes as p (p.id)}
+          {@const on = p.id === current}
+          <button
+            id="pane-tab-{p.id}"
+            role="tab"
+            class="tab"
+            class:on
+            aria-selected={on}
+            aria-controls="pane-{p.id}"
+            tabindex={on ? 0 : -1}
+            onclick={() => pick(p.id)}
+            onkeydown={paneKey}
+          >
+            <Icon name={p.icon} size={15} />
+            <span>{p.label}</span>
+          </button>
+        {/each}
       </div>
-      <div class="row">
-        <span class="lbl" id="mix-l">Traffic mix</span>
-        <div class="segmented" role="radiogroup" aria-labelledby="mix-l">
-          {#each mixes as m}
-            <button role="radio" aria-checked={app.mix === m} class:on={app.mix === m} onclick={() => app.setMix(m)}>{MIX_LABEL[m]}</button>
-          {/each}
-        </div>
-      </div>
-      <p class="note">
-        How many lookups a resolver answers from its cache: {pct(HIT_SHARE.home, 0)} at home, {pct(HIT_SHARE.office, 0)} in an office, {pct(HIT_SHARE.lab, 0)} in a lab with many unique names.
-        Only the per-lookup figure and the Best from here pick use it.
-      </p>
-    </section>
+    </nav>
 
-    <section>
-      <h2>Background monitoring</h2>
-      {#if cfg}
-        <label class="row check">
-          <input
-            type="checkbox"
-            checked={cfg.enabled}
-            disabled={saving}
-            onchange={(e) => saveMonitor({ ...cfg!, enabled: (e.currentTarget as HTMLInputElement).checked })}
-          />
-          <span>Check resolvers in the background while Recursa is running</span>
-        </label>
+    <div class="pane scroll" role="tabpanel" id="pane-{current}" aria-labelledby="pane-tab-{current}">
+      {#if current === 'general'}
+        <h2>General</h2>
         <div class="row">
-          <label class="lbl" for="interval">Every</label>
-          <select
-            id="interval"
-            value={cfg.interval_min}
-            disabled={saving}
-            onchange={(e) => saveMonitor({ ...cfg!, interval_min: Number((e.currentTarget as HTMLSelectElement).value) })}
-          >
-            {#each [1, 5, 10, 15, 30, 60] as m}<option value={m}>{m} min</option>{/each}
-          </select>
+          <span class="lbl" id="theme-l">Theme</span>
+          <div class="segmented" role="radiogroup" aria-labelledby="theme-l">
+            {#each themes as t}
+              <button role="radio" aria-checked={app.theme === t.v} class:on={app.theme === t.v} onclick={() => app.setTheme(t.v)}>
+                <Icon name={t.icon} size={13} />{t.label}
+              </button>
+            {/each}
+          </div>
         </div>
+        {#if desktop}
+          <label class="row check">
+            <input type="checkbox" checked={!!login} disabled={login == null} onchange={(e) => setLogin((e.currentTarget as HTMLInputElement).checked)} />
+            <span>Open at login, in the menu bar only</span>
+          </label>
+          <p class="note">Recursa keeps monitoring from the menu bar when its window is closed.</p>
+        {/if}
+      {:else if current === 'benchmark'}
+        <h2>Benchmark</h2>
         <div class="row">
-          <label class="lbl" for="keep">Keep history</label>
-          <select
-            id="keep"
-            value={cfg.retention_days}
-            disabled={saving}
-            onchange={(e) => saveMonitor({ ...cfg!, retention_days: Number((e.currentTarget as HTMLSelectElement).value) })}
-          >
-            {#each [7, 30, 90, 365] as d}<option value={d}>{d} days</option>{/each}
-          </select>
+          <span class="lbl" id="mix-l">Traffic mix</span>
+          <div class="segmented" role="radiogroup" aria-labelledby="mix-l">
+            {#each mixes as m}
+              <button role="radio" aria-checked={app.mix === m} class:on={app.mix === m} onclick={() => app.setMix(m)}>{MIX_LABEL[m]}</button>
+            {/each}
+          </div>
         </div>
         <p class="note">
-          {cfg.resolvers.length} resolvers are monitored. Choose them, and see the record, in Reliability.
+          How many lookups a resolver answers from its cache: {pct(HIT_SHARE.home, 0)} at home, {pct(HIT_SHARE.office, 0)} in an office, {pct(HIT_SHARE.lab, 0)} in a lab with many unique names.
+          Only the per-lookup figure and the Best from here pick use it.
         </p>
-      {:else if !error}
-        <p class="note">Loading…</p>
-      {/if}
-    </section>
-
-    <section>
-      <h2>Run history</h2>
-      {#if keep}
-        <div class="row">
-          <label class="lbl" for="keep-runs">Keep the last</label>
-          <select id="keep-runs" value={keep.keep_runs ?? 'off'} disabled={saving} onchange={(e) => saveKeep({ keep_runs: offOr((e.currentTarget as HTMLSelectElement).value) })}>
-            {#each presetWith([10, 25, 50, 100, 250, 500], keep.keep_runs) as n}<option value={n}>{plural(n, 'run')}</option>{/each}
-            <option value="off">every run</option>
-          </select>
-        </div>
-        <div class="row">
-          <label class="lbl" for="keep-days">Keep runs from</label>
-          <select id="keep-days" value={keep.keep_days ?? 'off'} disabled={saving} onchange={(e) => saveKeep({ keep_days: offOr((e.currentTarget as HTMLSelectElement).value) })}>
-            {#each presetWith([7, 30, 90, 180, 365], keep.keep_days) as d}<option value={d}>the last {plural(d, 'day')}</option>{/each}
-            <option value="off">any time</option>
-          </select>
-        </div>
-        <p class="note">
-          Older runs are deleted when Recursa starts and after each run finishes. A run is a few hundred kilobytes; 50 runs is a season of
-          weekly checks, and 90 days is about as long as a comparison stays current. Saved runs are never counted or deleted: Control-click a
-          run in the sidebar to save it, or to clear all runs now.
-        </p>
-      {:else if !error}
-        <p class="note">Loading…</p>
-      {/if}
-    </section>
-
-    {#if app.env?.rpki_local}
-      <section>
+      {:else if current === 'monitoring'}
+        <h2>Monitoring</h2>
+        {#if cfg}
+          <label class="row check">
+            <input
+              type="checkbox"
+              checked={cfg.enabled}
+              disabled={saving}
+              onchange={(e) => saveMonitor({ ...cfg!, enabled: (e.currentTarget as HTMLInputElement).checked })}
+            />
+            <span>Check resolvers in the background while Recursa is running</span>
+          </label>
+          <div class="row">
+            <label class="lbl" for="interval">Every</label>
+            <select
+              id="interval"
+              value={cfg.interval_min}
+              disabled={saving}
+              onchange={(e) => saveMonitor({ ...cfg!, interval_min: Number((e.currentTarget as HTMLSelectElement).value) })}
+            >
+              {#each [1, 5, 10, 15, 30, 60] as m}<option value={m}>{m} min</option>{/each}
+            </select>
+          </div>
+          <div class="row">
+            <label class="lbl" for="keep">Keep history</label>
+            <select
+              id="keep"
+              value={cfg.retention_days}
+              disabled={saving}
+              onchange={(e) => saveMonitor({ ...cfg!, retention_days: Number((e.currentTarget as HTMLSelectElement).value) })}
+            >
+              {#each [7, 30, 90, 365] as d}<option value={d}>{d} days</option>{/each}
+            </select>
+          </div>
+          <p class="note">
+            {cfg.resolvers.length} resolvers are monitored. Choose them, and see the record, in Reliability.
+          </p>
+        {:else if !error}
+          <p class="note">Loading…</p>
+        {/if}
+      {:else if current === 'history'}
+        <h2>Run history</h2>
+        {#if keep}
+          <div class="row">
+            <label class="lbl" for="keep-runs">Keep the last</label>
+            <select id="keep-runs" value={keep.keep_runs ?? 'off'} disabled={saving} onchange={(e) => saveKeep({ keep_runs: offOr((e.currentTarget as HTMLSelectElement).value) })}>
+              {#each presetWith([10, 25, 50, 100, 250, 500], keep.keep_runs) as n}<option value={n}>{plural(n, 'run')}</option>{/each}
+              <option value="off">every run</option>
+            </select>
+          </div>
+          <div class="row">
+            <label class="lbl" for="keep-days">Keep runs from</label>
+            <select id="keep-days" value={keep.keep_days ?? 'off'} disabled={saving} onchange={(e) => saveKeep({ keep_days: offOr((e.currentTarget as HTMLSelectElement).value) })}>
+              {#each presetWith([7, 30, 90, 180, 365], keep.keep_days) as d}<option value={d}>the last {plural(d, 'day')}</option>{/each}
+              <option value="off">any time</option>
+            </select>
+          </div>
+          <p class="note">
+            Older runs are deleted when Recursa starts and after each run finishes. A run is a few hundred kilobytes; 50 runs is a season of
+            weekly checks, and 90 days is about as long as a comparison stays current.
+          </p>
+          <p class="note">
+            Saved runs are never counted or deleted. Save a run with the bookmark on its row in the sidebar, or in the toolbar of its results.
+            To delete every unsaved run now, use the menu by the sidebar's Runs heading{#if desktop}, or File › Clear All Runs{/if}.
+          </p>
+        {:else if !error}
+          <p class="note">Loading…</p>
+        {/if}
+      {:else if current === 'routes'}
         <h2>Route origins</h2>
         <label class="row check">
           <input type="checkbox" checked={!!rpki?.enabled} disabled={!rpki} onchange={(e) => setRpki((e.currentTarget as HTMLInputElement).checked)} />
@@ -254,37 +318,27 @@
           </div>
           {#if rpki.state === 'ready' && rpki.error}<p class="note">The last refresh failed: {rpki.error}</p>{/if}
         {/if}
-      </section>
-    {/if}
+      {:else}
+        <h2>About</h2>
+        <p class="about">
+          <Mark size={36} />
+          <span><b>Recursa</b>{app.env ? ` ${app.env.version}` : ''} <span class="by">by Brian Morisette</span></span>
+        </p>
+        {#if app.env?.build}<p class="note">Build {app.env.build}</p>{/if}
+        <p class="note">
+          Copyright © 2026 Brian Morisette. Free software under the GNU General Public License, version 3 or later, with
+          no warranty.
+        </p>
+        <div class="row">
+          <a class="btn sm" href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noreferrer">
+            License <Icon name="external" size={12} />
+          </a>
+          <button class="btn sm" onclick={showNotices}>Third-party notices</button>
+        </div>
+      {/if}
 
-    {#if desktop}
-      <section>
-        <h2>Startup</h2>
-        <label class="row check">
-          <input type="checkbox" checked={!!login} disabled={login == null} onchange={(e) => setLogin((e.currentTarget as HTMLInputElement).checked)} />
-          <span>Open at login, in the menu bar only</span>
-        </label>
-        <p class="note">Recursa keeps monitoring from the menu bar when its window is closed.</p>
-      </section>
-    {/if}
-
-    <section>
-      <h2>About</h2>
-      <p class="about">Recursa{app.env ? ` ${app.env.version}` : ''} <span class="by">by Brian Morisette</span></p>
-      {#if app.env?.build}<p class="note">Build {app.env.build}</p>{/if}
-      <p class="note">
-        Copyright © 2026 Brian Morisette. Free software under the GNU General Public License, version 3 or later, with
-        no warranty.
-      </p>
-      <div class="row">
-        <a class="btn sm" href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noreferrer">
-          License <Icon name="external" size={12} />
-        </a>
-        <button class="btn sm" onclick={showNotices}>Third-party notices</button>
-      </div>
-    </section>
-
-    {#if error}<p class="err" role="alert">{error}</p>{/if}
+      {#if error}<p class="err" role="alert">{error}</p>{/if}
+    </div>
   </div>
 
   <dialog class="notices" bind:this={noticesDialog} aria-labelledby="notices-title" onclose={() => (notices = '')}>
@@ -297,13 +351,11 @@
 {/snippet}
 
 {#if standalone}
-  <div class="window scroll chrome">{@render body()}</div>
+  <div class="window chrome">{@render body()}</div>
 {:else}
   <div class="view-root">
     <Toolbar title="Settings" />
-    <div class="view-body">
-      <div class="content scroll">{@render body()}</div>
-    </div>
+    <div class="view-body">{@render body()}</div>
   </div>
 {/if}
 
@@ -311,24 +363,59 @@
   .window {
     height: 100%;
     background: var(--bg);
-    padding: 20px 26px 24px;
   }
-  .settings {
+  .panes {
     display: grid;
-    gap: 22px;
-    max-width: 560px;
+    grid-template-columns: 172px minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
+    flex: 1;
   }
-  section {
+  .nav {
+    padding: 10px 8px;
+    background: var(--side);
+    border-right: 1px solid var(--rule);
+    font-size: var(--t-sm);
+  }
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    min-height: 28px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--r-md);
+    background: transparent;
+    color: var(--ink);
+    text-align: left;
+    cursor: default;
+  }
+  .tab :global(svg) {
+    flex: none;
+    color: var(--ink-3);
+  }
+  .tab:hover {
+    background: color-mix(in oklch, var(--side-sel) 45%, transparent);
+  }
+  .tab.on {
+    background: var(--side-sel);
+  }
+  .tab.on :global(svg) {
+    color: var(--accent-text);
+  }
+  .pane {
     display: grid;
-    gap: 10px;
-  }
-  section + section {
-    padding-top: 18px;
-    border-top: 1px solid var(--rule);
+    align-content: start;
+    gap: 14px;
+    padding: 22px 28px 28px;
+    max-width: 640px;
   }
   h2 {
-    font-size: var(--t-sm);
+    margin-bottom: 4px;
+    font-size: var(--t-md);
     font-weight: 660;
+    letter-spacing: -0.01em;
   }
   .row {
     display: flex;
@@ -356,8 +443,15 @@
     color: var(--critical);
   }
   .about {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0;
     font-size: var(--t-sm);
-    font-weight: 560;
+    color: var(--ink);
+  }
+  .about b {
+    font-weight: 620;
   }
   .about .by {
     font-weight: 400;

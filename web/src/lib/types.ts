@@ -143,6 +143,11 @@ interface ProbeReport {
   ecs: string | null;
   /** ECS as Akamai's nameservers saw it; resolvers can treat the two differently. */
   ecs_akamai: string | null;
+  /**
+   * What each echoing authority saw, by name (Akamai, Fastly, Google, PowerDNS): the subnet, or null when it answered
+   * without one. Absent in runs recorded by earlier versions.
+   */
+  ecs_by_authority?: Record<string, string | null>;
   nsid: string | null;
   pop: string | null;
   filtering: Record<string, FilterCategory>;

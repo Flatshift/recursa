@@ -130,8 +130,8 @@ pub fn notify(handle: AppHandle, title: String, body: String) {
 }
 
 #[tauri::command]
-pub fn open_settings(handle: AppHandle) {
-    crate::shell::show_settings(&handle);
+pub fn open_settings(handle: AppHandle, section: Option<String>) {
+    crate::shell::show_settings(&handle, section.as_deref());
 }
 
 #[tauri::command]

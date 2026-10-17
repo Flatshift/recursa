@@ -5,7 +5,7 @@
   import { HIT_SHARE, blendRows, buildRows, rank, verdict, type Row, type SortKey } from '../lib/verdict';
   import type { RunState, TestKind, Transport } from '../lib/types';
   import { TEST_HINT, TEST_LABEL, TRANSPORT_LABEL, duration, label, ms, plural, runEstimateMs, when } from '../lib/format';
-  import { menu } from '../lib/menu.svelte';
+  import { menu, SEPARATOR } from '../lib/menu.svelte';
   import { reduceMotion } from '../lib/motion';
   import { status } from '../lib/status.svelte';
   import { onResolverContext } from '../lib/resolverMenu';
@@ -196,14 +196,23 @@
   }
   const open = (id: string) => (app.inspect = id);
 
-  function exportMenu(e: MouseEvent) {
+  // The run's row in history, for its saved mark.
+  const row = $derived(run ? (app.boot?.runs.find((r) => r.id === run.id) ?? null) : null);
+
+  // Everything else about this run, under one "…": the same menu a run has in the sidebar.
+  function runMenu(e: MouseEvent) {
     menu.show(
       e,
       [
         { id: 'csv', label: 'Export Samples as CSV…' },
         { id: 'json', label: 'Export Run as JSON…' },
+        SEPARATOR,
+        { id: 'delete', label: 'Delete Run…' },
       ],
-      (id) => app.exportRun(id as 'csv' | 'json'),
+      (id) => {
+        if (id === 'delete') app.deleteRun(run!.id);
+        else app.exportRun(id as 'csv' | 'json');
+      },
       e.currentTarget as HTMLElement,
     );
   }
@@ -249,10 +258,17 @@
       {#if run && running}
         <button class="btn" onclick={() => app.cancelRun()}><Icon name="stop" size={11} />Stop</button>
       {:else if run}
-        <button class="tb-icon" aria-label="Export" title="Export" onclick={exportMenu}><Icon name="download" size={16} /></button>
-        <button class="tb-icon" aria-label="Delete this run" title="Delete this run" onclick={() => app.deleteRun(run.id)}
-          ><Icon name="trash" size={15} /></button
-        >
+        {#if row}
+          <button
+            class="tb-icon save"
+            class:on={row.saved}
+            aria-pressed={row.saved}
+            aria-label={row.saved ? 'Unsave run' : 'Save run'}
+            title={row.saved ? 'Saved: kept when runs are cleared. Click to unsave.' : 'Save run: keep it when runs are cleared or cleaned up'}
+            onclick={() => app.setSaved(run.id, !row!.saved)}><Icon name="bookmark" size={15} /></button
+          >
+        {/if}
+        <button class="tb-icon" aria-label="Run actions" title="Export or delete this run" onclick={runMenu}><Icon name="more" size={16} /></button>
         <button
           class="tb-icon"
           aria-label={app.inspect ? 'Hide inspector' : 'Show inspector'}
@@ -448,6 +464,9 @@
 </div>
 
 <style>
+  .tb-icon.save.on :global(svg) {
+    fill: currentColor;
+  }
   .col {
     flex: 1;
     min-width: 0;
