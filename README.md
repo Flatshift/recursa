@@ -41,7 +41,7 @@ Or build it yourself (Rust, Node 22):
 | Area | How |
 |---|---|
 | **Latency** | Cached, uncached (random names under unsigned wildcard zones, so the resolver must recurse) and TLD (random `.com` NXDOMAIN) lookups over UDP, TCP, DoT and DoH. Every resolver gets one query per round in shuffled order. |
-| **Timing precision** | UDP receive stamps come from the kernel (`SO_TIMESTAMP_MONOTONIC` on macOS, `SO_TIMESTAMPNS` on Linux; userspace stamps on Windows) on dedicated, prioritized measurement threads (user-interactive QoS on macOS, time-critical priority on Windows). Queries are encoded before the send stamp. A loopback self-calibration publishes the instrument's own floor (≈ 45–50 µs on an M4 Max). |
+| **Timing precision** | UDP receive stamps come from the kernel (`SO_TIMESTAMP_MONOTONIC` on macOS, `SO_TIMESTAMPNS` on Linux, `SIO_TIMESTAMPING` on Windows 10 2004 and later) on dedicated, prioritized measurement threads (user-interactive QoS on macOS, time-critical priority on Windows). Queries are encoded before the send stamp. A loopback self-calibration publishes the instrument's own floor (≈ 45–50 µs on an M4 Max). |
 | **Interception** | Two independent signals. A TCP handshake to each resolver gives the true path RTT, and no genuine answer can beat it. The IP TTL of every UDP answer gives the router hops it crossed, and a public resolver 0–1 hops away is a device on your LAN (DNAT rules, or AP features such as UniFi DNS Assistance). Flagged targets are measured but not ranked, and their probes switch to encrypted DNS. A standalone check runs at startup with **Re-check**, or run `recursa check`. |
 | **Capabilities** | DNSSEC validation (and AD bit), EDNS(0) and version negotiation, ECS, QNAME minimisation, NSID and anycast site, DNS Cookies, Extended DNS Errors, NXDOMAIN rewriting, rebinding protection, TCP/DoT/DoH/IPv6 reachability. Every probe uses random labels so no cache can answer it, and each check keeps its evidence. |
 | **Blocking** | Live malware (URLhaus) and phishing (OpenPhish) hosts, each confirmed to resolve through an unfiltered, encrypted baseline first, plus ad/tracker hosts and, opt-in, adult sites. Results show the block style (0.0.0.0, NXDOMAIN, block page, EDE 15–18). **Live threat names go over DoT/DoH**: in plain DNS, security appliances on the path see them and may quarantine the computer's DNS. The exception is your own system resolver on the local network (a Pi-hole, your router), tested over plain DNS by default so you can check that its blocking works; other plain-DNS-only resolvers are tested only if you opt in. |
@@ -160,8 +160,9 @@ process records monitoring for a given database.
 ## Limits
 
 * DoQ, DNSCrypt and ODoH are shown from operator documentation only; they aren't measured.
-* Windows uses userspace receive stamps (no kernel timestamps), so its floor is higher. Its link check times each
-  echo in userspace too, and reports only how late its own ticks ran, not loopback echoes or interface counters.
+* Windows before 10 2004 has no kernel receive stamps, so the engine falls back to userspace stamps there and the
+  floor is higher. The Windows link check times each echo in userspace, and reports only how late its own ticks ran,
+  not loopback echoes or interface counters.
 * Background monitoring runs while Recursa is running; it isn't installed as a system service.
 
 ## License

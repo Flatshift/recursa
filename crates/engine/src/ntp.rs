@@ -2179,6 +2179,23 @@ mod exchange_tests {
         assert!(at >= before && at - before < 2_000_000_000, "stamp {at} vs {before}");
     }
 
+    /// Windows before 10 2004 has no receive stamps; where it does, they must be in the clock's domain.
+    #[cfg(windows)]
+    #[test]
+    fn the_stack_stamps_a_datagram_as_it_arrives() {
+        let rx = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let stamped = net::stamp_arrivals(&rx);
+        let before = clock::now_ns();
+        UdpSocket::bind("127.0.0.1:0").unwrap().send_to(b"x", rx.local_addr().unwrap()).unwrap();
+        let mut buf = [0u8; 8];
+        let (n, at) = net::recv_stamped(&rx, &mut buf).unwrap();
+        assert_eq!(n, 1);
+        if stamped {
+            let at = at.expect("a kernel stamp");
+            assert!(at >= before && at - before < 2_000_000_000, "stamp {at} vs {before}");
+        }
+    }
+
     #[test]
     fn a_server_that_never_answers_times_out() {
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();

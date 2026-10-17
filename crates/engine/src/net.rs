@@ -248,10 +248,10 @@ pub fn stamp_arrivals(sock: &std::net::UdpSocket) -> bool {
         use std::os::fd::AsRawFd;
         enable_rx_timestamps_fd(sock.as_raw_fd())
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        let _ = sock;
-        false
+        use std::os::windows::io::AsRawSocket;
+        win::enable_rx_timestamps(sock.as_raw_socket() as win::SOCKET)
     }
 }
 
@@ -285,9 +285,10 @@ pub fn recv_stamped(sock: &std::net::UdpSocket, buf: &mut [u8]) -> io::Result<(u
         use std::os::fd::AsRawFd;
         recv_stamped_fd(sock.as_raw_fd(), buf)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        sock.recv(buf).map(|n| (n, None))
+        use std::os::windows::io::AsRawSocket;
+        win::recv_stamped(sock.as_raw_socket() as win::SOCKET, buf)
     }
 }
 
@@ -385,26 +386,130 @@ impl Exchanger for UdpX {
     }
 }
 
-#[cfg(not(unix))]
+/// Kernel receive stamps on Windows: `SIO_TIMESTAMPING` (Windows 10 2004 and later) makes the stack attach an
+/// `SO_TIMESTAMP` control message, in performance-counter ticks, to each datagram read with `WSARecvMsg`.
+#[cfg(windows)]
+mod win {
+    use crate::clock;
+    use std::ffi::c_void;
+    use std::io;
+    use std::ptr::null_mut;
+    use std::sync::OnceLock;
+    pub use windows_sys::Win32::Networking::WinSock::SOCKET;
+    use windows_sys::Win32::Networking::WinSock::{
+        CMSGHDR, LPFN_WSARECVMSG, SIO_GET_EXTENSION_FUNCTION_POINTER, SIO_TIMESTAMPING, SO_TIMESTAMP, SOCKET_ERROR, SOL_SOCKET,
+        TIMESTAMPING_CONFIG, TIMESTAMPING_FLAG_RX, WSABUF, WSAID_WSARECVMSG, WSAIoctl, WSAMSG, recv,
+    };
+
+    /// `WSARecvMsg` is an extension function: Winsock hands out its address through an ioctl.
+    fn recv_msg(s: SOCKET) -> LPFN_WSARECVMSG {
+        static F: OnceLock<LPFN_WSARECVMSG> = OnceLock::new();
+        *F.get_or_init(|| {
+            let guid = WSAID_WSARECVMSG;
+            let mut f: LPFN_WSARECVMSG = None;
+            let mut out = 0u32;
+            let r = unsafe {
+                WSAIoctl(
+                    s,
+                    SIO_GET_EXTENSION_FUNCTION_POINTER,
+                    &guid as *const _ as *const c_void,
+                    size_of_val(&guid) as u32,
+                    &mut f as *mut _ as *mut c_void,
+                    size_of_val(&f) as u32,
+                    &mut out,
+                    null_mut(),
+                    None,
+                )
+            };
+            if r == 0 { f } else { None }
+        })
+    }
+
+    /// Ask the stack to stamp datagrams as they arrive. False where unsupported (older Windows 10).
+    pub fn enable_rx_timestamps(s: SOCKET) -> bool {
+        let cfg = TIMESTAMPING_CONFIG { Flags: TIMESTAMPING_FLAG_RX, TxTimestampsBuffered: 0 };
+        let mut out = 0u32;
+        let r = unsafe {
+            WSAIoctl(
+                s,
+                SIO_TIMESTAMPING,
+                &cfg as *const _ as *const c_void,
+                size_of_val(&cfg) as u32,
+                null_mut(),
+                0,
+                &mut out,
+                null_mut(),
+                None,
+            )
+        };
+        r == 0 && recv_msg(s).is_some()
+    }
+
+    /// Receive one datagram with the stack's arrival stamp (ns, in the [`clock`] domain) when there is one. Honours
+    /// the socket's read timeout like `recv`.
+    pub fn recv_stamped(s: SOCKET, buf: &mut [u8]) -> io::Result<(usize, Option<u64>)> {
+        let len = buf.len().min(i32::MAX as usize);
+        let Some(wsa_recv_msg) = recv_msg(s) else {
+            let n = unsafe { recv(s, buf.as_mut_ptr(), len as i32, 0) };
+            return if n == SOCKET_ERROR { Err(io::Error::last_os_error()) } else { Ok((n as usize, None)) };
+        };
+        let mut ctl = [0u64; 32];
+        let mut data = WSABUF { len: len as u32, buf: buf.as_mut_ptr() };
+        let mut msg = WSAMSG {
+            name: null_mut(),
+            namelen: 0,
+            lpBuffers: &mut data,
+            dwBufferCount: 1,
+            Control: WSABUF { len: size_of_val(&ctl) as u32, buf: ctl.as_mut_ptr() as *mut u8 },
+            dwFlags: 0,
+        };
+        let mut n = 0u32;
+        if unsafe { wsa_recv_msg(s, &mut msg, &mut n, null_mut(), None) } == SOCKET_ERROR {
+            return Err(io::Error::last_os_error());
+        }
+        let mut stamp = None;
+        let base = ctl.as_ptr() as *const u8;
+        let end = (msg.Control.len as usize).min(size_of_val(&ctl));
+        let hdr = size_of::<CMSGHDR>();
+        let mut off = 0;
+        // Control messages are laid out like POSIX cmsgs, aligned to the pointer size.
+        while off + hdr <= end {
+            let h = unsafe { std::ptr::read_unaligned(base.add(off) as *const CMSGHDR) };
+            if h.cmsg_len < hdr || off + h.cmsg_len > end {
+                break;
+            }
+            if h.cmsg_level == SOL_SOCKET && h.cmsg_type == SO_TIMESTAMP as i32 && h.cmsg_len >= hdr + 8 {
+                let ticks = unsafe { std::ptr::read_unaligned(base.add(off + hdr) as *const u64) };
+                stamp = Some(clock::ticks_to_ns(ticks));
+            }
+            off += h.cmsg_len.next_multiple_of(size_of::<usize>());
+        }
+        Ok((n as usize, stamp))
+    }
+}
+
+#[cfg(windows)]
 pub struct UdpX {
     sock: std::net::UdpSocket,
+    kernel_ts: bool,
     buf: Box<[u8]>,
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 impl UdpX {
     pub fn connect(addr: SocketAddr) -> io::Result<Self> {
         let bind: SocketAddr = if addr.is_ipv4() { "0.0.0.0:0".parse().unwrap() } else { "[::]:0".parse().unwrap() };
         let sock = std::net::UdpSocket::bind(bind)?;
         sock.connect(addr)?;
-        Ok(UdpX { sock, buf: vec![0u8; MAX_MSG].into_boxed_slice() })
+        let kernel_ts = stamp_arrivals(&sock);
+        Ok(UdpX { sock, kernel_ts, buf: vec![0u8; MAX_MSG].into_boxed_slice() })
     }
     pub fn kernel_timestamps(&self) -> bool {
-        false
+        self.kernel_ts
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 impl Exchanger for UdpX {
     fn exchange(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
         let t0 = clock::now_ns();
@@ -417,14 +522,23 @@ impl Exchanger for UdpX {
             }
             self.sock.set_read_timeout(Some(Duration::from_nanos(deadline - now))).map_err(io_err)?;
             // Windows reports an ICMP port unreachable on a connected UDP socket as a reset (WSAECONNRESET).
-            let len = self.sock.recv(&mut self.buf[..]).map_err(|e| match e.kind() {
+            let (len, kstamp) = recv_stamped(&self.sock, &mut self.buf[..]).map_err(|e| match e.kind() {
                 io::ErrorKind::ConnectionReset => XErr::Refused,
                 _ => io_err(e),
             })?;
-            let t = clock::now_ns();
-            if dns::is_response_to(&self.buf[..len], query) {
-                return Ok(Reply { bytes: self.buf[..len].to_vec(), rtt_ns: t - t0, user_rtt_ns: t - t0, kernel_stamp: false, ttl: None });
+            let t_user = clock::now_ns();
+            let resp = &self.buf[..len];
+            if !dns::is_response_to(resp, query) {
+                continue;
             }
+            let t_rx = kstamp.filter(|k| *k >= t0).unwrap_or(t_user);
+            return Ok(Reply {
+                bytes: resp.to_vec(),
+                rtt_ns: t_rx - t0,
+                user_rtt_ns: t_user - t0,
+                kernel_stamp: kstamp.is_some(),
+                ttl: None,
+            });
         }
     }
 }

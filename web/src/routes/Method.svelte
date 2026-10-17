@@ -71,13 +71,14 @@
         Each plain-DNS (UDP) target has its own connected socket, on a measurement thread apart from the web server. Recursa encodes
         each query before the clock starts. It takes the send stamp immediately before the <code>send()</code> system call. The
         <b>kernel</b> gives the receive stamp when the packet arrives (<code>SO_TIMESTAMP_MONOTONIC</code> on macOS,
-        <code>SO_TIMESTAMPNS</code> on Linux). The time that the scheduler needs to wake the thread is not part of the result.
-        Windows has no such stamp, so there the receive stamp is taken when the thread reads the packet.
+        <code>SO_TIMESTAMPNS</code> on Linux, <code>SIO_TIMESTAMPING</code> on Windows 10 2004 and later). The time that the
+        scheduler needs to wake the thread is not part of the result. Where the stamp is unavailable, the receive stamp is taken
+        when the thread reads the packet.
       </p>
       <div class="instrument">
         <dl>
           <div><dt>Clock</dt><dd class="mono">{env?.clock ?? '—'}</dd></div>
-          <div><dt>Kernel receive stamps</dt><dd>{env?.kernel_rx ? 'On' : 'Unavailable on this platform: userspace stamps'}</dd></div>
+          <div><dt>Kernel receive stamps</dt><dd>{env?.kernel_rx ? 'On' : 'Unavailable on this system: userspace stamps'}</dd></div>
           <div><dt>Loopback floor (median)</dt><dd class="num">{us(cal?.floor_p50_us)}</dd></div>
           <div><dt>Loopback floor (99th pct)</dt><dd class="num">{us(cal?.floor_p99_us)}</dd></div>
           <div><dt>Wake-up delay removed (median)</dt><dd class="num">{us(cal?.wake_p50_us)}</dd></div>
@@ -104,7 +105,7 @@
       </p>
       <p>
         To find this, Recursa pings the default gateway (usually your router) every 100 ms while a run measures. It times each reply
-        with the same clock{env?.kernel_rx ? ' and kernel stamps' : ', in userspace'}. A ping is a stall if it gets no reply, or if it is slower than both 20 ms and five times the
+        with the same clock{env?.kernel_rx && env?.platform !== 'windows' ? ' and kernel stamps' : ', in userspace'}. A ping is a stall if it gets no reply, or if it is slower than both 20 ms and five times the
         link's median. If stalls are more than 2% of the pings, or the 95th percentile of the pings is more than 20 ms, the run shows
         a warning and the status bar highlights the link. Recursa does not change the scores. The warning tells you that they are too
         high: run again on a quieter link. If the gateway does not reply to ping, or there is no gateway, the run says that it did
