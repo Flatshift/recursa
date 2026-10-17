@@ -30,7 +30,7 @@ pub mod ntp_report;
 pub mod probes;
 pub mod regions;
 pub mod resolve;
-#[cfg(feature = "rpki-local")]
+#[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
 pub mod rpki;
 pub mod stats;
 pub mod store;

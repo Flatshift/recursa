@@ -1,7 +1,7 @@
 <script lang="ts">
   // App settings. In the desktop app this is its own window (⌘, or Ctrl+,); in the browser, a page.
   import { app } from '../lib/store.svelte';
-  import { api, desktop, loginItem } from '../lib/api';
+  import { api, mobile, loginItem, shell } from '../lib/api';
   import type { ComponentProps } from 'svelte';
   import type { Housekeeping, MonitorConfig, RpkiStatus } from '../lib/types';
   import { ago, pct, plural } from '../lib/format';
@@ -23,7 +23,7 @@
   let error = $state<string | null>(null);
 
   async function load() {
-    if (desktop) login = await loginItem.get().catch(() => null);
+    if (shell) login = await loginItem.get().catch(() => null);
   }
   $effect(() => {
     load();
@@ -117,7 +117,7 @@
   });
   const size = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`);
 
-  const standalone = desktop;
+  const standalone = shell;
 
   // One pane at a time, picked from the list on the left; the URL hash names the pane, so
   // other parts of the app can open Settings on one (the sidebar's run history menu, say).
@@ -142,15 +142,18 @@
     addEventListener('hashchange', onHash);
     return () => removeEventListener('hashchange', onHash);
   });
+  // Phone: a grouped list of sections. A row pushes its section, so the toolbar's Back returns to the list.
+  const showRoot = $derived(mobile && !panes.some((p) => p.id === pane));
   function pick(id: string) {
     pane = id;
     error = null;
-    history.replaceState(null, '', `#${id}`);
+    if (mobile) history.pushState(null, '', `#${id}`);
+    else history.replaceState(null, '', `#${id}`);
   }
   // Up, Down, Home and End move through the list, as in any tab list.
   function paneKey(e: KeyboardEvent) {
     const i = panes.findIndex((p) => p.id === current);
-    const to = e.key === 'ArrowDown' ? i + 1 : e.key === 'ArrowUp' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? panes.length - 1 : null;
+    const to = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? panes.length - 1 : null;
     if (to === null) return;
     e.preventDefault();
     const next = panes[(to + panes.length) % panes.length];
@@ -170,6 +173,23 @@
 
 {#snippet body()}
   <div class="panes">
+    {#if mobile}
+      {#if showRoot}
+        <nav class="root scroll" aria-label="Settings sections">
+          <ul>
+            {#each panes as p (p.id)}
+              <li>
+                <button type="button" class="rootrow" onclick={() => pick(p.id)}>
+                  <Icon name={p.icon} size={16} />
+                  <span>{p.label}</span>
+                  <Icon name="chevron-right" size={14} />
+                </button>
+              </li>
+            {/each}
+          </ul>
+        </nav>
+      {/if}
+    {:else}
     <nav class="nav" aria-label="Settings sections">
       <div role="tablist" aria-orientation="vertical">
         {#each panes as p (p.id)}
@@ -191,8 +211,11 @@
         {/each}
       </div>
     </nav>
+    {/if}
 
-    <div class="pane scroll" role="tabpanel" id="pane-{current}" aria-labelledby="pane-tab-{current}" tabindex="0">
+    {#if !showRoot}
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex (the desktop tab panel is keyboard-reachable) -->
+    <div class="pane scroll" role={mobile ? undefined : 'tabpanel'} id="pane-{current}" aria-labelledby={mobile ? undefined : `pane-tab-${current}`} tabindex={mobile ? undefined : 0}>
       {#if current === 'general'}
         <h2>General</h2>
         <div class="row">
@@ -205,7 +228,7 @@
             {/each}
           </div>
         </div>
-        {#if desktop}
+        {#if shell}
           <label class="row check">
             <input type="checkbox" checked={!!login} disabled={login == null} onchange={(e) => setLogin((e.currentTarget as HTMLInputElement).checked)} />
             <span>Open at login, in the menu bar only</span>
@@ -289,7 +312,7 @@
           </p>
           <p class="note">
             Saved runs are never counted or deleted. Save a run with the bookmark on its row in the sidebar, or in the toolbar of its results.
-            To delete every unsaved run now, use the menu by the sidebar's Runs heading{#if desktop}, or File › Clear All Runs{/if}.
+            To delete every unsaved run now, use the menu by the sidebar's Runs heading{#if shell}, or File › Clear All Runs{/if}.
           </p>
         {:else if !error}
           <p class="note">Loading…</p>
@@ -344,6 +367,7 @@
 
       {#if error}<p class="err" role="alert">{error}</p>{/if}
     </div>
+    {/if}
   </div>
 
   <dialog class="notices" bind:this={noticesDialog} aria-labelledby="notices-title" onclose={() => (notices = '')}>
@@ -359,7 +383,7 @@
   <div class="window chrome">{@render body()}</div>
 {:else}
   <div class="view-root">
-    <Toolbar title="Settings" />
+    <Toolbar title={!mobile || showRoot ? 'Settings' : (panes.find((p) => p.id === current)?.label ?? 'Settings')} />
     <div class="view-body">{@render body()}</div>
   </div>
 {/if}
@@ -415,6 +439,60 @@
     gap: 14px;
     padding: 22px 28px 28px;
     max-width: 640px;
+  }
+  :global(html.mobile) .panes {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  /* Phone: an iOS-style grouped list. Rows are 44pt and divided by hairlines; the chevron says it opens. */
+  .root ul {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 calc(24px + var(--inset-b));
+    border-top: 1px solid var(--rule);
+  }
+  .rootrow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 48px;
+    padding: 0 16px;
+    border: 0;
+    border-bottom: 1px solid var(--rule);
+    background: transparent;
+    color: var(--ink);
+    font-size: var(--t-base);
+    text-align: left;
+  }
+  .rootrow:active {
+    background: var(--surface-2);
+  }
+  .rootrow span {
+    flex: 1;
+  }
+  .rootrow :global(svg) {
+    flex: none;
+    color: var(--ink-3);
+  }
+  /* A segmented control takes its own line under its label. */
+  :global(html.mobile) .row:has(.segmented) {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  :global(html.mobile) .row:has(.segmented) .lbl {
+    flex-basis: 100%;
+  }
+  :global(html.mobile) .row select {
+    flex: 1 1 auto;
+    min-height: 44px;
+  }
+  :global(html.mobile) .pane {
+    padding: 18px 16px 28px;
+  }
+  /* The toolbar already names the section. */
+  :global(html.mobile) .pane > h2 {
+    display: none;
   }
   h2 {
     margin-bottom: 4px;

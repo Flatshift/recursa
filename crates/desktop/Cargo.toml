@@ -6,28 +6,39 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "recursa_desktop_lib"
+crate-type = ["staticlib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2.7.1", features = [] }
 
 [dependencies]
 recursa-engine.workspace = true
-open.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tauri = { version = "2.12.1", features = ["tray-icon", "image-png"] }
-tauri-plugin-autostart = "2.7.0"
 tauri-plugin-dialog = "2.8.1"
-tauri-plugin-single-instance = "2.5.2"
-tauri-plugin-window-state = "2.5.0"
 tauri-plugin-notification = "2.5.1"
 tauri-plugin-clipboard-manager = "2.5.0"
+
+# Desktop-only: a second launch, remembered window geometry, launch at login, links to the browser.
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+open.workspace = true
+tauri-plugin-autostart = "2.7.0"
+tauri-plugin-single-instance = "2.5.2"
+tauri-plugin-window-state = "2.5.0"
 
 # Only for the alert shown when the app can't start (no window exists to attach a dialog to).
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
 objc2-app-kit = "0.3.2"
 objc2-foundation = "0.3.2"
+
+# UIKit calls wry and Tauri don't make: the WKWebView's scroll view (safe-area insets) and the idle timer.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6.5"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }

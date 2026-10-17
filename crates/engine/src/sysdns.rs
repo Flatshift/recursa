@@ -63,17 +63,61 @@ fn platform() -> Vec<IpAddr> {
     win::best().map(|a| a.dns).unwrap_or_default()
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+#[cfg(target_os = "ios")]
+fn platform() -> Vec<IpAddr> {
+    // libresolv's view of the configured resolvers (processes can't be spawned on iOS);
+    // `res_ninit` is `res_9_ninit` on Darwin.
+    use std::net::{Ipv4Addr, Ipv6Addr};
+    #[link(name = "resolv")]
+    unsafe extern "C" {
+        fn res_9_ninit(state: *mut u8) -> libc::c_int;
+        fn res_9_getservers(state: *mut u8, set: *mut [u8; 128], cnt: libc::c_int) -> libc::c_int;
+        fn res_9_ndestroy(state: *mut u8);
+    }
+    // `struct __res_9_state` is a few hundred bytes; over-allocate and keep it 8-aligned.
+    // `buf` lives to the end of the function, past `res_9_ndestroy`.
+    let mut buf = vec![0u64; 1024];
+    let state = buf.as_mut_ptr().cast::<u8>();
+    // union res_sockaddr_union: a sockaddr_in or sockaddr_in6, 128 bytes.
+    let mut set = [[0u8; 128]; 8];
+    let mut ips = Vec::new();
+    unsafe {
+        if res_9_ninit(state) != 0 {
+            return ips;
+        }
+        let n = res_9_getservers(state, set.as_mut_ptr(), set.len() as libc::c_int).max(0) as usize;
+        for s in &set[..n.min(set.len())] {
+            // sockaddr: [len, family, ..]; AF_INET has the address at 4, AF_INET6 at 8.
+            match s[1] as libc::c_int {
+                libc::AF_INET => {
+                    let a: [u8; 4] = s[4..8].try_into().unwrap();
+                    ips.push(IpAddr::V4(Ipv4Addr::from(a)));
+                }
+                libc::AF_INET6 => {
+                    let a: [u8; 16] = s[8..24].try_into().unwrap();
+                    ips.push(IpAddr::V6(Ipv6Addr::from(a)));
+                }
+                _ => {}
+            }
+        }
+        res_9_ndestroy(state);
+    }
+    ips.retain(|ip| !ip.is_unspecified());
+    ips
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", windows)))]
 fn platform() -> Vec<IpAddr> {
     resolv_conf("/etc/resolv.conf")
 }
 
+#[cfg_attr(target_os = "ios", allow(dead_code))]
 /// An address as configuration files print it, without an IPv6 zone ("fe80::1%en0").
 fn parse_addr(s: &str) -> Option<IpAddr> {
     s.trim().split('%').next()?.parse().ok()
 }
 
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(any(windows, target_os = "ios"), allow(dead_code))]
 fn resolv_conf(path: &str) -> Vec<IpAddr> {
     let Ok(text) = std::fs::read_to_string(path) else { return Vec::new() };
     text.lines()
@@ -118,7 +162,12 @@ fn gateway_platform() -> Option<IpAddr> {
     win::best()?.gateway
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+#[cfg(target_os = "ios")]
+fn gateway_platform() -> Option<IpAddr> {
+    bsd::default_route()?.gateway.map(IpAddr::V4)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", windows)))]
 fn gateway_platform() -> Option<IpAddr> {
     None
 }
@@ -151,9 +200,187 @@ fn link_platform() -> Option<(String, bool)> {
     Some((a.name, a.wifi))
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+#[cfg(target_os = "ios")]
+fn link_platform() -> Option<(String, bool)> {
+    // iOS names its links by kind: en0 is the Wi-Fi radio, pdp_ip* the cellular bearers, utun* tunnels.
+    // Other en* links are wired (a USB or Lightning adapter) or the iPad's tethering bridge.
+    let iface = bsd::default_route()?.interface?;
+    let wifi = iface == "en0";
+    Some((iface, wifi))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", windows)))]
 fn link_platform() -> Option<(String, bool)> {
     None
+}
+
+/// The kernel's IPv4 routing table through `sysctl`, as `route -n get default` would show it: no
+/// process to spawn, which iOS does not allow. Used on iOS; on macOS the test below checks it
+/// against `route`.
+#[cfg(any(target_os = "ios", all(test, target_os = "macos")))]
+mod bsd {
+    use std::net::Ipv4Addr;
+
+    // libc leaves net/route.h out of its iOS build (the iOS SDK does not ship the header), so the
+    // record layout and bits are spelled out here; the macOS test checks them against libc.
+    const HDR: usize = 92; // sizeof(struct rt_msghdr): 36 bytes of fields, then 14 u32 of rt_metrics
+    const RTF_UP: i32 = 0x1;
+    const RTF_GATEWAY: i32 = 0x2;
+    const RTF_IFSCOPE: i32 = 0x1000000;
+    const RTA_DST: i32 = 0x1;
+    const RTA_GATEWAY: i32 = 0x2;
+    const RTA_NETMASK: i32 = 0x4;
+
+    #[derive(Debug, PartialEq)]
+    pub struct Route {
+        /// None for a link route, such as a VPN tunnel that carries the default itself.
+        pub gateway: Option<Ipv4Addr>,
+        pub interface: Option<String>,
+    }
+
+    /// The default route: 0.0.0.0/0, not scoped to one interface.
+    pub fn default_route() -> Option<Route> {
+        let mut mib = [libc::CTL_NET, libc::PF_ROUTE, 0, libc::AF_INET, libc::NET_RT_DUMP, 0];
+        let mut len = 0usize;
+        // SAFETY: a NULL buffer asks for the size; the second call fills a buffer of that size.
+        unsafe {
+            if libc::sysctl(mib.as_mut_ptr(), mib.len() as u32, std::ptr::null_mut(), &mut len, std::ptr::null_mut(), 0) != 0 {
+                return None;
+            }
+        }
+        let mut buf = vec![0u8; len];
+        unsafe {
+            if libc::sysctl(mib.as_mut_ptr(), mib.len() as u32, buf.as_mut_ptr().cast(), &mut len, std::ptr::null_mut(), 0) != 0 {
+                return None;
+            }
+        }
+        parse(&buf[..len]).map(|(gateway, index)| Route { gateway, interface: name(index) })
+    }
+
+    /// Walks the `rt_msghdr` records for the first unscoped, up route to 0.0.0.0/0, the one the kernel
+    /// picks: through a gateway, or a link route (a tunnel) with none. Split defaults (0/1 and 128/1)
+    /// aren't 0/0.
+    pub fn parse(buf: &[u8]) -> Option<(Option<Ipv4Addr>, u16)> {
+        let u16_at = |b: &[u8], i: usize| u16::from_ne_bytes([b[i], b[i + 1]]);
+        let i32_at = |b: &[u8], i: usize| i32::from_ne_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        let mut off = 0;
+        'records: while off + HDR <= buf.len() {
+            let m = &buf[off..off + HDR];
+            // rt_msghdr: rtm_msglen u16 @0, rtm_index u16 @4, rtm_flags i32 @8, rtm_addrs i32 @12.
+            let (msglen, index, flags, addrs) = (u16_at(m, 0) as usize, u16_at(m, 4), i32_at(m, 8), i32_at(m, 12));
+            if msglen < HDR || off + msglen > buf.len() {
+                break;
+            }
+            let rec = &buf[off + HDR..off + msglen];
+            off += msglen;
+            if flags & RTF_UP == 0 || flags & RTF_IFSCOPE != 0 || addrs & RTA_DST == 0 {
+                continue;
+            }
+            // The sockaddrs follow the header in RTA_* bit order, each padded to 4 bytes. A netmask
+            // may be cut short after its last nonzero byte, or have no length at all for /0.
+            let mut p = 0;
+            let (mut dst, mut gw, mut zero_mask) = (None, None, true);
+            for bit in 0..32 {
+                if addrs & (1 << bit) == 0 {
+                    continue;
+                }
+                let Some(sa) = rec.get(p..).filter(|sa| !sa.is_empty()) else { continue 'records };
+                let sa_len = sa[0] as usize;
+                let body = sa.get(..sa_len.min(sa.len())).unwrap_or_default();
+                let ip = (sa.get(1).copied() == Some(libc::AF_INET as u8))
+                    .then(|| body.get(4..8).map(|b| Ipv4Addr::new(b[0], b[1], b[2], b[3])))
+                    .flatten();
+                match 1 << bit {
+                    RTA_DST => dst = ip,
+                    RTA_GATEWAY => gw = ip,
+                    RTA_NETMASK => zero_mask = body.iter().skip(4).all(|&b| b == 0),
+                    _ => {}
+                }
+                p += if sa_len == 0 { 4 } else { sa_len.div_ceil(4) * 4 };
+            }
+            if dst != Some(Ipv4Addr::UNSPECIFIED) || !zero_mask {
+                continue;
+            }
+            return Some((gw.filter(|_| flags & RTF_GATEWAY != 0), index));
+        }
+        None
+    }
+
+    fn name(index: u16) -> Option<String> {
+        let mut buf = [0u8; libc::IFNAMSIZ];
+        // SAFETY: if_indextoname writes at most IFNAMSIZ bytes, NUL-terminated.
+        if unsafe { libc::if_indextoname(index as u32, buf.as_mut_ptr().cast()) }.is_null() {
+            return None;
+        }
+        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        Some(String::from_utf8_lossy(&buf[..end]).into_owned())
+    }
+
+    #[cfg(all(test, target_os = "macos"))]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn routing_table_agrees_with_route() {
+            let out = std::process::Command::new("/sbin/route").args(["-n", "get", "default"]).output().unwrap();
+            let text = String::from_utf8_lossy(&out.stdout);
+            let gw = text.lines().find_map(|l| l.trim().strip_prefix("gateway:")).map(|s| s.trim().parse::<Ipv4Addr>().ok());
+            let iface = text.lines().find_map(|l| l.trim().strip_prefix("interface:")).map(|s| s.trim().to_string());
+            let Some(Some(gw)) = gw else { return }; // offline, or a non-IPv4 default: nothing to compare
+            assert_eq!(default_route(), Some(Route { gateway: Some(gw), interface: iface }));
+        }
+
+        #[test]
+        fn layout_and_bits_match_libc() {
+            assert_eq!(HDR, std::mem::size_of::<libc::rt_msghdr>());
+            assert_eq!(std::mem::offset_of!(libc::rt_msghdr, rtm_index), 4);
+            assert_eq!(std::mem::offset_of!(libc::rt_msghdr, rtm_flags), 8);
+            assert_eq!(std::mem::offset_of!(libc::rt_msghdr, rtm_addrs), 12);
+            assert_eq!((RTF_UP, RTF_GATEWAY, RTF_IFSCOPE), (libc::RTF_UP, libc::RTF_GATEWAY, libc::RTF_IFSCOPE));
+            assert_eq!((RTA_DST, RTA_GATEWAY, RTA_NETMASK), (libc::RTA_DST, libc::RTA_GATEWAY, libc::RTA_NETMASK));
+        }
+
+        #[test]
+        fn short_or_truncated_records_stop_the_walk() {
+            assert_eq!(parse(&[]), None);
+            assert_eq!(parse(&[1u8; 7]), None);
+            let mut rec = vec![0u8; HDR];
+            rec[0] = 200; // claims more than is there
+            assert_eq!(parse(&rec), None);
+        }
+
+        fn sin(ip: [u8; 4]) -> Vec<u8> {
+            let mut sa = vec![16, libc::AF_INET as u8, 0, 0];
+            sa.extend(ip);
+            sa.extend([0; 8]);
+            sa
+        }
+
+        fn record(index: u16, flags: i32, addrs: i32, sockaddrs: &[Vec<u8>]) -> Vec<u8> {
+            let mut rec = vec![0u8; HDR];
+            rec.extend(sockaddrs.concat());
+            let len = rec.len() as u16;
+            rec[0..2].copy_from_slice(&len.to_ne_bytes());
+            rec[4..6].copy_from_slice(&index.to_ne_bytes());
+            rec[8..12].copy_from_slice(&flags.to_ne_bytes());
+            rec[12..16].copy_from_slice(&addrs.to_ne_bytes());
+            rec
+        }
+
+        #[test]
+        fn takes_the_first_default_and_skips_bad_or_split_routes() {
+            let all = RTA_DST | RTA_GATEWAY | RTA_NETMASK;
+            let link = vec![20, libc::AF_LINK as u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+            let zero_mask = vec![0, 0, 0, 0];
+            let half_mask = vec![5, 0, 0, 0, 0x80, 0, 0, 0];
+            let split = record(9, RTF_UP, all, &[sin([0; 4]), link.clone(), half_mask]);
+            let truncated = record(8, RTF_UP | RTF_GATEWAY, all, &[sin([0; 4])]);
+            let tunnel = record(7, RTF_UP, all, &[sin([0; 4]), link, zero_mask.clone()]);
+            let wifi = record(4, RTF_UP | RTF_GATEWAY, all, &[sin([0; 4]), sin([192, 168, 1, 1]), zero_mask]);
+            assert_eq!(parse(&[split.clone(), truncated.clone(), tunnel.clone(), wifi.clone()].concat()), Some((None, 7)));
+            assert_eq!(parse(&[split, truncated, wifi, tunnel].concat()), Some((Some(Ipv4Addr::new(192, 168, 1, 1)), 4)));
+        }
+    }
 }
 
 /// Whether the adapter that Internet traffic leaves through delivers the receive stamps a socket asks for.

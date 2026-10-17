@@ -1,6 +1,7 @@
 <script lang="ts">
   // The browser's stand-in for a native menu. The desktop app never renders it.
   import { menu } from '../lib/menu.svelte';
+  import { mobile } from '../lib/api';
 
   let el: HTMLDivElement | undefined = $state();
   let pos = $state({ x: 0, y: 0 });
@@ -43,7 +44,8 @@
 {#if menu.open}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (Escape closes it) -->
   <div class="scrim" onclick={() => menu.close()} oncontextmenu={(e) => (e.preventDefault(), menu.close())}></div>
-  <div class="menu chrome" role="menu" bind:this={el} style:left="{pos.x}px" style:top="{pos.y}px">
+  <!-- On the phone it is an action sheet at the bottom; the position effect still runs, harmlessly. -->
+  <div class="menu chrome" class:sheet={mobile} role="menu" bind:this={el} style:left={mobile ? undefined : `${pos.x}px`} style:top={mobile ? undefined : `${pos.y}px`}>
     {#each menu.open.items as item}
       {#if item.id === '-'}
         <hr />
@@ -51,6 +53,9 @@
         <button role="menuitem" disabled={item.enabled === false} onclick={() => choose(item.id)}>{item.label}</button>
       {/if}
     {/each}
+    {#if mobile}
+      <button class="cancel" onclick={() => menu.close()}>Cancel</button>
+    {/if}
   </div>
 {/if}
 
@@ -93,5 +98,49 @@
     border: 0;
     border-top: 1px solid var(--rule);
     margin: 4px 6px;
+  }
+  /* The phone's action sheet: above the drawer it was opened from, rows at finger size. */
+  :global(html.mobile) .scrim {
+    z-index: var(--z-toast);
+    background: var(--backdrop);
+  }
+  .sheet {
+    inset: auto 10px calc(10px + env(safe-area-inset-bottom));
+    z-index: var(--z-toast);
+    padding: 6px;
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-sheet);
+    font-size: var(--t-base);
+    animation: rise var(--dur) var(--ease-out);
+  }
+  .sheet button {
+    min-height: 50px;
+    padding: 0 16px;
+    text-align: center;
+    border-radius: var(--r-md);
+  }
+  .sheet button:hover {
+    background: none;
+    color: var(--ink);
+  }
+  .sheet button:active {
+    background: var(--surface-2);
+  }
+  .sheet .cancel {
+    margin-top: 6px;
+    border-top: 1px solid var(--rule);
+    border-radius: 0;
+    font-weight: 620;
+  }
+  @keyframes rise {
+    from {
+      transform: translateY(16px);
+      opacity: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sheet {
+      animation: none;
+    }
   }
 </style>

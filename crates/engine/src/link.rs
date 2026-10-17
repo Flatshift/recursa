@@ -220,8 +220,11 @@ pub fn start(t0: Instant) -> Result<LinkProbe, String> {
     #[cfg(any(unix, windows))]
     {
         // The interface the gateway is on, for its counters (macOS).
-        let iface =
-            if cfg!(target_os = "macos") { crate::sysdns::link().and_then(|l| l["interface"].as_str().map(str::to_string)) } else { None };
+        let iface = if cfg!(any(target_os = "macos", target_os = "ios")) {
+            crate::sysdns::link().and_then(|l| l["interface"].as_str().map(str::to_string))
+        } else {
+            None
+        };
         let sock = imp::open(gw, iface)?;
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -279,7 +282,13 @@ fn fmt_bps(bps: u64) -> String {
 }
 
 /// What the user calls the machine in the cause texts.
-const MACHINE: &str = if cfg!(target_os = "macos") { "Mac" } else { "computer" };
+const MACHINE: &str = if cfg!(target_os = "macos") {
+    "Mac"
+} else if cfg!(target_os = "ios") {
+    "iPhone"
+} else {
+    "computer"
+};
 
 fn cause_text(c: Cause) -> String {
     match c {
@@ -357,7 +366,7 @@ mod imp {
 
     /// One interface's `if_data` counters (32-bit on macOS, so they wrap).
     #[derive(Clone, Copy, Debug, Default, PartialEq)]
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
     pub(super) struct IfCounters {
         pub ibytes: u32,
         pub obytes: u32,
@@ -374,7 +383,7 @@ mod imp {
     }
 
     /// Counters of the gateway interface and of awdl0.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     fn read_counters(en: Option<&str>) -> Counters {
         use std::ffi::CStr;
         let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
@@ -411,7 +420,7 @@ mod imp {
         out
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     fn read_counters(_en: Option<&str>) -> Counters {
         Counters::default()
     }

@@ -1,13 +1,13 @@
 //! One monotonic clock domain shared by userspace stamps and kernel receive stamps.
 //!
-//! * macOS: `mach_absolute_time` ticks, the same domain the kernel uses for
+//! * macOS and iOS: `mach_absolute_time` ticks, the same domain the kernel uses for
 //!   `SO_TIMESTAMP_MONOTONIC`, converted to nanoseconds.
 //! * Linux: `CLOCK_REALTIME` nanoseconds, the domain of `SO_TIMESTAMPNS`.
 //! * Windows: `QueryPerformanceCounter` ticks, the domain of `SO_TIMESTAMP` control messages
 //!   (`SIO_TIMESTAMPING`), converted to nanoseconds.
 //! * Elsewhere: nanoseconds since process start (userspace stamps only).
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod imp {
     use std::sync::OnceLock;
 
@@ -88,7 +88,7 @@ mod imp {
     pub const SOURCE: &str = "QueryPerformanceCounter / SO_TIMESTAMP";
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", windows)))]
 mod imp {
     use std::sync::OnceLock;
     use std::time::Instant;
@@ -109,7 +109,7 @@ pub use imp::*;
 /// macOS this is the user-interactive QoS class (performance cores, highest priority
 /// without privileges); on Linux a higher priority applies only with CAP_SYS_NICE.
 pub fn prioritize_thread() {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
         const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
         unsafe extern "C" {

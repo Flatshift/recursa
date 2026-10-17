@@ -1,7 +1,6 @@
 <script lang="ts">
   import { api, confirmAction } from '../lib/api';
   import { app } from '../lib/store.svelte';
-  import { plural } from '../lib/format';
   import Icon from './Icon.svelte';
 
   /** The names the Cached test asks, in rotation: a line under the test that says which list, and a sheet to see them, add and
@@ -170,7 +169,7 @@
 </script>
 
 <div class="cn">
-  <span>Asks <span class="num">{plural(names.length, 'name')}</span> from {listLabel}</span>
+  <span>Asks <span class="num">{names.length}</span> {names.length === 1 ? 'name' : 'names'} from {listLabel}</span>
   <button type="button" class="btn sm" onclick={open} aria-haspopup="dialog">Edit names…</button>
 </div>
 

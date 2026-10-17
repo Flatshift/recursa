@@ -1,7 +1,7 @@
 <script lang="ts">
   // Source list: the app's places, then its runs, newest first.
   import { app } from '../lib/store.svelte';
-  import { desktop, mac, openSettings } from '../lib/api';
+  import { desktop, mac, mobile, openSettings, shell } from '../lib/api';
   import { shortcut } from '../lib/keys';
   import { menu, SEPARATOR } from '../lib/menu.svelte';
   import { ms, shortWhen } from '../lib/format';
@@ -38,9 +38,9 @@
       [
         { id: 'open', label: 'Open' },
         SEPARATOR,
-        { id: 'csv', label: 'Export Samples as CSV…', enabled: ok },
-        { id: 'json', label: 'Export Run as JSON…', enabled: ok },
-        SEPARATOR,
+        ...(mobile
+          ? []
+          : [{ id: 'csv', label: 'Export Samples as CSV…', enabled: ok }, { id: 'json', label: 'Export Run as JSON…', enabled: ok }, SEPARATOR]),
         { id: 'save', label: r.saved ? 'Unsave Run' : 'Save Run', enabled: ok },
         { id: 'delete', label: 'Delete Run…', enabled: ok },
       ],
@@ -81,7 +81,7 @@
   }
 
   function settings(e: MouseEvent, section?: string) {
-    if (desktop) return openSettings(section);
+    if (shell) return openSettings(section);
     go(e, section ? `/settings#${section}` : '/settings');
   }
 </script>
@@ -103,8 +103,8 @@
     {#each places as p}
       {@const on = app.route.name === p.match || (p.match === 'resolvers' && app.route.name === 'deepdive')}
       <li>
-        <a href={p.href} class="item" class:on aria-current={on ? 'page' : undefined} onclick={(e) => go(e, p.href)} title="{p.label} ({shortcut(`cmd+${p.key}`)})">
-          <Icon name={p.icon} size={15} />
+        <a href={p.href} class="item" class:on aria-current={on ? 'page' : undefined} onclick={(e) => go(e, p.href)} title={mobile ? undefined : `${p.label} (${shortcut(`cmd+${p.key}`)})`}>
+          <Icon name={p.icon} size={mobile ? 20 : 15} />
           <span>{p.label}</span>
         </a>
       </li>
@@ -114,7 +114,7 @@
   <div class="runs-h">
     <span>Runs</span>
     {#if runs.length}<span class="num count">{runs.length}</span>{/if}
-    <button class="act h" aria-label="Run history actions" title="Clear runs, run history settings" onclick={runsMenu}><Icon name="more" size={13} /></button>
+    <button class="act h" aria-label="Run history actions" title="Clear runs, run history settings" onclick={runsMenu}><Icon name="more" size={mobile ? 18 : 13} /></button>
   </div>
   <ol class="runs scroll" aria-label="Runs">
     {#each runs as r (r.id)}
@@ -133,14 +133,16 @@
           <span class="rt">
             {#if live}<span class="dot" aria-hidden="true"></span>{/if}
             <span>{shortWhen(r.started_at)}</span>
+            {#if mobile && !live && r.summary.best}<span class="num score" title="Speed score">{ms(r.summary.best.composite_ms)}</span>{/if}
           </span>
           <span class="rb">
             {#if live}
               Measuring…
             {:else if r.summary.best?.tied_with}
-              <span title="Tied for fastest: too close for this run to call">{r.summary.best.label} or {r.summary.best.tied_with}</span>
+              <span class="who" title="Tied for fastest: too close for this run to call">{r.summary.best.label} or {r.summary.best.tied_with}</span>
             {:else if r.summary.best}
-              <span>{r.summary.best.label}</span> <span class="num" title="Speed score">{ms(r.summary.best.composite_ms)}</span>
+              <span class="who">{r.summary.best.label}</span>{#if !mobile}
+                <span class="num" title="Speed score">{ms(r.summary.best.composite_ms)}</span>{/if}
             {:else}
               <span class="faint">{r.status === 'cancelled' ? 'Stopped' : 'No reliable pick'}</span>
             {/if}
@@ -155,10 +157,10 @@
               aria-pressed={r.saved}
               aria-label={r.saved ? 'Unsave run' : 'Save run'}
               title={r.saved ? 'Saved: kept when runs are cleared. Click to unsave.' : 'Save run: keep it when runs are cleared or cleaned up'}
-              onclick={() => app.setSaved(r.id, !r.saved)}><Icon name="bookmark" size={12} /></button
+              onclick={() => app.setSaved(r.id, !r.saved)}><Icon name="bookmark" size={mobile ? 17 : 12} /></button
             >
             <button class="act" aria-label="Run actions" title="Export, save or delete" onclick={(e) => runMenu(e, r, e.currentTarget as HTMLElement)}
-              ><Icon name="more" size={13} /></button
+              ><Icon name="more" size={mobile ? 18 : 13} /></button
             >
           </span>
         {/if}
@@ -180,9 +182,9 @@
       <span class="ml">
         {#if monitoring?.enabled}Monitoring <span class="sub">{monitoring.interval_min} min</span>{:else}Monitoring <span class="sub">off</span>{/if}
       </span>
-      <Icon name="chevron-right" size={12} />
+      <Icon name="chevron-right" size={mobile ? 16 : 12} />
     </a>
-    <button class="gear" aria-label="Settings" title="Settings{desktop ? ` (${shortcut('cmd+,')})` : ''}" onclick={settings}><Icon name="gear" size={15} /></button>
+    <button class="gear" aria-label="Settings" title={mobile ? undefined : `Settings${desktop ? ` (${shortcut('cmd+,')})` : ''}`} onclick={settings}><Icon name="gear" size={mobile ? 20 : 15} /></button>
   </div>
 </nav>
 
@@ -303,8 +305,11 @@
   .row.saved .acts {
     opacity: 1;
   }
-  .row.saved:not(:hover):not(:focus-within):not(.on) .act:not(.save) {
-    opacity: 0;
+  /* Hover-only: on touch, a tap that reveals content is spent on hover and never clicks. */
+  @media (hover: hover) {
+    .row.saved:not(:hover):not(:focus-within):not(.on) .act:not(.save) {
+      opacity: 0;
+    }
   }
   .act.save.on :global(svg) {
     fill: currentColor;
@@ -319,6 +324,86 @@
     .acts {
       opacity: 1;
     }
+  }
+  /* The phone drawer: the same list at finger size. Rows 48/56 pt, 44 pt buttons always showing. */
+  :global(html.mobile) .side {
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+    padding-left: env(safe-area-inset-left);
+    font-size: var(--t-base);
+  }
+  :global(html.mobile) .top {
+    padding: calc(env(safe-area-inset-top) + 14px) 20px 8px;
+  }
+  :global(html.mobile) .brand {
+    font-size: var(--t-md);
+  }
+  :global(html.mobile) ul,
+  :global(html.mobile) ol {
+    padding: 0 10px;
+  }
+  :global(html.mobile) .item {
+    min-height: 48px;
+    gap: 14px;
+    padding: 0 12px;
+    border-radius: var(--r-lg);
+  }
+  :global(html.mobile) .item:hover {
+    background: none;
+  }
+  :global(html.mobile) .item.on {
+    background: var(--side-sel);
+  }
+  :global(html.mobile) .item:active {
+    background: var(--side-sel);
+  }
+  :global(html.mobile) .runs-h {
+    padding: 18px 10px 4px 22px;
+    font-size: var(--t-sm);
+  }
+  :global(html.mobile) .act {
+    width: 44px;
+    height: 44px;
+    opacity: 1;
+    border-radius: var(--r-md);
+  }
+  :global(html.mobile) .act:hover {
+    background: none;
+    color: var(--ink-3);
+  }
+  :global(html.mobile) .run {
+    min-height: 56px;
+    gap: 2px;
+    padding: 8px 100px 8px 12px;
+  }
+  :global(html.mobile) .rt {
+    font-size: var(--t-sm);
+  }
+  :global(html.mobile) .rb {
+    font-size: var(--t-base);
+  }
+  :global(html.mobile) .acts {
+    top: 50%;
+    right: 8px;
+    gap: 0;
+    transform: translateY(-50%);
+  }
+  :global(html.mobile) .empty {
+    padding: 8px 12px;
+    font-size: var(--t-sm);
+  }
+  :global(html.mobile) .foot {
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  }
+  :global(html.mobile) .mon {
+    height: 48px;
+    padding: 0 12px 0 14px;
+    border-radius: var(--r-lg);
+    font-size: var(--t-sm);
+  }
+  :global(html.mobile) .gear {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--r-lg);
   }
   @media (prefers-reduced-motion: reduce) {
     .acts {
@@ -347,6 +432,18 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  /* Phone: the score rides on the date line, and the winner (or a tie, "A or B") wraps to two lines before it is cut. */
+  :global(html.mobile) .rb {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-height: 1.25;
+  }
+  :global(html.mobile) .rt .score {
+    margin-left: auto;
+    color: var(--ink-2);
   }
   .rb .num {
     color: var(--ink-2);

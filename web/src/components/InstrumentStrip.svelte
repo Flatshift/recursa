@@ -1,3 +1,11 @@
+<script lang="ts" module>
+  const CONDITIONS = 'conditions';
+  /** Open the measurement conditions from elsewhere: on a phone the strip only shows when something is wrong. */
+  export function showConditions() {
+    document.getElementById(CONDITIONS)?.showPopover();
+  }
+</script>
+
 <script lang="ts">
   // The instrument describing itself: where it measures from and how precisely. The bar says only
   // what changes the reading of a result and grows louder when something is wrong; a click opens the
@@ -5,6 +13,7 @@
   import type { Env, LinkCause, LinkStats, LinkUnavailable } from '../lib/types';
   import { holder, us } from '../lib/format';
   import { isMac } from '../lib/keys';
+  import { mobile } from '../lib/api';
   import Icon from './Icon.svelte';
 
   let {
@@ -23,7 +32,7 @@
   const noisy = $derived(!!gw && (gw.stalls > 0.02 * gw.sent || gw.p95 > 20));
   const caught = $derived(icpt?.verdict === 'intercepted' || icpt?.verdict === 'partial');
   // What this machine can say about the stalls (crates/engine/src/link.rs classifies them).
-  const machine = isMac ? 'Mac' : 'computer';
+  const machine = mobile ? 'iPhone' : isMac ? 'Mac' : 'computer';
   const causes: Record<LinkCause, string> = {
     busy: `Likely cause: this ${machine} was busy.`,
     traffic: `Likely cause: other traffic on this ${machine}.`,
@@ -36,7 +45,9 @@
   // A full-tunnel VPN carries the route to 1.1.1.1, so the link is a tunnel interface: the vantage and
   // the latencies are the VPN's, not this network's.
   const vpn = $derived(!!iface && /^(utun|ipsec|ppp|tun|tap|wg)\d/.test(iface.interface));
-  const medium = $derived(vpn ? 'Link' : iface ? (iface.wifi ? 'Wi-Fi' : 'Wired') : 'Router');
+  // Cellular interfaces are pdp_ip* on iOS; the engine only knows Wi-Fi from not-Wi-Fi.
+  const kind = $derived(iface ? (iface.wifi ? 'Wi-Fi' : iface.interface.startsWith('pdp_ip') ? 'Cellular' : 'Wired') : '');
+  const medium = $derived(vpn ? 'Link' : iface ? kind : 'Router');
   // A recorded run from another network than this one: comparing it with today's runs compares networks.
   const nv = $derived(now?.vantage ?? null);
   const elsewhere = $derived.by(() => {
@@ -46,22 +57,35 @@
   });
   const stallPct = $derived(gw && gw.sent ? Math.max(1, Math.round((100 * gw.stalls) / gw.sent)) : 0);
 
+  // Phone: the strip takes screen only when it has something to warn about; the conditions open from a run's menu.
+  const loud = $derived(caught || noisy || vpn || elsewhere);
+  const shown = $derived(!mobile || loud);
+  $effect(() => {
+    document.documentElement.classList.toggle('strip-on', shown);
+  });
+
   let bar: HTMLButtonElement | undefined = $state();
   let pop: HTMLDivElement | undefined = $state();
   let open = $state(false);
-  const id = `conditions-${Math.random().toString(36).slice(2, 9)}`;
+  const id = CONDITIONS;
 
   // Above the chevron that opens it, flush with the bar's right edge, so it reads as that control's sheet.
   // Set before the popover shows, so it never paints at the corner first; its width is fixed by CSS.
   function placePop() {
-    if (!bar || !pop) return;
-    const b = bar.getBoundingClientRect();
+    if (!pop) return;
     const w = Math.min(420, innerWidth - 16);
+    if (!bar) {
+      pop.style.left = `${(innerWidth - w) / 2}px`;
+      pop.style.bottom = 'calc(8px + env(safe-area-inset-bottom))';
+      return;
+    }
+    const b = bar.getBoundingClientRect();
     pop.style.left = `${Math.max(8, Math.min(b.right - 8 - w, innerWidth - w - 8))}px`;
     pop.style.bottom = `${innerHeight - b.top + 6}px`;
   }
 </script>
 
+{#if shown}
 <footer class="strip chrome">
   <button
     bind:this={bar}
@@ -100,6 +124,7 @@
     <span class="chev" class:up={!open}><Icon name="chevron-down" size={12} /></span>
   </button>
 </footer>
+{/if}
 
 <div
   bind:this={pop}
@@ -159,7 +184,7 @@
 
     <dt>Link</dt>
     <dd class:warn={noisy}>
-      {#if iface}{vpn ? 'VPN' : iface.wifi ? 'Wi-Fi' : 'Wired'} <span class="mono dim">{iface.interface}</span>{/if}
+      {#if iface}{vpn ? 'VPN' : kind} <span class="mono dim">{iface.interface}</span>{/if}
       {#if vpn}<small class="note">Traffic leaves through a VPN tunnel: the vantage and the latencies are the VPN's, not this network's.</small>{/if}
       {#if gw}
         {iface ? ' · ' : ''}router <span class="mono">{ms(gw.p50)} ms</span>, p95 <span class="mono">{ms(gw.p95)} ms</span>
@@ -195,6 +220,8 @@
   /* The window's status bar: the instrument describing itself. */
   .strip {
     height: var(--status-h);
+    box-sizing: content-box;
+    padding-bottom: env(safe-area-inset-bottom);
     border-top: 1px solid var(--rule);
     background: var(--side);
     container-type: inline-size;

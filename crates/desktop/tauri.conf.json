@@ -21,6 +21,7 @@
     "publisher": "Brian Morisette",
     "copyright": "Copyright © 2026 Brian Morisette",
     "license": "GPL-3.0-or-later",
+    "iOS": { "developmentTeam": "4KWGLJMXKW" },
     "resources": {
       "../../LICENSE": "LICENSE.txt",
       "../../web/src/legal/third-party-notices.txt": "THIRD-PARTY-NOTICES.txt"

@@ -8,8 +8,14 @@ import { listen } from '@tauri-apps/api/event';
 /** Running inside the desktop app rather than a browser tab. */
 export const desktop = '__TAURI_INTERNALS__' in window;
 
+/** The iOS app: one window, touch, no native menus. The shell sets the flag before the page runs. */
+export const mobile = desktop && '__RECURSA_MOBILE__' in window;
+
+/** The desktop app: native windows, menus and login items. */
+export const shell = desktop && !mobile;
+
 /** The macOS app, whose window has traffic lights over its top-left corner. */
-export const mac = desktop && /Mac/.test(navigator.userAgent);
+export const mac = shell && /Mac/.test(navigator.userAgent);
 
 const meta = document.querySelector<HTMLMetaElement>('meta[name="recursa-token"]');
 export const token = meta?.content && !meta.content.startsWith('%') ? meta.content : '';
@@ -151,9 +157,10 @@ export function notifyDone(title: string, body: string) {
   if (desktop) invoke('notify', { title, body }).catch(() => {});
 }
 
-/** Open the Settings window, on `section` (a Settings pane id) when given. */
+/** Open the Settings window, on `section` (a Settings pane id) when given. On the phone Settings is
+ *  a page, so the caller navigates instead. */
 export function openSettings(section?: string) {
-  if (desktop) invoke('open_settings', { section: section ?? null }).catch(() => {});
+  if (shell) invoke('open_settings', { section: section ?? null }).catch(() => {});
 }
 
 export interface MenuItem {
@@ -177,7 +184,7 @@ if (desktop) {
 /** Desktop only: pop up a native menu at the pointer. `pick` runs only if an item is chosen.
  *  Returns false in the browser, where the caller falls back to its own menu. */
 export function nativeMenu(items: MenuItem[], pick: (id: string) => void): boolean {
-  if (!desktop) return false;
+  if (!shell) return false;
   menuSeq++;
   pendingMenu = pick;
   invoke('context_menu', { seq: menuSeq, items: items.map((i) => ({ id: i.id, label: i.label, enabled: i.enabled ?? true })) }).catch(
@@ -188,8 +195,8 @@ export function nativeMenu(items: MenuItem[], pick: (id: string) => void): boole
 
 /** Desktop only: Open at Login. */
 export const loginItem = {
-  get: () => (desktop ? invoke<boolean>('get_login') : Promise.resolve(false)),
-  set: (on: boolean) => (desktop ? invoke<boolean>('set_login', { enabled: on }) : Promise.resolve(false)),
+  get: () => (shell ? invoke<boolean>('get_login') : Promise.resolve(false)),
+  set: (on: boolean) => (shell ? invoke<boolean>('set_login', { enabled: on }) : Promise.resolve(false)),
 };
 
 /** Put text on the clipboard: through the app in the desktop build, where a menu pick isn't

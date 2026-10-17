@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
-  import { api, saveExport } from '../lib/api';
+  import { api, mobile, saveExport } from '../lib/api';
   import { app, readLocal, writeLocal } from '../lib/store.svelte';
   import type { NtpEntry, NtpResult, NtpRun } from '../lib/types';
   import { plural } from '../lib/format';
@@ -422,18 +422,18 @@
   <Toolbar title="Time" subtitle="How accurate and how fast public NTP servers are from this network">
     {#snippet center()}
       <div class="segmented" role="tablist" aria-label="View">
-        <button role="tab" aria-selected={view === 'accuracy'} onclick={() => (view = 'accuracy')}>Accuracy &amp; latency</button>
+        <button role="tab" aria-selected={view === 'accuracy'} onclick={() => (view = 'accuracy')}>{mobile ? 'Accuracy' : 'Accuracy & latency'}</button>
         <button role="tab" aria-selected={view === 'features'} onclick={() => (view = 'features')}>Features</button>
         <button role="tab" aria-selected={view === 'monitor'} onclick={() => (view = 'monitor')}>Over time</button>
       </div>
     {/snippet}
     {#snippet actions()}
-      {#if view === 'monitor'}
-        <!-- the monitor has its own switch -->
+      {#if view === 'monitor' || mobile}
+        <!-- the monitor has its own switch; the phone's Start lives in the footer bar -->
       {:else if running}
         <button class="btn" onclick={stop}><Icon name="stop" size={12} />Stop</button>
       {:else}
-        {#if run?.results.length && run.status !== 'running'}
+        {#if !mobile && run?.results.length && run.status !== 'running'}
           <button class="btn" onclick={() => download('csv')} title="One row per server, with a schema_version column and named failure reasons.">Export CSV</button>
           <button class="btn" onclick={() => download('json')} title="The whole result, with a schema_version.">Export JSON</button>
         {/if}
@@ -713,6 +713,86 @@
       {/if}
 
       {#if run && run.results.length}
+        {#if mobile}
+          <!-- Phone: one row per server, its numbers in a small grid under the name. -->
+          <div class="mlist">
+            {#each sorted as x (x.e.id)}
+              {#if view === 'accuracy'}
+                {@const r = x.r!}
+                <div class="mrow" class:none={r.ok === 0}>
+                  <div class="mtop">
+                    {#if r.ok > 0 && !r.nts_only}
+                      <button class="how" aria-expanded={worked.has(x.e.id)} aria-controls="work-{x.e.id}" onclick={() => toggleWork(x.e.id)}>
+                        <Icon name={worked.has(x.e.id) ? 'chevron-down' : 'chevron-right'} size={12} />
+                        <span class="nm">{x.e.name}</span>
+                      </button>
+                    {:else}
+                      <span class="nm">{x.e.name}</span>
+                    {/if}
+                    {#if r.ok > 0 && !r.nts_only}
+                      {@const ro = role(x)}
+                      {#if ro.kind !== 'none'}
+                        <span class="role {ro.kind}">
+                          {#if ro.kind === 'use'}<Icon name="check" size={12} />{:else if ro.kind === 'avoid'}<Icon name="warn" size={12} />{:else}<Icon name="dash" size={12} />{/if}
+                          {ro.label}
+                        </span>
+                      {/if}
+                    {/if}
+                  </div>
+                  <span class="host mono">{r.host}{#if addrs(r) > 1}&nbsp;·&nbsp;{addrs(r)} addresses{/if}</span>
+                  {#if r.custom}<span class="host">yours · doesn't vote{r.port ? ` · port ${r.port}` : ''}</span>{/if}
+                  {#if r.selection === 'falseticker'}<span class="host off">falseticker: its clock disagrees with the majority</span>{/if}
+                  {#if r.addrs_disagree}<span class="host off">its addresses disagree by {num(r.addr_spread_ms)} ms</span>{/if}
+                  {#if r.nts_only}
+                    <p class="muted mnote">NTS key exchange only: this host doesn’t answer plain NTP, so only the handshake was checked.</p>
+                  {:else if r.ok === 0}
+                    <p class="muted mnote">{whyNone(r)}</p>
+                  {:else}
+                    {@const ro = role(x)}
+                    {#if ro.kind === 'spare'}<span class="why">{ro.why}</span>{/if}
+                    <dl class="mm">
+                      <div><dt>Offset</dt><dd class="num">{sgn(r.offset_ms)} ms</dd></div>
+                      <div><dt>±</dt><dd class="num">{num(r.bound_ms)}</dd></div>
+                      <div><dt>Error ≤</dt><dd class="num" class:win={picks.accurate?.r === r}>{num(r.distance_ms ?? r.bound_ms)}</dd></div>
+                      <div>
+                        <dt>vs others</dt>
+                        <dd class="num">
+                          {sgn(r.deviation_ms)}
+                          {#if r.agrees === true}<span class="ok" aria-label="agrees"><Icon name="check" size={12} /></span>
+                          {:else if r.agrees === false}<span class="off" aria-label="disagrees"><Icon name="warn" size={12} /></span>{/if}
+                        </dd>
+                      </div>
+                      <div><dt>Latency</dt><dd class="num" class:win={picks.fastest?.r === r}>{num(r.delay_min_ms)} ms</dd></div>
+                      <div><dt>Jitter</dt><dd class="num" class:win={picks.steadiest?.r === r}>{r.jitter_ms == null ? '—' : `${num(r.jitter_ms, 2)} ms`}</dd></div>
+                      <div><dt>Source</dt><dd><span class="num">{r.stratum}</span> <span class="mono muted">{r.refid}</span></dd></div>
+                      <div><dt>Answered</dt><dd class="num">{r.ok}/{r.sent}</dd></div>
+                    </dl>
+                    {#if worked.has(x.e.id)}
+                      <div class="mwork" id="work-{x.e.id}"><TimeWorking {r} /></div>
+                    {/if}
+                  {/if}
+                </div>
+              {:else}
+                {@const n = ntsCell(x)}
+                <div class="mrow">
+                  <span class="nm">{#if x.e.link}<a href={x.e.link} target="_blank" rel="noreferrer">{x.e.name}</a>{:else}{x.e.name}{/if}</span>
+                  <span class="host mono">{x.e.host}</span>
+                  <dl class="mm">
+                    <div><dt>Operator</dt><dd>{x.e.operator}</dd></div>
+                    <div><dt>Kind</dt><dd>{kindLabel(x.e.kind)}</dd></div>
+                    <div><dt>Source</dt><dd>{#if x.r?.stratum != null}<span class="num">{x.r.stratum}</span> <span class="mono muted">{x.r.refid}</span>{:else}—{/if}</dd></div>
+                    <div><dt>NTS</dt><dd><span class="nts {n.tone}">{n.text}</span></dd></div>
+                    <div><dt>IPv6</dt><dd>{v6Cell(x.r)}</dd></div>
+                    <div><dt>Leap second</dt><dd>{x.e.leap ?? '—'}</dd></div>
+                    <div><dt>Anycast</dt><dd>{x.e.anycast == null ? '—' : x.e.anycast ? 'Yes' : 'No'}</dd></div>
+                    <div><dt>Where</dt><dd>{x.e.country ?? '—'}</dd></div>
+                    {#if x.e.policy}<div class="wide"><dt>Policy and limits</dt><dd>{x.e.policy}</dd></div>{/if}
+                  </dl>
+                </div>
+              {/if}
+            {/each}
+          </div>
+        {:else}
         <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scrollable region must be reachable by keyboard) -->
         <div class="tablewrap panel" role="region" aria-label="Results" tabindex="0">
           {#if view === 'accuracy'}
@@ -841,6 +921,7 @@
             </table>
           {/if}
         </div>
+        {/if}
         <p class="fine foot">
           Offset and latency come from the NTP exchange in RFC 5905. “−” means the server's clock is behind yours. “Latency” is the round trip, not the one-way delay. A
           field that shows “—” means the operator publishes nothing we could find, or it wasn't measured here. See Method for how each number is worked out.
@@ -849,6 +930,16 @@
         <p class="empty">
           <b>Nothing measured yet.</b> Pick servers above and press Start. Each one is asked for the time several times, at least {spacing} seconds apart, and the answers are compared.
         </p>
+      {/if}
+      {#if mobile}
+        <div class="startbar">
+          <p class="est num">{plural(picked.length + customHosts.length, 'server')} · {running ? 'measuring' : `about ${eta} s`}</p>
+          {#if running}
+            <button class="btn" onclick={stop}><Icon name="stop" size={14} />Stop</button>
+          {:else}
+            <button class="btn primary" disabled={!(picked.length || customHosts.length) || starting || !loaded} onclick={start}><Icon name="play" size={14} />Start</button>
+          {/if}
+        </div>
       {/if}
     </div>
   </div>
@@ -1449,7 +1540,8 @@
     white-space: normal;
     padding: 4px 16px 6px 20px;
   }
-  td.win {
+  td.win,
+  .mm dd.win {
     font-weight: 640;
     color: var(--ink);
   }
@@ -1490,5 +1582,110 @@
     color: var(--ink-2);
     max-width: 72ch;
     padding: 0 4px;
+  }
+  /* Phone: the setup line wraps under its heading instead of running off the edge. */
+  :global(html.mobile) .sum {
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    gap: 2px 10px;
+  }
+  :global(html.mobile) .sum .num {
+    flex: initial;
+  }
+  :global(html.mobile) .chosen {
+    white-space: normal;
+  }
+  .mlist {
+    display: grid;
+    border-top: 1px solid var(--rule);
+  }
+  .mrow {
+    display: grid;
+    gap: 3px;
+    padding: 12px 2px;
+    border-bottom: 1px solid var(--rule);
+    min-width: 0;
+  }
+  .mrow.none {
+    color: var(--ink-3);
+  }
+  .mtop {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 32px;
+  }
+  .mrow .nm {
+    font-size: var(--t-base);
+    font-weight: 620;
+  }
+  .mnote {
+    font-size: var(--t-sm);
+  }
+  .mm {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px 12px;
+    margin: 8px 0 0;
+  }
+  .mm dt {
+    font-size: var(--t-2xs);
+    color: var(--ink-3);
+  }
+  .mm dd {
+    margin: 0;
+    font-size: var(--t-sm);
+    overflow-wrap: anywhere;
+  }
+  .mm .wide {
+    grid-column: 1 / -1;
+  }
+  .mrow .why {
+    font-size: var(--t-xs);
+    color: var(--ink-3);
+  }
+  .mwork {
+    margin-top: 10px;
+    overflow-x: auto;
+  }
+  /* Phone: Start sits in a footer that stays in reach while the page scrolls; it cancels the content padding to run edge to edge. */
+  .startbar {
+    position: sticky;
+    /* Sticky honours the scroller's bottom padding; cancel it so the bar meets the screen edge. */
+    bottom: calc(-32px - var(--inset-b));
+    z-index: var(--z-sticky);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    margin: 16px -16px calc(-32px - var(--inset-b));
+    padding: 10px 16px calc(10px + var(--inset-b));
+    border-top: 1px solid var(--rule);
+    background: var(--surface);
+  }
+  .startbar .est {
+    font-size: var(--t-sm);
+    color: var(--ink-2);
+  }
+  .startbar .btn {
+    min-width: 112px;
+    min-height: 44px;
+    font-size: var(--t-base);
+  }
+  /* Phone: five presets wrap to two rows, and Add matches the input's height. */
+  :global(html.mobile) .seg.five {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  :global(html.mobile) .custom {
+    align-items: stretch;
+  }
+  :global(html.mobile) .custom input {
+    height: auto;
+    min-height: 44px;
+    font-size: 16px;
+  }
+  :global(html.mobile) .custom .btn {
+    min-height: 44px;
   }
 </style>

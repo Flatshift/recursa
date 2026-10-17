@@ -323,7 +323,10 @@ button {
 .btn.primary:hover {
   background: var(--accent-hover);
 }
+/* .ghost is also the loading placeholder below; keep a ghost button a button. */
 .btn.ghost {
+  display: inline-flex;
+  animation: none;
   border-color: transparent;
   background: transparent;
   color: var(--ink-2);
@@ -514,6 +517,85 @@ input[type='checkbox']:focus-visible {
   -webkit-user-select: none;
   cursor: default;
 }
+/* iPhone: the page runs edge to edge (viewport-fit=cover), so the chrome keeps clear of the
+   status bar and home indicator itself; controls grow to a finger's width; inputs stay at
+   16px so WebKit does not zoom the page when one is focused. */
+html.mobile body {
+  overscroll-behavior: none;
+}
+html.mobile .chrome {
+  -webkit-touch-callout: none;
+}
+/* The sidebar is a drawer on the phone: wide enough for a run's row, never the whole screen. */
+html.mobile {
+  --side-w: min(300px, 82vw);
+  -webkit-tap-highlight-color: transparent;
+  /* No double-tap zoom: two quick taps on controls left the shell zoomed. Pinch still works. */
+  touch-action: manipulation;
+}
+/* The toolbar carries the status-bar inset, so its row can't be the fixed desktop height. */
+html.mobile .view-root {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+html.mobile .btn {
+  min-height: 40px;
+  padding: 0 16px;
+}
+/* With the instrument strip hidden, pages run to the screen's bottom edge and keep clear of the home indicator. */
+html.mobile {
+  --inset-b: env(safe-area-inset-bottom);
+}
+html.mobile.strip-on {
+  --inset-b: 0px;
+}
+html.mobile .content {
+  padding: 14px 16px calc(32px + var(--inset-b));
+}
+html.mobile .btn.sm {
+  min-height: 44px;
+}
+/* Secondary text never drops under 13px on the phone; the type scale carries it, not each component. */
+html.mobile {
+  --t-2xs: 0.8125rem;
+  --t-xs: 0.8125rem;
+}
+/* The shell stays put; the panes inside it rubber-band like any iOS scroller. */
+html.mobile .scroll {
+  overscroll-behavior-y: auto;
+}
+html.mobile input[type='text'],
+html.mobile input[type='number'],
+html.mobile input[type='url'],
+html.mobile select {
+  font-size: 16px;
+  min-height: 40px;
+}
+html.mobile input[type='checkbox'] {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-md);
+}
+html.mobile input[type='checkbox']::before {
+  width: 13px;
+  height: 13px;
+}
+html.mobile .seg {
+  gap: 3px;
+  padding: 3px;
+  border-radius: var(--r-lg);
+  font-size: var(--t-sm);
+}
+html.mobile button.segbtn,
+html.mobile .segbtn span {
+  height: 40px;
+  border-radius: var(--r-md);
+}
+html.mobile .segbtn:hover span {
+  color: var(--ink-2);
+}
+html.mobile .segbtn input:checked + span {
+  color: var(--ink);
+}
 
 /* A pane that scrolls by itself, without rubber-banding the window. */
 .scroll {
@@ -666,4 +748,38 @@ button.segbtn:focus-visible {
   background: var(--surface);
   border: 1px solid var(--rule);
   border-radius: var(--r-lg);
+}
+
+/* Phone: a segmented control spans its row and every choice gets a finger's height. */
+html.mobile .segmented {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 3px;
+  gap: 2px;
+  border-radius: var(--r-lg);
+}
+html.mobile .segmented button {
+  flex: 1 1 auto;
+  justify-content: center;
+  min-width: 0;
+  height: 38px;
+  padding: 0 8px;
+  font-size: var(--t-sm);
+  border-radius: var(--r-md);
+}
+
+/* The iOS shell's startup failure (main.ts). */
+#app.fatal {
+  padding: calc(24px + env(safe-area-inset-top)) calc(24px + env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom))
+    calc(24px + env(safe-area-inset-left));
+  overflow-wrap: anywhere;
+}
+#app.fatal h1 {
+  font-size: var(--t-lg);
+  margin: 0 0 8px;
+}
+#app.fatal p {
+  color: var(--ink-2);
+  margin: 0;
 }

@@ -14,6 +14,7 @@
   import Provenance from './Provenance.svelte';
   import { logDomain } from '../lib/scale';
   import { app } from '../lib/store.svelte';
+  import { mobile } from '../lib/api';
   import { cellPenalty, ecsByAuthority, edgeIps, youOf } from '../lib/cdn';
   import type { HostStatus } from '../lib/types';
 
@@ -39,6 +40,30 @@
   });
 
   // Drag the left edge to resize; the width is remembered.
+  // Phone: a sheet over the run. A downward drag on its header follows the finger and closes it past a third of
+  // its height or on a quick flick; anything less springs back.
+  let sheet = $state<HTMLElement>();
+  let pull = $state<number | null>(null);
+  let pullFrom: { y: number; t: number } | null = null;
+  function pullStart(e: TouchEvent) {
+    e.stopPropagation();
+    if (e.touches.length === 1) pullFrom = { y: e.touches[0].clientY, t: e.timeStamp };
+  }
+  function pullMove(e: TouchEvent) {
+    e.stopPropagation();
+    if (!pullFrom) return;
+    pull = Math.max(0, e.touches[0].clientY - pullFrom.y);
+  }
+  function pullEnd(e: TouchEvent) {
+    e.stopPropagation();
+    if (!pullFrom) return;
+    const dy = pull ?? 0;
+    const fast = dy > 40 && dy / Math.max(1, e.timeStamp - pullFrom.t) > 0.5;
+    pullFrom = null;
+    pull = null;
+    if (fast || dy > (sheet?.offsetHeight ?? 600) / 3) onclose();
+  }
+
   function startResize(e: PointerEvent) {
     e.preventDefault();
     const x0 = e.clientX;
@@ -94,7 +119,21 @@
   let openFilter = $state<Record<string, boolean>>({});
 </script>
 
-<aside class="inspector" class:overlay style:width="{app.inspectorWidth}px" aria-labelledby="sheet-title">
+{#if mobile}
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="sheet-scrim" onclick={onclose}></div>
+{/if}
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<aside
+  class="inspector"
+  class:overlay
+  class:pulling={pull !== null}
+  style:width="{app.inspectorWidth}px"
+  style:transform={pull ? `translateY(${pull}px)` : undefined}
+  aria-labelledby="sheet-title"
+  bind:this={sheet}
+  ontouchstart={(e) => e.stopPropagation()}
+>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions (a separator is focusable to resize with the arrow keys) -->
   <div
     class="grip"
@@ -107,7 +146,9 @@
     onkeydown={resizeKey}
   ></div>
   <div class="inner scroll">
-    <header class="head">
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <header class="head" ontouchstart={mobile ? pullStart : undefined} ontouchmove={mobile ? pullMove : undefined} ontouchend={mobile ? pullEnd : undefined} ontouchcancel={mobile ? pullEnd : undefined}>
+      {#if mobile}<span class="grabber" aria-hidden="true"></span>{/if}
       <div>
         <p class="kicker">
           {resolver.group === 'system' ? 'Your network' : resolver.group === 'custom' ? 'Custom resolver' : resolver.group === 'legacy' ? 'Legacy resolver' : 'Public resolver'}{resolver.published.jurisdiction ? ` · ${resolver.published.jurisdiction}` : ''}
@@ -122,7 +163,11 @@
           </p>
         {/if}
       </div>
-      <button class="tb-icon close" aria-label="Close inspector" title="Close inspector ({shortcut('alt+cmd+I')})" onclick={onclose}><Icon name="close" size={14} /></button>
+      {#if mobile}
+        <button class="done" onclick={onclose}>Done</button>
+      {:else}
+        <button class="tb-icon close" aria-label="Close inspector" title="Close inspector ({shortcut('alt+cmd+I')})" onclick={onclose}><Icon name="close" size={14} /></button>
+      {/if}
     </header>
 
     {#if resolver.notes}<p class="note">{resolver.notes}</p>{/if}
@@ -213,7 +258,7 @@
       </section>
 
       {#if mine.length}
-        <section>
+        <section class="latency">
           <h3>Latency</h3>
           {#each mine as r (r.target.idx)}
             <div class="lat">
@@ -461,6 +506,99 @@
     max-width: calc(100% - 24px);
     box-shadow: var(--shadow-sheet);
     animation: slide var(--dur) var(--ease-out);
+  }
+  /* Phone: a sheet that rises over the run and leaves its top edge in view, with its latency first; the operator's
+     notes and the deep dive follow the measurements. */
+  :global(html.mobile) .inspector,
+  :global(html.mobile) .inspector.overlay {
+    position: fixed;
+    inset: calc(env(safe-area-inset-top) + 10px) 0 0 0;
+    z-index: var(--z-sheet);
+    width: auto !important;
+    max-width: none;
+    height: auto;
+    border-left: 0;
+    border-radius: 14px 14px 0 0;
+    box-shadow: var(--shadow-sheet);
+    animation: rise 320ms var(--ease-out);
+    transition: transform 260ms var(--ease-out);
+  }
+  :global(html.mobile) .inspector.pulling {
+    transition: none;
+  }
+  .sheet-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-backdrop);
+    background: var(--backdrop);
+    animation: fadein 320ms var(--ease-out);
+  }
+  @keyframes rise {
+    from {
+      transform: translateY(100%);
+    }
+  }
+  @keyframes fadein {
+    from {
+      opacity: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(html.mobile) .inspector,
+    :global(html.mobile) .inspector.overlay {
+      animation: fadein 160ms linear;
+      transition: none;
+    }
+  }
+  :global(html.mobile) .grip {
+    display: none;
+  }
+  :global(html.mobile) .inner {
+    display: flex;
+    flex-direction: column;
+    padding: 0 16px calc(32px + env(safe-area-inset-bottom));
+    overscroll-behavior: contain;
+  }
+  :global(html.mobile) .inner > :global(*) {
+    order: 3;
+  }
+  :global(html.mobile) .inner > .head {
+    order: 0;
+    position: sticky;
+    padding: 22px 0 12px;
+    border-radius: 14px 14px 0 0;
+    touch-action: none;
+  }
+  :global(html.mobile) .inner > .latency {
+    order: 1;
+    margin-top: 14px;
+  }
+  :global(html.mobile) .inner > .dive {
+    order: 2;
+  }
+  :global(html.mobile) .inner > .note {
+    order: 4;
+  }
+  .grabber {
+    position: absolute;
+    top: 7px;
+    left: 50%;
+    width: 36px;
+    height: 5px;
+    margin-left: -18px;
+    border-radius: 3px;
+    background: var(--rule-2);
+  }
+  .done {
+    align-self: flex-start;
+    min-height: 44px;
+    margin: -10px -8px 0 0;
+    padding: 0 8px;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font-size: var(--t-base);
+    font-weight: 620;
   }
   @keyframes slide {
     from {

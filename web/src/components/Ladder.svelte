@@ -923,4 +923,32 @@
       gap: 2px;
     }
   }
+  /* Phone width: name and numbers share the top line, and the plot takes the whole row under them. */
+  @container ladder (max-width: 480px) {
+    .axis,
+    .row {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .axis .ncol {
+      display: none;
+    }
+    .axis .pcol,
+    .row .pcol {
+      grid-column: 1 / -1;
+    }
+    .row .lcol {
+      grid-column: 1;
+      grid-row: 1;
+      padding-bottom: 0;
+    }
+    .row .ncol {
+      grid-column: 2;
+      grid-row: 1;
+      align-self: start;
+      padding-top: 7px;
+    }
+    .ncol .small {
+      flex-wrap: nowrap;
+    }
+  }
 </style>

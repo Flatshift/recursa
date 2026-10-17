@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { app } from '../lib/store.svelte';
-  import { api } from '../lib/api';
+  import { api, mobile } from '../lib/api';
   import { shortcut, shortcutParts } from '../lib/keys';
   import type { Check, Resolver, TestKind, Transport } from '../lib/types';
   import CachedNames from './CachedNames.svelte';
@@ -85,6 +86,45 @@
   }
 
   const chosen = $derived(resolvers.filter((r) => selected.has(r.id)));
+  // Phone: the page is a summary; Edit reveals the picker and the plan sheet. With nothing chosen the picker
+  // opens by itself and stays open through the first picks, until Done.
+  let editing = $state(false);
+  $effect(() => {
+    if (draft.resolvers.length === 0) editing = true;
+  });
+  const pickerOpen = $derived(!mobile || editing);
+  let planOpen = $state(false);
+  // The sheet takes focus when it opens and gives it back to Edit when it closes, so VoiceOver stays in step.
+  let planSheet = $state<HTMLElement>();
+  let planEdit = $state<HTMLElement>();
+  function openPlan() {
+    planOpen = true;
+    tick().then(() => planSheet?.focus());
+  }
+  function closePlan() {
+    planOpen = false;
+    planEdit?.focus({ preventScroll: true });
+  }
+  const chosenNames = $derived(chosen.map((r) => label(r.provider, r.variant)).join(' · '));
+  const planLine = $derived(
+    [
+      draft.tests.map((k) => TEST_LABEL[k]).join(', ') || 'No tests',
+      ...(draft.cdn ? ['CDN mapping'] : []),
+      ...(draft.probes ? ['probes'] : []),
+    ].join(' · '),
+  );
+  const filterOn = $derived(filter.trim() !== '');
+  // Phone: a filter opens every matching group; clearing it puts back the ones the user had open.
+  function openWhile(on: boolean) {
+    return (node: HTMLDetailsElement) => {
+      if (!on) return;
+      const before = node.open;
+      node.open = true;
+      return () => {
+        node.open = before;
+      };
+    };
+  }
   // One line per provider that publishes limits, among the resolvers picked.
   const limited = $derived([...new Map(chosen.filter((r) => r.limits).map((r) => [r.provider, r])).values()]);
   const estimate = $derived.by(() => {
@@ -142,6 +182,11 @@
   });
 
   function onKey(e: KeyboardEvent) {
+    if (e.key === 'Escape' && planOpen) {
+      e.preventDefault();
+      closePlan();
+      return;
+    }
     const tag = (e.target as HTMLElement)?.tagName;
     if (e.key === '/' && tag !== 'INPUT' && tag !== 'TEXTAREA') {
       e.preventDefault();
@@ -160,6 +205,8 @@
     { v: 'doh', hint: 'DNS over HTTPS/2, port 443.' },
   ]);
   const tests: TestKind[] = ['cached', 'uncached', 'tld'];
+  // On the phone the quick picks are a segmented row; on the desktop, a row of ghost buttons.
+  const pickCls = mobile ? 'segbtn' : 'btn ghost sm';
   const icpt = $derived(app.env?.interception ?? null);
   let checking = $state(false);
   async function recheck() {
@@ -177,9 +224,11 @@
     subtitle={blocker ?? `≈ ${duration(estimate.ms)} · ${estimate.queries.toLocaleString()} queries · ${estimate.targets} targets`}
   >
     {#snippet actions()}
-      <button class="btn primary" disabled={!canStart} title={blocker ?? `Start (${shortcut('cmd+Enter')})`} onclick={() => app.startRun()}>
-        <Icon name="play" size={12} />Start
-      </button>
+      {#if !mobile}
+        <button class="btn primary" disabled={!canStart} title={blocker ?? `Start (${shortcut('cmd+Enter')})`} onclick={() => app.startRun()}>
+          <Icon name="play" size={12} />Start
+        </button>
+      {/if}
     {/snippet}
   </Toolbar>
 
@@ -188,24 +237,32 @@
     <section class="pick content scroll" aria-labelledby="pick-h" oncontextmenu={onResolverContext}>
       <header class="pick-head">
         <h2 id="pick-h" class="section-title">Resolvers <span class="count num">{draft.resolvers.length}</span></h2>
-        <div class="quick">
-          <button class="btn ghost sm" onclick={() => setAll(resolvers.filter((r) => r.default).map((r) => r.id))}>Defaults</button>
-          <button class="btn ghost sm" onclick={() => setAll(resolvers.filter((r) => r.group !== 'legacy').map((r) => r.id))}
-            >Everything</button
+        {#if mobile && draft.resolvers.length > 0}
+          <button class="textbtn" aria-expanded={editing} onclick={() => (editing = !editing)}>{editing ? 'Done' : 'Edit'}</button>
+        {/if}
+        {#if pickerOpen}
+        <div class="quick" class:seg={mobile} class:five={mobile}>
+          <button class={pickCls} onclick={() => setAll(resolvers.filter((r) => r.default).map((r) => r.id))}>Defaults</button>
+          <button class={pickCls} onclick={() => setAll(resolvers.filter((r) => r.group !== 'legacy').map((r) => r.id))}
+            >{mobile ? 'All' : 'Everything'}</button
           >
           <button
-            class="btn ghost sm"
+            class={pickCls}
             title="Public resolvers whose operators say they block malware, phishing, ads or adult content. Also turns on the blocking checks."
             onclick={pickFiltering}>Blocking</button
           >
           <button
-            class="btn ghost sm"
+            class={pickCls}
             title="Resolvers that send EDNS Client Subnet (RFC 7871) to authoritative servers: as measured in your recent runs, or the operator's claim where not yet measured. Also turns on CDN mapping."
             onclick={pickEcs}>ECS</button
           >
-          <button class="btn ghost sm" onclick={() => setAll([])}>Clear</button>
+          <button class={pickCls} onclick={() => setAll([])}>Clear</button>
         </div>
+        {/if}
       </header>
+      {#if mobile && !pickerOpen}
+        <p class="names">{chosenNames}</p>
+      {/if}
       {#if icpt && icpt.verdict !== 'direct' && icpt.verdict !== 'unknown'}
         <div class="intercept" role="status">
           <Icon name="warn" size={16} />
@@ -226,6 +283,7 @@
           <button class="btn sm" onclick={recheck} disabled={checking}><Icon name="refresh" size={13} />{checking ? 'Checking…' : 'Re-check'}</button>
         </div>
       {/if}
+      {#if pickerOpen}
       <label class="search">
         <span class="visually-hidden">Filter resolvers</span>
         <input bind:this={filterEl} type="text" bind:value={filter} placeholder="Filter by name, address or what it blocks…" />
@@ -247,14 +305,29 @@
         {#each providers as [provider, list] (provider)}
           {@const visible = list.filter(matches)}
           {#if visible.length}
-            <div class="provider">
-              <div class="pname">{provider}</div>
-              <div>
-                {#each visible as r (r.id)}
-                  {@render row(r)}
-                {/each}
+            {#if mobile}
+              <details class="provider" {@attach openWhile(filterOn)}>
+                <summary class="pname">
+                  <span>{provider}</span>
+                  <span class="pcount num">{list.filter((r) => selected.has(r.id)).length} of {list.length}</span>
+                  <Icon name="chevron-down" size={14} />
+                </summary>
+                <div>
+                  {#each visible as r (r.id)}
+                    {@render row(r)}
+                  {/each}
+                </div>
+              </details>
+            {:else}
+              <div class="provider">
+                <div class="pname">{provider}</div>
+                <div>
+                  {#each visible as r (r.id)}
+                    {@render row(r)}
+                  {/each}
+                </div>
               </div>
-            </div>
+            {/if}
           {/if}
         {/each}
       </div>
@@ -288,11 +361,50 @@
           <button class="btn ghost sm addbtn" onclick={() => (adding = true)}><Icon name="plus" size={14} />Add an ISP or custom resolver</button>
         {/if}
       </div>
+      {/if}
     </section>
 
+    {#if mobile}
+      <section class="plan-sum" aria-labelledby="plan-h">
+        <div class="sumrow">
+          <h2 id="plan-h" class="section-title">Test plan</h2>
+          <button class="textbtn" bind:this={planEdit} onclick={openPlan}>Edit</button>
+        </div>
+        <p class="names">{planLine}</p>
+      </section>
+    {:else}
     <aside class="plan scroll" aria-labelledby="plan-h">
         <h2 id="plan-h" class="section-title">Test plan</h2>
+        {@render planBody()}
+    </aside>
+    {/if}
 
+    {#if mobile && planOpen}
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <div class="sheet-scrim" onclick={closePlan}></div>
+      <div class="plan-sheet" role="dialog" aria-modal="true" aria-labelledby="plan-sheet-h" tabindex="-1" bind:this={planSheet}>
+        <header class="sheet-head">
+          <span class="grabber" aria-hidden="true"></span>
+          <h2 id="plan-sheet-h">Test plan</h2>
+          <button class="textbtn" onclick={closePlan}>Done</button>
+        </header>
+        <div class="sheet-body scroll">{@render planBody()}</div>
+      </div>
+    {/if}
+
+    {#if mobile}
+      <!-- The phone's Start lives at the foot of the page so it stays in reach while scrolled. -->
+      <div class="startbar">
+        <p class="est" class:blocked={!!blocker}>
+          {blocker ?? `≈ ${duration(estimate.ms)} · ${estimate.queries.toLocaleString()} queries · ${estimate.targets} targets`}
+        </p>
+        <button class="btn primary" disabled={!canStart} onclick={() => app.startRun()}><Icon name="play" size={14} />Start</button>
+      </div>
+    {/if}
+  </div>
+</div>
+
+{#snippet planBody()}
         <fieldset>
           <legend>Transports</legend>
           <div class="seg">
@@ -422,9 +534,7 @@
           <label class="toggle"><input type="checkbox" bind:checked={draft.cdn} /><span>CDN mapping quality</span></label>
         </fieldset>
         <p class="hint start-hint">{#each shortcutParts('cmd+Enter') as k, i}{i ? ' ' : ''}<kbd>{k}</kbd>{/each} starts the benchmark.</p>
-    </aside>
-  </div>
-</div>
+{/snippet}
 
 {#snippet row(r: Resolver, removable = false)}
   <div class="rrow" class:on={selected.has(r.id)} data-resolver={r.id}>
@@ -766,5 +876,309 @@
     .chips {
       display: none;
     }
+  }
+
+  /* iPhone: one column. Resolvers, then the plan, with Start pinned at the foot of the scroll. */
+  :global(html.mobile) .view-body {
+    flex-direction: column;
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+  :global(html.mobile) .pick,
+  :global(html.mobile) .plan {
+    flex: none;
+    width: auto;
+    overflow: visible;
+  }
+  :global(html.mobile) .pick {
+    padding: 10px 16px 4px;
+  }
+  :global(html.mobile) .pick-head {
+    display: grid;
+    justify-content: stretch;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  :global(html.mobile) .pick-head h2 {
+    font-size: var(--t-md);
+  }
+  :global(html.mobile) .count {
+    font-size: var(--t-base);
+  }
+  :global(html.mobile) .quick {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 3px;
+  }
+  :global(html.mobile) .intercept {
+    flex-wrap: wrap;
+    font-size: var(--t-base);
+  }
+  :global(html.mobile) .intercept .btn {
+    width: 100%;
+  }
+  :global(html.mobile) .search kbd {
+    display: none;
+  }
+  :global(html.mobile) .search input {
+    padding-right: 12px;
+  }
+  :global(html.mobile) .group {
+    margin-top: 20px;
+  }
+  :global(html.mobile) .group h3 {
+    font-size: var(--t-sm);
+    padding-bottom: 8px;
+    margin-bottom: 4px;
+  }
+  :global(html.mobile) .provider {
+    grid-template-columns: 1fr;
+    gap: 0;
+    padding: 8px 0;
+  }
+  :global(html.mobile) .pname {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    padding: 0 12px;
+    font-size: var(--t-base);
+    cursor: pointer;
+    list-style: none;
+  }
+  :global(html.mobile) .pname::-webkit-details-marker {
+    display: none;
+  }
+  :global(html.mobile) .pname span:first-child {
+    flex: 1;
+  }
+  :global(html.mobile) .pcount {
+    font-size: var(--t-sm);
+    font-weight: 500;
+    color: var(--ink-3);
+  }
+  :global(html.mobile) .pname :global(svg) {
+    flex: none;
+    color: var(--ink-3);
+    transition: transform 160ms var(--ease-out);
+  }
+  :global(html.mobile) details[open] > .pname :global(svg) {
+    transform: rotate(180deg);
+  }
+  :global(html.mobile) .pick-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+  :global(html.mobile) .pick-head .quick {
+    grid-column: 1 / -1;
+  }
+  :global(html.mobile) .textbtn {
+    min-height: 44px;
+    min-width: 44px;
+    margin-right: -8px;
+    padding: 0 8px;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font-size: var(--t-base);
+    font-weight: 620;
+  }
+  :global(html.mobile) .names {
+    margin: -4px 0 4px;
+    font-size: var(--t-base);
+    color: var(--ink-2);
+    line-height: 1.45;
+  }
+  :global(html.mobile) .plan-sum {
+    padding: 8px 16px 20px;
+    margin-top: 20px;
+    border-top: 1px solid var(--rule);
+  }
+  :global(html.mobile) .sumrow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 8px;
+  }
+  :global(html.mobile) .sumrow h2 {
+    font-size: var(--t-md);
+  }
+  :global(html.mobile) .plan-sheet {
+    position: fixed;
+    inset: calc(env(safe-area-inset-top) + 10px) 0 0 0;
+    z-index: var(--z-sheet);
+    display: flex;
+    flex-direction: column;
+    border-radius: 14px 14px 0 0;
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--shadow-sheet);
+    animation: rise 320ms var(--ease-out);
+  }
+  :global(html.mobile) .sheet-head {
+    position: relative;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 16px 4px;
+    border-bottom: 1px solid var(--rule);
+  }
+  :global(html.mobile) .sheet-head h2 {
+    font-size: var(--t-md);
+  }
+  :global(html.mobile) .sheet-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 0 16px calc(32px + env(safe-area-inset-bottom));
+  }
+  .grabber {
+    position: absolute;
+    top: 7px;
+    left: 50%;
+    width: 36px;
+    height: 5px;
+    margin-left: -18px;
+    border-radius: 3px;
+    background: var(--rule-2);
+  }
+  .sheet-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-backdrop);
+    background: var(--backdrop);
+    animation: fadein 320ms var(--ease-out);
+  }
+  @keyframes rise {
+    from {
+      transform: translateY(100%);
+    }
+  }
+  @keyframes fadein {
+    from {
+      opacity: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(html.mobile) .plan-sheet {
+      animation: fadein 160ms linear;
+    }
+    :global(html.mobile) .pname :global(svg) {
+      transition: none;
+    }
+  }
+  :global(html.mobile) .rrow:hover {
+    background: transparent;
+  }
+  :global(html.mobile) .rrow:active {
+    background: var(--surface-2);
+  }
+  :global(html.mobile) .rrow label {
+    grid-template-columns: 22px minmax(0, 1fr);
+    grid-template-areas: 'box name' 'box ip';
+    column-gap: 14px;
+    min-height: 52px;
+    padding: 6px 12px;
+  }
+  :global(html.mobile) .rname {
+    font-size: var(--t-base);
+  }
+  :global(html.mobile) .rip {
+    font-size: var(--t-sm);
+  }
+  :global(html.mobile) .chips {
+    display: none;
+  }
+  :global(html.mobile) .icon {
+    width: 44px;
+    min-height: 44px;
+  }
+  :global(html.mobile) .hint {
+    font-size: var(--t-sm);
+  }
+  :global(html.mobile) .addbtn {
+    margin-top: 8px;
+  }
+  :global(html.mobile) .add {
+    grid-template-columns: 1fr;
+  }
+  :global(html.mobile) .add label {
+    font-size: var(--t-sm);
+  }
+  :global(html.mobile) .plan {
+    padding: 8px 16px 28px;
+    margin-top: 20px;
+    border-left: 0;
+    border-top: 1px solid var(--rule);
+    background: transparent;
+  }
+  :global(html.mobile) .plan h2 {
+    font-size: var(--t-md);
+    margin-top: 16px;
+  }
+  :global(html.mobile) fieldset {
+    margin-top: 22px;
+  }
+  :global(html.mobile) legend,
+  :global(html.mobile) .lbl {
+    font-size: var(--t-sm);
+  }
+  :global(html.mobile) .testrow {
+    grid-template-columns: 22px 10px auto;
+    column-gap: 12px;
+    min-height: 48px;
+    padding: 8px 0;
+  }
+  :global(html.mobile) .tl {
+    font-size: var(--t-base);
+  }
+  :global(html.mobile) .th {
+    font-size: var(--t-sm);
+  }
+  :global(html.mobile) .toggle {
+    gap: 12px;
+    min-height: 44px;
+    padding: 6px 0;
+    font-size: var(--t-base);
+  }
+  :global(html.mobile) .sub {
+    padding-left: 34px;
+  }
+  :global(html.mobile) .limits p {
+    font-size: var(--t-sm);
+  }
+  :global(html.mobile) .start-hint {
+    display: none;
+  }
+  :global(html.mobile) .startbar {
+    margin-top: auto;
+    padding-bottom: calc(10px + var(--inset-b));
+  }
+  .startbar {
+    position: sticky;
+    bottom: 0;
+    z-index: var(--z-sticky);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    border-top: 1px solid var(--rule);
+    background: var(--surface);
+  }
+  .startbar .est {
+    font-size: var(--t-sm);
+    color: var(--ink-2);
+    line-height: 1.35;
+  }
+  .startbar .est.blocked {
+    color: var(--ink-3);
+  }
+  .startbar .btn {
+    min-width: 112px;
+    min-height: 44px;
+    font-size: var(--t-base);
   }
 </style>

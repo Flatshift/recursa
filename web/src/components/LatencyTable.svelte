@@ -2,6 +2,7 @@
   import TransportChip from './TransportChip.svelte';
   import BaselineChip from './BaselineChip.svelte';
   import { app } from '../lib/store.svelte';
+  import { mobile } from '../lib/api';
   import type { Row } from '../lib/verdict';
   import { CDN_ROUND_TRIPS, CONNECTION_SHARE, HIT_SHARE, MIX_LABEL, TESTS, TIMEOUT_COST_MS, WEIGHTS, timeoutCost } from '../lib/verdict';
   import type { TestKind } from '../lib/types';
@@ -58,6 +59,14 @@
     const d = r.dist.uncached.n ? r.dist.uncached : r.dist.cached;
     return d.p75 != null && d.p25 != null ? d.p75 - d.p25 : null;
   };
+  // Phone: the sort keys a row card shows, as chips.
+  const sortKeys = $derived<[Key, string][]>([
+    ['composite', 'Score'],
+    ['perlookup', 'Per lookup'],
+    ...ks.map((k): [Key, string] => [`${k}-p50`, TEST_LABEL[k]]),
+    ['iqr', 'Jitter'],
+    ['success', 'Answered'],
+  ]);
 </script>
 
 {#snippet head(k: Key, text: string, title = '')}
@@ -66,6 +75,40 @@
   </th>
 {/snippet}
 
+{#if mobile}
+  <!-- Phone: one card per target, the columns folded into a small grid, sorted by a wrapping row of chips. -->
+  <div class="sortbar" role="group" aria-label="Sort by">
+    {#each sortKeys as [k, text] (k)}
+      <button class="chip" class:on={sortKey === k} aria-pressed={sortKey === k} onclick={() => sort(k)}>{text}{#if sortKey === k}<span class="arrow">{asc ? '↑' : '↓'}</span>{/if}</button>
+    {/each}
+  </div>
+  <ol class="cards">
+    {#each sorted as r (r.target.idx)}
+      <li class:flag={r.intercepted} class:sel={app.inspect === r.target.resolver_id} data-resolver={r.target.resolver_id}>
+        <button class="card" onclick={() => onopen(r.target.resolver_id)}>
+          <span class="cname">
+            <b>{r.target.provider}</b> {r.target.variant}
+            <TransportChip t={r.target.transport} v6={r.target.family === 'v6'} />
+            {#if r.baseline}<BaselineChip what={r.forwarder} />{/if}
+            {#if r.intercepted}<span class="warn">answered locally</span>{/if}
+          </span>
+          <span class="cscore num" title={timeoutCost(r) >= 0.05 ? `Includes ${ms(timeoutCost(r))} for timeouts` : undefined}>{ms(r.composite, false)}<small>score</small></span>
+          <span class="stats">
+            <span><span class="k">Per lookup</span><span class="v num">{ms(r.perLookup, false)}</span></span>
+            {#each ks as k}
+              <span><span class="k">{TEST_LABEL[k]}</span><span class="v num">{ms(r.dist[k].p50, false)} <span class="dim">/ {ms(r.dist[k].p95, false)}</span></span></span>
+            {/each}
+            <span><span class="k">Jitter</span><span class="v num">{ms(iqr(r), false)}</span></span>
+            <span><span class="k">Answered</span><span class="v num" class:bad={r.success < 0.98}>{pct(r.success)}</span></span>
+            {#if hasSetup}<span><span class="k">Connect</span><span class="v num dim">{r.target.setup_ms != null ? ms(r.target.setup_ms, false) : '—'}</span></span>{/if}
+            <span><span class="k">Hops</span><span class="v num" class:bad={r.intercepted && (r.target.hops ?? 99) <= 1}>{r.target.hops ?? '—'}</span></span>
+          </span>
+        </button>
+      </li>
+    {/each}
+  </ol>
+  <p class="foot">All times in milliseconds; each test shows its median / p95. Medians and percentiles use answered queries only; timeouts, errors and a filter’s block answers count against “Answered”.</p>
+{:else}
 <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable region must be keyboard-reachable) -->
 
 <div class="wrap" role="region" aria-label="Latency by target" tabindex="0">
@@ -114,6 +157,7 @@
   </table>
 </div>
 <p class="foot">All times in milliseconds. Medians and percentiles use answered queries only; timeouts, errors and a filter’s block answers count against “Answered”. Uncached answers that came from a cache are left out.</p>
+{/if}
 
 <style>
   /* Its own scroll region (both ways), so the header row stays put. */
@@ -212,5 +256,106 @@
     margin-top: 8px;
     font-size: var(--t-xs);
     color: var(--ink-3);
+  }
+  /* Every sort key in view: the chips wrap rather than scroll sideways. */
+  .sortbar {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0 0 10px;
+  }
+  .chip {
+    flex: none;
+    min-height: 36px;
+    padding: 0 12px;
+    border: 1px solid var(--rule);
+    border-radius: 18px;
+    background: var(--surface);
+    color: var(--ink-2);
+    font-size: var(--t-sm);
+    white-space: nowrap;
+  }
+  .chip.on {
+    border-color: transparent;
+    background: var(--side-sel);
+    color: var(--ink);
+    font-weight: 620;
+  }
+  .cards {
+    flex: none;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 8px;
+  }
+  .card {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+    padding: 10px 12px 12px;
+    border: 1px solid var(--rule);
+    border-radius: var(--r-lg);
+    background: var(--surface);
+    text-align: left;
+    cursor: default;
+  }
+  .card:active {
+    background: var(--surface-2);
+  }
+  li.sel .card {
+    background: var(--sel);
+  }
+  li.flag .card {
+    background: color-mix(in oklab, var(--warn-soft) 55%, var(--surface));
+  }
+  .cname {
+    min-width: 0;
+    font-size: var(--t-base);
+    color: var(--ink-2);
+    line-height: 1.3;
+  }
+  .cname b {
+    color: var(--ink);
+    font-weight: 620;
+  }
+  .cname .warn {
+    display: inline-block;
+    margin: 2px 0 0;
+  }
+  .cscore {
+    align-self: start;
+    display: grid;
+    justify-items: end;
+    font-size: var(--t-lg);
+    font-weight: 620;
+    line-height: 1.1;
+  }
+  .cscore small {
+    font-size: var(--t-2xs);
+    font-weight: 500;
+    color: var(--ink-3);
+    letter-spacing: 0.02em;
+  }
+  .stats {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px 8px;
+    margin: 0;
+  }
+  .stats .k {
+    display: block;
+    font-size: var(--t-2xs);
+    color: var(--ink-3);
+    white-space: nowrap;
+  }
+  .stats .v {
+    display: block;
+    margin: 1px 0 0;
+    font-size: var(--t-sm);
+    white-space: nowrap;
   }
 </style>

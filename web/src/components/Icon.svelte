@@ -30,6 +30,8 @@
     | 'gear'
     | 'bookmark'
     | 'more'
+    | 'menu'
+    | 'chevron-left'
     | 'search';
   let { name, size = 16 }: { name: Name; size?: number } = $props();
 </script>
@@ -81,6 +83,10 @@
     <path d="M4 6l4 4 4-4" />
   {:else if name === 'chevron-right'}
     <path d="M6 4l4 4-4 4" />
+  {:else if name === 'chevron-left'}
+    <path d="M10 4L6 8l4 4" />
+  {:else if name === 'menu'}
+    <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />
   {:else if name === 'clock'}
     <circle cx="8" cy="8" r="5.6" />
     <path d="M8 4.6V8l2.4 1.5" />

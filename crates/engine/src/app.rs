@@ -259,7 +259,7 @@ impl AppState {
             "interception": *self.interception.read().unwrap(),
             "system": self.system.read().unwrap().iter().map(|i| i.to_string()).collect::<Vec<_>>(),
             "db": self.store.path.display().to_string(),
-            "rpki_local": cfg!(feature = "rpki-local"),
+            "rpki_local": cfg!(all(feature = "rpki-local", not(target_os = "ios"))),
         })
     }
 
@@ -708,7 +708,7 @@ impl AppState {
                 self.store.ntp_clear();
                 ok(json!({ "cleared": true }))
             }
-            #[cfg(feature = "rpki-local")]
+            #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
             (_, ["rpki", rest @ ..]) => crate::rpki::call(self, method, rest, body).await,
             _ => Err(ApiError::new(404, "No such endpoint.")),
         }

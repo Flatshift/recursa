@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { app } from './lib/store.svelte';
-  import { desktop } from './lib/api';
+  import { desktop, mobile, shell } from './lib/api';
   import { isMac, shortcut } from './lib/keys';
   import Sidebar from './components/Sidebar.svelte';
   import Toolbar from './components/Toolbar.svelte';
@@ -35,7 +35,7 @@
   });
 
   // In the desktop app, Settings is its own window with no sidebar or status bar.
-  const standalone = desktop && app.route.name === 'settings';
+  const standalone = shell && app.route.name === 'settings';
 
   // Narrow windows show the sidebar as an overlay, closed until asked for.
   let width = $state(innerWidth);
@@ -48,6 +48,44 @@
     app.route;
     if (untrack(() => narrow)) app.setSidebar(false, false);
   });
+
+  // Phone: the sidebar is a drawer that follows the finger in from the left edge and back out.
+  // `drag` is how much of it shows while a finger has it; between touches CSS owns the position.
+  const EDGE = 24;
+  let drawer = $state<HTMLElement>();
+  let drag = $state<number | null>(null);
+  let touch: { x: number; y: number; t: number; open: boolean; w: number; axis: 'x' | 'y' | null } | null = null;
+
+  function tStart(e: TouchEvent) {
+    if (!mobile || e.touches.length !== 1 || !drawer) return;
+    const t = e.touches[0];
+    const open = app.sidebar;
+    if (!open && t.clientX > EDGE) return;
+    touch = { x: t.clientX, y: t.clientY, t: performance.now(), open, w: drawer.offsetWidth, axis: null };
+  }
+  function tMove(e: TouchEvent) {
+    if (!touch) return;
+    const t = e.touches[0];
+    const dx = t.clientX - touch.x;
+    const dy = t.clientY - touch.y;
+    if (!touch.axis) {
+      if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+      touch.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      // A vertical move is a scroll, not the drawer.
+      if (touch.axis === 'y') return (touch = null);
+    }
+    drag = Math.max(0, Math.min(touch.w, (touch.open ? touch.w : 0) + dx));
+  }
+  function tEnd(e: TouchEvent) {
+    if (!touch) return;
+    const { open, w, x, t } = touch;
+    touch = null;
+    if (drag === null) return;
+    const dx = e.changedTouches[0].clientX - x;
+    const flick = Math.abs(dx) > 30 && performance.now() - t < 300;
+    app.setSidebar(flick ? dx > 0 : drag > w / 2, false);
+    drag = null;
+  }
 
   const onRun = $derived(app.route.name === 'run' && app.run);
   const stripEnv = $derived(onRun ? app.run!.env : app.env);
@@ -73,8 +111,29 @@
   <Settings />
 {:else}
   <a class="skip" href="#main">Skip to content</a>
-  <div class="shell" class:noside={!app.sidebar || narrow}>
-    {#if app.sidebar}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="shell" class:noside={!app.sidebar || narrow} ontouchstart={tStart} ontouchmove={tMove} ontouchend={tEnd} ontouchcancel={tEnd}>
+    {#if mobile}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <div
+        class="scrim fade"
+        class:on={app.sidebar}
+        class:dragging={drag !== null}
+        style:opacity={drag === null ? undefined : drag / (drawer?.offsetWidth || 1)}
+        onclick={() => app.setSidebar(false, false)}
+      ></div>
+      <div
+        class="side-slot drawer"
+        class:open={app.sidebar}
+        class:dragging={drag !== null}
+        style:transform={drag === null ? undefined : `translateX(${drag - (drawer?.offsetWidth || 0)}px)`}
+        bind:this={drawer}
+        inert={!app.sidebar && drag === null}
+      >
+        <Sidebar />
+      </div>
+      <div class="edge"></div>
+    {:else if app.sidebar}
       <div class="side-slot" class:overlay={narrow}>
         <Sidebar />
       </div>
@@ -172,6 +231,50 @@
     z-index: var(--z-backdrop);
     background: var(--backdrop);
   }
+  /* The phone drawer: off screen to the left, slid in by a finger or the toolbar button. */
+  .side-slot.drawer {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: var(--side-w);
+    z-index: var(--z-sheet);
+    transform: translateX(-100%);
+    transition: transform var(--dur) var(--ease-out);
+    touch-action: pan-y;
+  }
+  .side-slot.drawer.open {
+    transform: none;
+    box-shadow: var(--shadow-sheet);
+  }
+  .side-slot.drawer.dragging {
+    transition: none;
+    box-shadow: var(--shadow-sheet);
+  }
+  .scrim.fade {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--dur) var(--ease-out);
+  }
+  .scrim.fade.on {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .scrim.fade.dragging {
+    transition: none;
+  }
+  /* The strip of screen the drawer swipes in from, below the toolbar so its button stays tappable. */
+  .edge {
+    position: absolute;
+    inset: calc(env(safe-area-inset-top) + var(--bar-h)) auto 0 0;
+    width: 24px; /* EDGE */
+    z-index: var(--z-backdrop);
+    touch-action: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .side-slot.drawer,
+    .scrim.fade {
+      transition: none;
+    }
+  }
   .main {
     display: grid;
     grid-template-rows: minmax(0, 1fr) auto;
@@ -208,7 +311,7 @@
   .toast {
     position: fixed;
     left: 50%;
-    bottom: calc(var(--status-h) + 18px);
+    bottom: calc(var(--status-h) + 18px + env(safe-area-inset-bottom));
     transform: translateX(-50%);
     z-index: var(--z-toast);
     display: flex;

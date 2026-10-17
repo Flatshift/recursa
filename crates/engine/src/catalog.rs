@@ -175,9 +175,9 @@ pub fn system_entries(addrs: &[IpAddr]) -> Vec<Resolver> {
             r.group = "system".into();
             r.variant = if i == 0 { "Primary".into() } else { format!("#{}", i + 1) };
             r.notes = Some(if is_private(ip) {
-                "Configured on this computer, usually by your router via DHCP. It may forward to your ISP or to another upstream.".into()
+                "Configured on this device, usually by your router via DHCP. It may forward to your ISP or to another upstream.".into()
             } else {
-                "Configured on this computer, usually your ISP's resolver handed out via DHCP.".into()
+                "Configured on this device, usually your ISP's resolver handed out via DHCP.".into()
             });
             r
         })

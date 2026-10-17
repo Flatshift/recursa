@@ -56,6 +56,17 @@
   const paced = pacedOrder(() => want, () => live);
   const keepShown = orderOf();
   const order = $derived(keepShown(paced.current.filter((k) => byIdx.has(k))));
+  // Rank numbers count only what can be picked: a forwarder on your network keeps its place as a reference line, unnumbered,
+  // so #1 is the resolver the verdict names.
+  const rankNo = $derived.by(() => {
+    const m = new Map<number, number>();
+    let n = 0;
+    for (const k of order) {
+      const r = byIdx.get(k);
+      if (r?.measured && r.eligible && !r.baseline) m.set(k, ++n);
+    }
+    return m;
+  });
   const ghosts = $derived(live && !rows.length ? Math.min(placeholders, LIMIT) : 0);
   const ghostBand = (seed: number) => {
     const h = Math.sin((seed + 1) * 12.9898) * 43758.5453;
@@ -144,9 +155,9 @@
           {#each shown.length || warmAxis ? labelled : [] as t}<text x={x(t)} y="10" text-anchor="middle">{tickLabel(t)}</text>{/each}
         </svg>
       </span>
-      <span class="h" title="Speed score, in ms: cached, uncached and TLD lookups weighted together, each median pulled toward its p95. The list is sorted by it.">score</span>{#if withCdn}<span class="h" title="CDN edges compared with the nearest any resolver found">CDN</span>{/if}<span class="h">answered</span>
+      <span class="h" title="Speed score, in ms: cached, uncached and TLD lookups weighted together, each median pulled toward its p95. The list is sorted by it.">score</span>{#if withCdn}<span class="h cdnh" title="CDN edges compared with the nearest any resolver found">CDN</span>{/if}<span class="h">answered</span>
     </li>
-    {#each order as idx, i (idx)}
+    {#each order as idx (idx)}
       {@const r = byIdx.get(idx)!}
       {@const wn = warmN(idx)}
       <li animate:flip={RERANK} in:rise={riseOn()}>
@@ -160,7 +171,7 @@
             onclick={() => onopen(r.target.resolver_id)}
           >
             <span class="n num"
-              >{#if r.eligible}{#key i + 1}<span class="rn" class:up={rankDir.get(idx) === 1} in:roll={{ dir: rankDir.get(idx) ?? 0 }}>{i + 1}</span>{/key}{:else}·{/if}</span
+              >{#if rankNo.has(idx)}{#key rankNo.get(idx)}<span class="rn" class:up={rankDir.get(idx) === 1} in:roll={{ dir: rankDir.get(idx) ?? 0 }}>{rankNo.get(idx)}</span>{/key}{:else}·{/if}</span
             >
             <span class="who">
               {#if r.baseline}<BaselineChip what={r.forwarder} lead />{/if}<b>{r.target.provider}</b>
@@ -457,5 +468,53 @@
     .strip {
       visibility: hidden;
     }
+  }
+  /* Phone: no strip (the Latency view has the full chart), no CDN column (it has its own view), so the
+     name gets the row and wraps rather than truncates. */
+  :global(html.mobile) ol,
+  :global(html.mobile) ol.withcdn {
+    grid-template-columns: 18px minmax(0, 1fr) 0 56px max-content;
+    column-gap: 8px;
+    margin: 0 -4px;
+  }
+  :global(html.mobile) .cdn,
+  :global(html.mobile) .cdnh {
+    display: none;
+  }
+  :global(html.mobile) .axis {
+    padding: 0 4px 4px;
+  }
+  :global(html.mobile) .row {
+    padding: 7px 4px;
+    min-height: 40px;
+  }
+  :global(html.mobile) .row:hover {
+    background: none;
+  }
+  :global(html.mobile) .row:active {
+    background: var(--surface-2);
+  }
+  :global(html.mobile) .row.sel {
+    background: var(--sel);
+  }
+  :global(html.mobile) .who {
+    white-space: normal;
+    line-height: 1.25;
+  }
+  /* Names wrap on the phone, so the baseline mark sits on its own line above the name instead of splitting it. */
+  :global(html.mobile) .who :global(.bchip.lead) {
+    display: table;
+    margin: 0 0 3px;
+  }
+  :global(html.mobile) .flag {
+    display: block;
+    margin-left: 0;
+  }
+  :global(html.mobile) .v,
+  :global(html.mobile) .ok {
+    font-size: var(--t-sm);
+  }
+  :global(html.mobile) .legend-note {
+    display: none;
   }
 </style>
