@@ -84,7 +84,9 @@
                 ? env?.platform === 'windows'
                   ? 'On: answers are stamped where the adapter hands them up (loopback is not)'
                   : 'On'
-                : 'Unavailable on this system: userspace stamps'}
+                : env?.platform === 'windows'
+                  ? 'Off: the adapter does not stamp, so answers get userspace stamps'
+                  : 'Unavailable on this system: userspace stamps'}
             </dd></div>
           <div><dt>Loopback floor (median)</dt><dd class="num">{us(cal?.floor_p50_us)}</dd></div>
           <div><dt>Loopback floor (99th pct)</dt><dd class="num">{us(cal?.floor_p99_us)}</dd></div>
@@ -96,6 +98,15 @@
           <button class="btn sm" onclick={recalibrate} disabled={busy}><Icon name="refresh" size={13} />{busy ? 'Calibrating…' : 'Recalibrate'}</button>
         </div>
       </div>
+      {#if env?.platform === 'windows' && !env?.kernel_rx}
+        <p>
+          <b>Turning stamps on.</b> Windows stamps a packet where the adapter hands it up, and only when the adapter's driver has
+          software timestamping on; it is off by default. In Device Manager, open the network adapter's properties, choose the
+          Advanced tab and set <b>Software Timestamp</b> to <b>RxAll</b>. Not every driver offers it, and Windows 10 2004 or later
+          is needed. Then restart Recursa. Loopback answers, including this calibration, keep userspace stamps on Windows either
+          way.
+        </p>
+      {/if}
       <p>
         The <b>loopback floor</b> sends queries through the same code path to a responder on this computer. The responder spins and
         does not sleep, so the floor is only the tool's send path plus two trips through the kernel's loopback stack. It is the

@@ -69,11 +69,13 @@ jobs:
       - name: Timing floor
         run: cargo run -p recursa --release -- calibrate
       # Windows stamps packets where the adapter hands them up, and only when the driver's software timestamping
-      # is on (off by default). Turn it on for the runner's adapter so the stamps can be seen on real traffic.
+      # is on (off by default). Turn it on for the runner's adapter so the stamps can be seen on real traffic. A
+      # driver without the property is reported, not an error: the test below then shows the userspace fallback.
       - name: Adapter software timestamps
         shell: pwsh
+        continue-on-error: true
         run: |
-          Get-NetAdapter -Physical | Set-NetAdapterAdvancedProperty -RegistryKeyword '*SoftwareTimestamp' -RegistryValue 1
+          Get-NetAdapter -Physical | Set-NetAdapterAdvancedProperty -RegistryKeyword '*SoftwareTimestamp' -RegistryValue 1 -ErrorAction Continue
           Get-NetAdapterAdvancedProperty -AllProperties | Where-Object RegistryKeyword -like '*Timestamp*' | Format-Table Name, RegistryKeyword, RegistryValue
       - name: Kernel stamps on the network
         run: cargo test -p recursa-engine --release -- --ignored --nocapture stamps_on_the_network

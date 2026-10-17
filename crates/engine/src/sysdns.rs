@@ -156,19 +156,35 @@ fn link_platform() -> Option<(String, bool)> {
     None
 }
 
+/// Whether the adapter that Internet traffic leaves through delivers the receive stamps a socket asks for.
+/// Windows stamps a packet where the adapter hands it up, and only when the driver's software timestamping
+/// is on (its "Software Timestamp" advanced property, off by default); macOS and Linux stamp every receive
+/// in the kernel.
+#[cfg(windows)]
+pub fn adapter_rx_stamps() -> bool {
+    win::best().is_some_and(|a| a.rx_stamps)
+}
+
+#[cfg(not(windows))]
+pub fn adapter_rx_stamps() -> bool {
+    true
+}
+
 /// The IP Helper API's view of the adapters: the one a packet to the Internet leaves through,
 /// its DNS servers, its gateway and whether it is Wi-Fi. No console command, so nothing flashes
 /// a window from the desktop app, and nothing depends on the system language.
 #[cfg(windows)]
 mod win {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use std::sync::OnceLock;
     use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS};
     use windows_sys::Win32::NetworkManagement::IpHelper::{
         GAA_FLAG_INCLUDE_GATEWAYS, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_MULTICAST, GetAdaptersAddresses, GetBestInterfaceEx,
-        IP_ADAPTER_ADDRESSES_LH,
+        INTERFACE_TIMESTAMP_CAPABILITIES, IP_ADAPTER_ADDRESSES_LH,
     };
-    use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+    use windows_sys::Win32::NetworkManagement::Ndis::{IfOperStatusUp, NET_LUID_LH};
     use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6, AF_UNSPEC, SOCKADDR, SOCKADDR_IN, SOCKADDR_IN6};
+    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 
     /// IANA ifType for an IEEE 802.11 interface (the `IfType` of a Wi-Fi adapter).
     const IF_TYPE_IEEE80211: u32 = 71;
@@ -178,6 +194,33 @@ mod win {
         pub gateway: Option<IpAddr>,
         pub name: String,
         pub wifi: bool,
+        /// The driver stamps every packet it receives (software timestamping, RxAll).
+        pub rx_stamps: bool,
+    }
+
+    type GetActiveCaps = unsafe extern "system" fn(*const NET_LUID_LH, *mut INTERFACE_TIMESTAMP_CAPABILITIES) -> u32;
+
+    /// `GetInterfaceActiveTimestampCapabilities` arrived with Windows 10 2004. Looked up at run time so the
+    /// binary still loads on older systems, where it is simply absent and no adapter stamps.
+    fn active_caps() -> Option<GetActiveCaps> {
+        static F: OnceLock<Option<GetActiveCaps>> = OnceLock::new();
+        *F.get_or_init(|| {
+            let lib: Vec<u16> = "iphlpapi.dll".encode_utf16().chain([0]).collect();
+            // Already loaded: this module imports GetAdaptersAddresses from it.
+            let module = unsafe { GetModuleHandleW(lib.as_ptr()) };
+            if module.is_null() {
+                return None;
+            }
+            let f = unsafe { GetProcAddress(module, c"GetInterfaceActiveTimestampCapabilities".as_ptr().cast()) }?;
+            Some(unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, GetActiveCaps>(f) })
+        })
+    }
+
+    fn rx_stamps(a: &IP_ADAPTER_ADDRESSES_LH) -> bool {
+        let Some(get) = active_caps() else { return false };
+        let mut caps: INTERFACE_TIMESTAMP_CAPABILITIES = unsafe { std::mem::zeroed() };
+        let r = unsafe { get(&a.Luid, &mut caps) };
+        r == ERROR_SUCCESS && caps.SoftwareCapabilities.AllReceive
     }
 
     /// The adapter a packet to 1.1.1.1 leaves through; failing that, the first adapter that is up
@@ -251,7 +294,7 @@ mod win {
         }
         // The link check pings over IPv4, so an IPv4 gateway comes first.
         let gateway = gateways.iter().find(|ip| ip.is_ipv4()).or(gateways.first()).copied();
-        Adapter { dns, gateway, name: wide(a.FriendlyName), wifi: a.IfType == IF_TYPE_IEEE80211 }
+        Adapter { dns, gateway, name: wide(a.FriendlyName), wifi: a.IfType == IF_TYPE_IEEE80211, rx_stamps: rx_stamps(a) }
     }
 
     fn placeholder_v6(ip: &IpAddr) -> bool {

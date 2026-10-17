@@ -404,25 +404,31 @@ mod win {
     /// `WSARecvMsg` is an extension function: Winsock hands out its address through an ioctl.
     fn recv_msg(s: SOCKET) -> LPFN_WSARECVMSG {
         static F: OnceLock<LPFN_WSARECVMSG> = OnceLock::new();
-        *F.get_or_init(|| {
-            let guid = WSAID_WSARECVMSG;
-            let mut f: LPFN_WSARECVMSG = None;
-            let mut out = 0u32;
-            let r = unsafe {
-                WSAIoctl(
-                    s,
-                    SIO_GET_EXTENSION_FUNCTION_POINTER,
-                    &guid as *const _ as *const c_void,
-                    size_of_val(&guid) as u32,
-                    &mut f as *mut _ as *mut c_void,
-                    size_of_val(&f) as u32,
-                    &mut out,
-                    null_mut(),
-                    None,
-                )
-            };
-            if r == 0 { f } else { None }
-        })
+        if let Some(f) = F.get() {
+            return *f;
+        }
+        let guid = WSAID_WSARECVMSG;
+        let mut f: LPFN_WSARECVMSG = None;
+        let mut out = 0u32;
+        let r = unsafe {
+            WSAIoctl(
+                s,
+                SIO_GET_EXTENSION_FUNCTION_POINTER,
+                &guid as *const _ as *const c_void,
+                size_of_val(&guid) as u32,
+                &mut f as *mut _ as *mut c_void,
+                size_of_val(&f) as u32,
+                &mut out,
+                null_mut(),
+                None,
+            )
+        };
+        // Only a found address is kept: a socket the ioctl refuses must not decide for every later one.
+        if r != 0 || f.is_none() {
+            return None;
+        }
+        let _ = F.set(f);
+        f
     }
 
     /// Ask the stack to stamp datagrams as they arrive. False where unsupported (older Windows 10).
@@ -471,15 +477,17 @@ mod win {
         let base = ctl.as_ptr() as *const u8;
         let end = (msg.Control.len as usize).min(size_of_val(&ctl));
         let hdr = size_of::<CMSGHDR>();
+        // Winsock lays control messages out like POSIX cmsgs: each header aligned to the pointer size, its
+        // data to eight bytes (WSA_CMSGDATA_ALIGN).
+        let data = hdr.next_multiple_of(8);
         let mut off = 0;
-        // Control messages are laid out like POSIX cmsgs, aligned to the pointer size.
         while off + hdr <= end {
             let h = unsafe { std::ptr::read_unaligned(base.add(off) as *const CMSGHDR) };
             if h.cmsg_len < hdr || off + h.cmsg_len > end {
                 break;
             }
-            if h.cmsg_level == SOL_SOCKET && h.cmsg_type == SO_TIMESTAMP as i32 && h.cmsg_len >= hdr + 8 {
-                let ticks = unsafe { std::ptr::read_unaligned(base.add(off + hdr) as *const u64) };
+            if h.cmsg_level == SOL_SOCKET && h.cmsg_type == SO_TIMESTAMP as i32 && h.cmsg_len >= data + 8 {
+                let ticks = unsafe { std::ptr::read_unaligned(base.add(off + data) as *const u64) };
                 // The stack stamps where the adapter hands the packet up (the NDIS boundary), so loopback
                 // traffic, and adapters without software timestamping, carry a zero stamp: no stamp at all.
                 if ticks != 0 {

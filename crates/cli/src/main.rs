@@ -128,6 +128,10 @@ async fn main() {
             let c = tokio::task::spawn_blocking(|| calibrate::run(1000)).await.unwrap().expect("calibration");
             println!("clock            {}", c.clock);
             let stamps = match (c.kernel_rx, c.stamped) {
+                (false, _) if cfg!(windows) => {
+                    "no (userspace fallback: needs Windows 10 2004 or later and the adapter's Software Timestamp property set to RxAll)"
+                        .to_string()
+                }
                 (false, _) => "no (userspace fallback)".to_string(),
                 (true, 0) => "enabled, none on loopback (the stack stamps at the adapter)".to_string(),
                 (true, n) if n == c.samples => "yes".to_string(),

@@ -2,13 +2,14 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.3.5 (2026-10-17)
 
 - **Kernel receive stamps on Windows**: UDP answers are stamped by the network stack as they arrive
   (`SIO_TIMESTAMPING`, Windows 10 2004 and later) instead of when the measurement thread wakes up, and the engine's
   clock is the performance counter those stamps use. Windows stamps a packet where the adapter hands it up, so
   this needs the adapter's software timestamping turned on; loopback answers, older Windows and adapters without
-  it keep the userspace stamps, and the calibration and Method page say which applied.
+  it keep the userspace stamps. Recursa asks the adapter whether it stamps, and the calibration and the Method
+  page say which applied and how to turn stamps on.
 
 ## 0.3.4 (2026-10-17)
 

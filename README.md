@@ -161,10 +161,11 @@ process records monitoring for a given database.
 
 * DoQ, DNSCrypt and ODoH are shown from operator documentation only; they aren't measured.
 * On Windows the stack stamps a packet where the adapter hands it up, so stamps need an adapter whose driver has
-  software timestamping turned on (the **Software Timestamp** advanced property, off by default on most drivers) and
-  Windows 10 2004 or later. Answers without a stamp are timed in userspace, loopback answers always are, and the
-  Method page says which applied. The Windows link check times each echo in userspace, and reports only how late its
-  own ticks ran, not loopback echoes or interface counters.
+  software timestamping turned on and Windows 10 2004 or later. To turn it on, open the adapter's properties in
+  Device Manager, choose the Advanced tab, set **Software Timestamp** to **RxAll** (not every driver offers it)
+  and restart Recursa. Answers without a stamp are timed in userspace, loopback answers always are, and the
+  Method page says which applied and how to change it. The Windows link check times each echo in userspace, and
+  reports only how late its own ticks ran, not loopback echoes or interface counters.
 * Background monitoring runs while Recursa is running; it isn't installed as a system service.
 
 ## License
