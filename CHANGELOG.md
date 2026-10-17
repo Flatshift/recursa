@@ -2,6 +2,24 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.3.4 (2026-10-17)
+
+- **EDNS Client Subnet** is checked against four authorities (Akamai, Fastly, Google, PowerDNS) instead of two, so a
+  resolver that sends your subnet only to some CDNs shows **Selective** rather than passing as "Sends /24" or
+  "Not sent". The check's evidence, the Inspector's CDN mapping line and the CDN matrix chip list what each
+  authority saw.
+- **Run actions where the runs are**: each run in the sidebar shows a bookmark (save) and a "…" menu on hover
+  (Open, Export, Save, Delete); the Runs heading has a "…" menu with **Clear All Runs…** and a link to the
+  history settings. The Results toolbar carries the same bookmark and menu, replacing the export pop-down, the
+  trash button and the Inspector's Save button. Delete or Backspace on a focused run deletes it.
+- **Settings window**: a resizable window with sections down the left (General, Benchmark, Monitoring, Run
+  history, Route origins, About) instead of one long scroll, always opening at its designed size. About shows the
+  mark. The desktop File menu gains **Save Run** (⌘S / Ctrl+S), **Delete Run…** (⌘⌫ / Ctrl+Backspace) and
+  **Clear All Runs…**.
+- **Measurement conditions** opens above the chevron that opens it, at the right end of the status bar.
+- **Check progress**: the progress rail sweeps only until a check reports, then fills with what it reports; the
+  line naming the check no longer animates on its own.
+
 ## 0.3.0 (2026-10-17)
 
 - **Check progress**: after the latency rounds, a progress line names the check under way (path check, capability

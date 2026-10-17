@@ -56,10 +56,14 @@ pub struct ProbeReport {
     pub via: String,
     pub checks: Vec<Check>,
     pub egress: Vec<String>,
+    /// ECS as Google's nameservers saw it (o-o.myaddr.l.google.com).
     pub ecs: Option<String>,
     /// ECS as Akamai's nameservers saw it (whoami.ds.akahelp.net). Resolvers may send
     /// a different subnet, or none, depending on the authoritative server.
     pub ecs_akamai: Option<String>,
+    /// What each echoing authority in `ECS_ECHOERS` saw, by label: the subnet, or `None`
+    /// when it answered without one. An authority whose test didn't answer is absent.
+    pub ecs_by_authority: BTreeMap<String, Option<String>>,
     pub nsid: Option<String>,
     pub pop: Option<String>,
     pub filtering: BTreeMap<String, FilterCategory>,
@@ -327,39 +331,30 @@ pub fn probe(
         rep.checks.push(check("pop", Status::Info, Some(true), p.clone(), format!("CH TXT id.server → \"{p}\"")));
     }
 
-    // Egress address and EDNS Client Subnet, as seen by Google's and Akamai's
-    // authoritative servers: resolvers can treat the two differently.
-    let google = c.ask(&QuerySpec::new("o-o.myaddr.l.google.com", dns::TYPE_TXT));
-    if let Ok(m) = &google {
-        for t in m.txt_answers() {
-            if let Some(rest) = t.strip_prefix("edns0-client-subnet ") {
-                rep.ecs = Some(rest.trim().to_string());
-            } else if t.parse::<IpAddr>().is_ok() {
-                rep.egress.push(t);
+    // Egress address and EDNS Client Subnet, as seen by several authoritative operators.
+    // Resolvers send ECS selectively (OpenDNS and Quad9 keep a list of CDNs; Cloudflare
+    // sends a short prefix to Akamai alone), so one echo shows one point of the policy.
+    let echoes: Vec<(&Echoer, Result<dns::Message, XErr>)> =
+        ECS_ECHOERS.iter().map(|e| (e, c.ask(&QuerySpec::new(e.name, dns::TYPE_TXT)))).collect();
+    let mut unanswered = Vec::new();
+    for (e, r) in &echoes {
+        match r {
+            Ok(m) => {
+                let seen = (e.parse)(m);
+                match e.label {
+                    "Google" => {
+                        rep.ecs = seen.clone();
+                        rep.egress.extend(m.txt_answers().into_iter().filter(|t| t.parse::<IpAddr>().is_ok()));
+                    }
+                    "Akamai" => rep.ecs_akamai = seen.clone(),
+                    _ => {}
+                }
+                rep.ecs_by_authority.insert(e.label.to_string(), seen);
             }
+            Err(err) => unanswered.push((e.label, err)),
         }
     }
-    let akamai = c.ask(&QuerySpec::new("whoami.ds.akahelp.net", dns::TYPE_TXT));
-    if let Ok(m) = &akamai {
-        rep.ecs_akamai = akahelp_ecs(m);
-    }
-    let prefix = |s: &str| s.rsplit('/').next().unwrap_or("?").to_string();
-    match (&google, &akamai) {
-        (Err(e), Err(_)) => rep.checks.push(unknown("ecs", e)),
-        _ => {
-            let seen = |who: &str, v: &Option<String>, ok: bool| match (v, ok) {
-                (Some(s), _) => format!("{who}'s nameservers saw ECS {s}"),
-                (None, true) => format!("{who}'s nameservers saw no client subnet"),
-                (None, false) => format!("{who}'s test didn't answer"),
-            };
-            let detail = format!("{}; {}", seen("Google", &rep.ecs, google.is_ok()), seen("Akamai", &rep.ecs_akamai, akamai.is_ok()));
-            rep.checks.push(match (&rep.ecs, &rep.ecs_akamai) {
-                (Some(g), _) => check("ecs", Status::Info, Some(true), format!("Sends /{}", prefix(g)), detail),
-                (None, Some(a)) => check("ecs", Status::Info, Some(true), format!("Akamai /{}", prefix(a)), detail),
-                (None, None) => check("ecs", Status::Info, Some(false), "Not sent", detail),
-            });
-        }
-    }
+    rep.checks.push(ecs_check(&rep.ecs_by_authority, &unanswered));
     if rep.egress.is_empty()
         && let Ok(m) = c.ask(&QuerySpec::new("whoami.akamai.net", dns::TYPE_A))
     {
@@ -544,6 +539,64 @@ pub fn validate_live(baseline: &mut dyn Exchanger, candidates: &[String], want: 
     live
 }
 
+/// A public authoritative name that answers with the EDNS Client Subnet it received.
+struct Echoer {
+    label: &'static str,
+    name: &'static str,
+    parse: fn(&dns::Message) -> Option<String>,
+}
+
+/// Verified echoers, in label order. Each one's record format is in its parser.
+const ECS_ECHOERS: &[Echoer] = &[
+    Echoer { label: "Akamai", name: "whoami.ds.akahelp.net", parse: akahelp_ecs },
+    Echoer { label: "Fastly", name: "whoami.fastly.net", parse: fastly_ecs },
+    Echoer { label: "Google", name: "o-o.myaddr.l.google.com", parse: google_ecs },
+    Echoer { label: "PowerDNS", name: "whoami-ecs.lua.powerdns.org", parse: powerdns_ecs },
+];
+
+/// The ECS check from what each authority saw (`seen`: subnet, or `None` for an answer
+/// without one) and the authorities whose test didn't answer.
+fn ecs_check(seen: &BTreeMap<String, Option<String>>, unanswered: &[(&str, &XErr)]) -> Check {
+    if seen.is_empty() {
+        return match unanswered.first() {
+            Some((_, e)) => unknown("ecs", e),
+            None => check("ecs", Status::Unknown, None, "Couldn't test", "no ECS echo service configured"),
+        };
+    }
+    let detail = seen
+        .iter()
+        .map(|(who, v)| match v {
+            Some(s) => format!("{who}'s nameservers saw ECS {s}"),
+            None => format!("{who}'s nameservers saw no client subnet"),
+        })
+        .chain(unanswered.iter().map(|(who, _)| format!("{who}'s test didn't answer")))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let sent: Vec<&String> = seen.values().flatten().collect();
+    let mut lens: Vec<u8> = sent.iter().filter_map(|s| s.rsplit('/').next()?.parse().ok()).collect();
+    lens.sort_unstable();
+    lens.dedup();
+    let lens = lens.iter().map(|l| format!("/{l}")).collect::<Vec<_>>().join(", ");
+    if sent.is_empty() {
+        check("ecs", Status::Info, Some(false), "Not sent", detail)
+    } else if sent.len() == seen.len() {
+        check("ecs", Status::Info, Some(true), format!("Sends {lens}"), detail)
+    } else {
+        check("ecs", Status::Info, Some(true), "Selective", detail)
+    }
+}
+
+/// "203.0.113.0/24": an address and a prefix length.
+fn is_prefix(s: &str) -> bool {
+    s.split_once('/').is_some_and(|(addr, len)| addr.parse::<IpAddr>().is_ok() && len.parse::<u8>().is_ok())
+}
+
+/// The ECS that Google's myaddr saw, from a TXT string `edns0-client-subnet 203.0.113.0/24`
+/// (absent when none was sent); the other TXT strings are the egress addresses.
+fn google_ecs(m: &dns::Message) -> Option<String> {
+    m.txt_answers().iter().find_map(|t| t.strip_prefix("edns0-client-subnet ")).map(str::trim).filter(|s| is_prefix(s)).map(str::to_string)
+}
+
 /// The ECS that Akamai's whoami saw, from TXT strings like `"ecs" "203.0.113.120/29/24"`
 /// (address / source prefix / scope), as "203.0.113.120/29".
 fn akahelp_ecs(m: &dns::Message) -> Option<String> {
@@ -551,10 +604,84 @@ fn akahelp_ecs(m: &dns::Message) -> Option<String> {
         dns::RData::Txt(parts) if parts.len() >= 2 && parts[0] == "ecs" => {
             let mut it = parts[1].split('/');
             let (addr, len) = (it.next()?, it.next()?);
-            addr.parse::<IpAddr>().ok()?;
-            len.parse::<u8>().ok()?;
-            Some(format!("{addr}/{len}"))
+            let s = format!("{addr}/{len}");
+            is_prefix(&s).then_some(s)
         }
         _ => None,
     })
+}
+
+/// The ECS that Fastly's whoami saw, from a TXT string `resolver: 198.51.100.7, subnet:
+/// 203.0.113.0/24`; the string stops after the resolver when none was sent.
+fn fastly_ecs(m: &dns::Message) -> Option<String> {
+    m.txt_answers().iter().find_map(|t| t.split_once("subnet: ").map(|(_, s)| s.trim())).filter(|s| is_prefix(s)).map(str::to_string)
+}
+
+/// The ECS that PowerDNS's whoami saw, from a TXT string `ip: 198.51.100.7, netmask:
+/// 203.0.113.0/24`, or `netmask: no ECS` when none was sent.
+fn powerdns_ecs(m: &dns::Message) -> Option<String> {
+    m.txt_answers().iter().find_map(|t| t.split_once("netmask: ").map(|(_, s)| s.trim())).filter(|s| is_prefix(s)).map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn txt(strings: &[&[&str]]) -> dns::Message {
+        dns::Message {
+            flags: 0,
+            rcode: dns::RCODE_NOERROR,
+            qname: "whoami.example".into(),
+            answers: strings
+                .iter()
+                .map(|parts| dns::Record {
+                    name: "whoami.example".into(),
+                    rtype: dns::TYPE_TXT,
+                    ttl: 0,
+                    data: dns::RData::Txt(parts.iter().map(|s| s.to_string()).collect()),
+                })
+                .collect(),
+            authority: vec![],
+            opt: None,
+        }
+    }
+
+    #[test]
+    fn echoers_parse_their_record_formats() {
+        assert_eq!(
+            google_ecs(&txt(&[&["172.253.210.16"], &["edns0-client-subnet 151.181.161.0/24"]])).as_deref(),
+            Some("151.181.161.0/24")
+        );
+        assert_eq!(google_ecs(&txt(&[&["2400:cb00:354:1024::ac44:f0d"]])), None);
+        assert_eq!(
+            akahelp_ecs(&txt(&[&["ns", "172.70.33.96"], &["ecs", "151.181.161.120/29/24"], &["ip", "151.181.161.121"]])).as_deref(),
+            Some("151.181.161.120/29")
+        );
+        assert_eq!(akahelp_ecs(&txt(&[&["ns", "2001:49d0:3403:4:9999::229"]])), None);
+        assert_eq!(fastly_ecs(&txt(&[&["resolver: 172.253.8.154, subnet: 151.181.161.0/24"]])).as_deref(), Some("151.181.161.0/24"));
+        assert_eq!(fastly_ecs(&txt(&[&["resolver: 172.71.221.135"]])), None);
+        assert_eq!(powerdns_ecs(&txt(&[&["ip: 2607:f8b0:4004:c06::129, netmask: 151.181.161.0/24"]])).as_deref(), Some("151.181.161.0/24"));
+        assert_eq!(powerdns_ecs(&txt(&[&["ip: 104.22.108.80, netmask: no ECS"]])), None);
+    }
+
+    #[test]
+    fn ecs_summary_tells_selective_from_everywhere_and_never() {
+        let seen =
+            |pairs: &[(&str, Option<&str>)]| pairs.iter().map(|(k, v)| (k.to_string(), v.map(str::to_string))).collect::<BTreeMap<_, _>>();
+        let all = ecs_check(&seen(&[("Akamai", Some("10.0.0.0/24")), ("Google", Some("10.0.0.0/24"))]), &[]);
+        assert_eq!((all.value.as_str(), all.present), ("Sends /24", Some(true)));
+        let mixed = ecs_check(&seen(&[("Akamai", Some("10.0.0.120/29")), ("Google", Some("10.0.0.0/24"))]), &[]);
+        assert_eq!(mixed.value, "Sends /24, /29");
+        let some = ecs_check(&seen(&[("Akamai", Some("10.0.0.120/29")), ("Fastly", None), ("Google", None)]), &[]);
+        assert_eq!((some.value.as_str(), some.present), ("Selective", Some(true)));
+        assert_eq!(
+            some.evidence,
+            "Akamai's nameservers saw ECS 10.0.0.120/29; Fastly's nameservers saw no client subnet; Google's nameservers saw no client subnet"
+        );
+        let none = ecs_check(&seen(&[("Google", None)]), &[("Fastly", &XErr::Timeout)]);
+        assert_eq!((none.value.as_str(), none.present), ("Not sent", Some(false)));
+        assert!(none.evidence.ends_with("Fastly's test didn't answer"));
+        let dead = ecs_check(&BTreeMap::new(), &[("Google", &XErr::Timeout)]);
+        assert_eq!(dead.status, Status::Unknown);
+    }
 }

@@ -108,6 +108,10 @@ fn app_menu(app: &AppHandle, login: &CheckMenuItem<Wry>) -> tauri::Result<Menu<W
         .item(&item("export:csv", "Export Samples as CSV…", Some("CmdOrCtrl+Shift+E"))?)
         .item(&item("export:json", "Export Run as JSON…", None)?)
         .separator()
+        .item(&item("run:save", "Save Run", Some("CmdOrCtrl+S"))?)
+        .item(&item("run:delete", "Delete Run…", Some("CmdOrCtrl+Backspace"))?)
+        .item(&item("runs:clear", "Clear All Runs…", None)?)
+        .separator()
         .close_window()
         .build()?;
     // Clipboard items are macOS menu entries; WebView2 handles those keys itself and muda has no Windows versions.
@@ -148,7 +152,7 @@ fn on_menu(app: &AppHandle, id: &str) {
         "open" => show_main(app, None),
         "monitor" => toggle_monitor(app),
         "login" => toggle_login(app),
-        "settings" => show_settings(app),
+        "settings" => show_settings(app, None),
         #[cfg(not(target_os = "macos"))]
         "fullscreen" => {
             if let Some(w) = app.get_webview_window(MAIN) {
@@ -175,16 +179,26 @@ fn on_menu(app: &AppHandle, id: &str) {
 }
 
 /// The Settings window (⌘,): one at a time, brought forward if already open.
-pub fn show_settings(app: &AppHandle) {
+/// Open Settings, on `section` (a pane id the page knows) when given.
+pub fn show_settings(app: &AppHandle, section: Option<&str>) {
     if let Some(w) = app.get_webview_window(SETTINGS) {
+        if let Some(s) = section {
+            let _ = w.eval(format!("location.hash = {}", serde_json::to_string(s).unwrap_or_default()));
+        }
         let _ = w.show();
         let _ = w.set_focus();
         return;
     }
-    let built = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App("settings".into()))
+    let url = match section {
+        Some(s) => format!("settings#{s}"),
+        None => "settings".into(),
+    };
+    // A sectioned window, sized so no pane scrolls at the default size; it may be resized, not maximized.
+    let built = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App(url.into()))
         .title("Settings")
-        .inner_size(520.0, 400.0)
-        .resizable(false)
+        .inner_size(720.0, 500.0)
+        .min_inner_size(640.0, 440.0)
+        .resizable(true)
         .minimizable(false)
         .maximizable(false)
         .on_navigation(is_internal)

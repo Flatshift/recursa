@@ -45,7 +45,12 @@
     const g = r.ecs;
     const a = r.ecs_akamai ?? run.probes[id]?.ecs_akamai ?? null;
     const len = (s: string) => `/${s.split('/')[1] ?? '?'}`;
-    const seen = `Google's nameservers saw ${g ?? 'no subnet'}; Akamai's saw ${a ?? (r.ecs_akamai === undefined ? 'not checked' : 'no subnet')}.`;
+    const by = run.probes[id]?.ecs_by_authority;
+    const seen = by
+      ? Object.entries(by)
+          .map(([who, s]) => `${who}'s nameservers saw ${s ?? 'no subnet'}`)
+          .join('; ') + '.'
+      : `Google's nameservers saw ${g ?? 'no subnet'}; Akamai's saw ${a ?? (r.ecs_akamai === undefined ? 'not checked' : 'no subnet')}.`;
     if (r.basis === 'on_net') return { text: 'On-net', title: `Resolves from inside your own network${clientNet?.asn ? ` (AS${clientNet.asn})` : ''}. ${seen}`, tone: 'you' };
     if (r.ecs_is_client === false) return { text: `Other ${len(g!)}`, title: `Sends a subnet that isn't yours, so CDNs map that network instead. ${seen}`, tone: 'other' };
     if (g) return { text: len(g), title: `Sends your subnet. ${seen}`, tone: 'you' };

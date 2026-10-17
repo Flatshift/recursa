@@ -51,13 +51,13 @@
   let open = $state(false);
   const id = `conditions-${Math.random().toString(36).slice(2, 9)}`;
 
-  // Above the bar, from its left edge (the bar starts after the sidebar). Set before the popover
-  // shows, so it never paints at the corner first; its width is fixed by CSS.
+  // Above the chevron that opens it, flush with the bar's right edge, so it reads as that control's sheet.
+  // Set before the popover shows, so it never paints at the corner first; its width is fixed by CSS.
   function placePop() {
     if (!bar || !pop) return;
     const b = bar.getBoundingClientRect();
     const w = Math.min(420, innerWidth - 16);
-    pop.style.left = `${Math.max(8, Math.min(b.left + 8, innerWidth - w - 8))}px`;
+    pop.style.left = `${Math.max(8, b.right - 8 - w)}px`;
     pop.style.bottom = `${innerHeight - b.top + 6}px`;
   }
 </script>

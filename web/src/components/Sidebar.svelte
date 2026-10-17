@@ -28,34 +28,61 @@
     app.navigate(href);
   }
 
-  function runMenu(e: MouseEvent, r: RunRow) {
-    const done = r.status !== 'running' && r.id !== liveId;
+  const done = (r: RunRow) => r.status !== 'running' && r.id !== liveId;
+
+  // One menu for a run, from its "…" button or a right-click: the same actions either way.
+  function runMenu(e: MouseEvent, r: RunRow, anchor?: HTMLElement) {
+    const ok = done(r);
     menu.show(
       e,
       [
         { id: 'open', label: 'Open' },
         SEPARATOR,
-        { id: 'csv', label: 'Export Samples as CSV…', enabled: done },
-        { id: 'json', label: 'Export Run as JSON…', enabled: done },
+        { id: 'csv', label: 'Export Samples as CSV…', enabled: ok },
+        { id: 'json', label: 'Export Run as JSON…', enabled: ok },
         SEPARATOR,
-        { id: 'save', label: r.saved ? 'Unsave Run' : 'Save Run', enabled: done },
-        { id: 'delete', label: 'Delete Run…', enabled: done },
-        SEPARATOR,
-        { id: 'clear', label: 'Clear All Runs…' },
+        { id: 'save', label: r.saved ? 'Unsave Run' : 'Save Run', enabled: ok },
+        { id: 'delete', label: 'Delete Run…', enabled: ok },
       ],
       (id) => {
         if (id === 'delete') app.deleteRun(r.id);
         else if (id === 'save') app.setSaved(r.id, !r.saved);
-        else if (id === 'clear') app.clearRuns();
         else if (id === 'csv' || id === 'json') app.exportRun(id, r.id);
         else if (current !== r.id) app.navigate(`/run/${r.id}`);
       },
+      anchor,
     );
   }
 
-  function settings(e: MouseEvent) {
-    if (desktop) openSettings();
-    else go(e, '/settings');
+  // The list's own menu, next to its heading.
+  function runsMenu(e: MouseEvent) {
+    menu.show(
+      e,
+      [
+        { id: 'clear', label: 'Clear All Runs…', enabled: runs.length > 0 },
+        SEPARATOR,
+        { id: 'keep', label: 'Run History Settings…' },
+      ],
+      (id) => {
+        if (id === 'clear') app.clearRuns();
+        else settings(e, 'history');
+      },
+      e.currentTarget as HTMLElement,
+    );
+  }
+
+  // Delete or Backspace on a focused run, as in a file list.
+  function runKey(e: KeyboardEvent, r: RunRow) {
+    if ((e.key === 'Delete' || e.key === 'Backspace') && done(r)) {
+      e.preventDefault();
+      app.deleteRun(r.id);
+    }
+  }
+
+  function settings(e: MouseEvent, section?: string) {
+    if (desktop) return openSettings(section);
+    go(e, '/settings');
+    if (section) location.hash = section;
   }
 </script>
 
@@ -87,12 +114,13 @@
   <div class="runs-h">
     <span>Runs</span>
     {#if runs.length}<span class="num count">{runs.length}</span>{/if}
+    <button class="act h" aria-label="Run history actions" title="Clear runs, run history settings" onclick={runsMenu}><Icon name="more" size={13} /></button>
   </div>
   <ol class="runs scroll" aria-label="Runs">
     {#each runs as r (r.id)}
       {@const live = r.id === liveId}
       {@const on = r.id === current}
-      <li>
+      <li class="row" class:on class:saved={r.saved}>
         <a
           href="/run/{r.id}"
           class="item run"
@@ -100,11 +128,11 @@
           aria-current={on ? 'page' : undefined}
           onclick={(e) => go(e, `/run/${r.id}`)}
           oncontextmenu={(e) => runMenu(e, r)}
+          onkeydown={(e) => runKey(e, r)}
         >
           <span class="rt">
             {#if live}<span class="dot" aria-hidden="true"></span>{/if}
             <span>{shortWhen(r.started_at)}</span>
-            {#if r.saved}<span class="kept" title="Saved: kept when runs are cleared"><Icon name="bookmark" size={10} /><span class="visually-hidden">Saved</span></span>{/if}
           </span>
           <span class="rb">
             {#if live}
@@ -118,6 +146,22 @@
             {/if}
           </span>
         </a>
+        <!-- The row's actions, shown on hover, focus and selection; the saved mark stays. -->
+        {#if done(r)}
+          <span class="acts">
+            <button
+              class="act save"
+              class:on={r.saved}
+              aria-pressed={r.saved}
+              aria-label={r.saved ? 'Unsave run' : 'Save run'}
+              title={r.saved ? 'Saved: kept when runs are cleared. Click to unsave.' : 'Save: keep when runs are cleared or cleaned up'}
+              onclick={() => app.setSaved(r.id, !r.saved)}><Icon name="bookmark" size={12} /></button
+            >
+            <button class="act" aria-label="Run actions" title="Export, save or delete" onclick={(e) => runMenu(e, r, e.currentTarget as HTMLElement)}
+              ><Icon name="more" size={13} /></button
+            >
+          </span>
+        {/if}
       </li>
     {:else}
       <li class="empty">Finished benchmarks appear here.</li>
@@ -204,15 +248,82 @@
   }
   .runs-h {
     display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    padding: 18px 18px 4px;
+    align-items: center;
+    gap: 6px;
+    padding: 14px 12px 2px 18px;
     font-size: var(--t-xs);
     font-weight: 620;
     color: var(--ink-3);
   }
   .count {
+    flex: 1;
     font-weight: 500;
+  }
+  /* Small quiet buttons: the list's menu by its heading, and each row's save and "…". */
+  .act {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 20px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--ink-3);
+    cursor: default;
+  }
+  .act:hover {
+    background: color-mix(in oklch, var(--ink) 9%, transparent);
+    color: var(--ink);
+  }
+  .act:active {
+    background: color-mix(in oklch, var(--ink) 15%, transparent);
+  }
+  .act.h {
+    margin-left: auto;
+  }
+  .row {
+    position: relative;
+  }
+  .acts {
+    position: absolute;
+    top: 4px;
+    right: 14px;
+    display: flex;
+    gap: 1px;
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+  .row:hover .acts,
+  .row:focus-within .acts,
+  .row.on .acts,
+  .acts:has(.act:focus-visible) {
+    opacity: 1;
+  }
+  /* A saved run always shows its mark, filled. */
+  .row.saved .acts {
+    opacity: 1;
+  }
+  .row.saved:not(:hover):not(:focus-within):not(.on) .act:not(.save) {
+    opacity: 0;
+  }
+  .act.save.on :global(svg) {
+    fill: currentColor;
+  }
+  .row.on .act {
+    color: var(--ink-2);
+  }
+  .row.on .act:hover {
+    color: var(--ink);
+  }
+  @media (hover: none) {
+    .acts {
+      opacity: 1;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .acts {
+      transition: none;
+    }
   }
   .runs {
     padding-bottom: 8px;
@@ -244,14 +355,6 @@
     color: var(--ink-3);
   }
   .item.on .rt {
-    color: var(--ink-2);
-  }
-  .kept {
-    display: inline-flex;
-    margin-left: auto;
-    color: var(--ink-3);
-  }
-  .item.on .kept {
     color: var(--ink-2);
   }
   .dot {

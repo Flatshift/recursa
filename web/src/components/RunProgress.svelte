@@ -26,10 +26,10 @@
   const idx = $derived(run.phase === 'done' ? phases.length : phases.indexOf(run.phase));
   const running = $derived(run.status === 'running');
   const frac = $derived(run.total > 0 ? Math.min(1, run.done / run.total) : 0);
-  // After the latency rounds the engine reports little or nothing until a check finishes (the path check and the CDN
-  // mapping report only at the end), so these phases sweep the track instead of standing at zero.
+  // After the latency rounds some checks report nothing until they finish (the path check and the CDN mapping), and
+  // the others report per resolver. Until a check has reported, its track sweeps; from the first report it fills.
   const QUIET = new Set(['path', 'probes', 'cdn', 'intel']);
-  const busy = $derived(QUIET.has(run.phase));
+  const busy = $derived(QUIET.has(run.phase) && run.done === 0);
 </script>
 
 {#if running}
@@ -87,21 +87,23 @@
     background: var(--rule);
     overflow: hidden;
   }
-  /* A query going out along the path: a soft ink segment glides the length of the track, under the measured fill. */
+  /* A query going out along the path: one short segment glides the length of the track until the check reports. */
   .busy .track::before {
     content: '';
     position: absolute;
     inset: 0 auto 0 0;
-    width: 36%;
-    background: linear-gradient(90deg, transparent, color-mix(in oklch, var(--accent) 60%, transparent), transparent);
-    animation: sweep 2200ms linear infinite;
+    width: 24%;
+    border-radius: 2px;
+    background: var(--accent);
+    opacity: 0.55;
+    animation: sweep 1800ms var(--ease-out) infinite;
   }
   @keyframes sweep {
     from {
       transform: translateX(-100%);
     }
     to {
-      transform: translateX(278%);
+      transform: translateX(417%);
     }
   }
   @media (prefers-reduced-motion: reduce) {

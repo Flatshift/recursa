@@ -33,9 +33,6 @@
     onclose,
   }: { resolver: Resolver; run?: RunState | null; rows?: Row[]; overlay?: boolean; onclose: () => void } = $props();
 
-  // The run's row in history, for its saved mark.
-  const row = $derived(run ? (app.boot?.runs.find((r) => r.id === run.id) ?? null) : null);
-
   // The inspector follows the selection; it loads the status feed it shows.
   $effect(() => {
     status.load();
@@ -65,6 +62,14 @@
   const id = $derived(resolver.id);
   const mine = $derived(rows.filter((r) => r.target.resolver_id === id && r.measured));
   const probe = $derived(run?.probes[id] ?? null);
+  // The client subnet each authority saw, for the CDN mapping line.
+  const ecsSeen = $derived(
+    probe?.ecs_by_authority
+      ? Object.entries(probe.ecs_by_authority)
+          .map(([who, s]) => `to ${who} ${s ?? 'none'}`)
+          .join(', ')
+      : null,
+  );
   const intel = $derived(run?.intel[id] ?? null);
   const path = $derived(run?.paths?.[id] ?? null);
   const cdn = $derived(run?.cdn?.resolvers[id] ?? null);
@@ -125,15 +130,6 @@
       <button class="btn sm" onclick={() => app.navigate(`/deep-dive/${id}`)} title="Sends 18 ordinary queries to this resolver"
         ><Icon name="pulse" size={13} />Deep dive…</button
       >
-      {#if run && run.status !== 'running' && row}
-        <button
-          class="btn sm"
-          class:on={row.saved}
-          aria-pressed={row.saved}
-          title={row.saved ? 'Saved: kept when runs are cleared. Click to unsave.' : 'Keep this run when runs are cleared or cleaned up'}
-          onclick={() => app.setSaved(run!.id, !row!.saved)}><Icon name="bookmark" size={13} />Save run</button
-        >
-      {/if}
     </p>
 
     {#if run}
@@ -202,9 +198,9 @@
               <dd>
                 <Cell c={cdnCell(run, id)} />
                 <span class="muted"
-                  >· ECS to Google {cdn.ecs ?? 'none'}{#if (cdn.ecs_akamai ?? probe?.ecs_akamai) !== undefined}, to Akamai {cdn.ecs_akamai ??
-                      probe?.ecs_akamai ??
-                      'none'}{/if}</span
+                  >· ECS {#if ecsSeen}{ecsSeen}{:else}to Google {cdn.ecs ?? 'none'}{#if (cdn.ecs_akamai ?? probe?.ecs_akamai) !== undefined}, to Akamai {cdn.ecs_akamai ??
+                        probe?.ecs_akamai ??
+                        'none'}{/if}{/if}</span
                 >
               </dd>
             </div>
@@ -561,11 +557,6 @@
     margin: 10px 0 0;
     display: flex;
     gap: 8px;
-  }
-  .dive .btn.on {
-    background: var(--surface-3);
-    color: var(--ink);
-    box-shadow: inset 0 0 0 0.5px color-mix(in oklch, var(--ink) 18%, transparent);
   }
   .facts {
     margin: 0;

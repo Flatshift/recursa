@@ -106,6 +106,14 @@ class AppState {
     else if (cmd === 'find') this.findRev++;
     else if (cmd === 'run:start' && this.route.name === 'bench') this.startRun();
     else if (cmd === 'run:stop') this.cancelRun();
+    else if (cmd === 'run:save' || cmd === 'run:delete') {
+      // The menu items act on the finished run on screen.
+      const open = this.route.name === 'run' && this.run?.status !== 'running' ? this.run : null;
+      const row = open && this.boot?.runs.find((r) => r.id === open.id);
+      if (!row) return this.notify('Open a finished run first.');
+      if (cmd === 'run:save') this.setSaved(row.id, !row.saved);
+      else this.deleteRun(row.id);
+    } else if (cmd === 'runs:clear') this.clearRuns();
   }
 
   setRunView(v: RunView) {
