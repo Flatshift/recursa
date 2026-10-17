@@ -9,7 +9,7 @@
 //! is the scheduler delay that kernel timestamps remove from every measurement.
 
 use crate::net::{Exchanger, UdpX};
-use crate::{clock, dns};
+use crate::{clock, dns, sysdns};
 use serde::Serialize;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,7 +19,8 @@ use std::time::Duration;
 #[derive(Clone, Debug, Serialize)]
 pub struct Calibration {
     pub clock: &'static str,
-    /// The socket asked for kernel receive stamps and got them turned on.
+    /// Kernel receive stamps are available: the socket got them turned on and, on Windows, the adapter
+    /// that Internet traffic leaves through delivers them.
     pub kernel_rx: bool,
     pub samples: u32,
     /// How many of the samples actually carried a kernel stamp. Windows stamps packets where the adapter
@@ -34,7 +35,7 @@ pub struct Calibration {
 
 pub fn kernel_stamps_available() -> bool {
     static K: OnceLock<bool> = OnceLock::new();
-    *K.get_or_init(|| UdpX::connect("127.0.0.1:9".parse().unwrap()).map(|u| u.kernel_timestamps()).unwrap_or(false))
+    *K.get_or_init(|| UdpX::connect("127.0.0.1:9".parse().unwrap()).is_ok_and(|u| u.kernel_timestamps()) && sysdns::adapter_rx_stamps())
 }
 
 fn pct(v: &mut [f64], q: f64) -> f64 {
@@ -88,7 +89,7 @@ pub fn run(samples: u32) -> std::io::Result<Calibration> {
 fn measure(addr: SocketAddr, samples: u32) -> std::io::Result<(bool, Vec<f64>, Vec<f64>)> {
     clock::prioritize_thread();
     let mut client = UdpX::connect(addr)?;
-    let kernel_rx = client.kernel_timestamps();
+    let kernel_rx = client.kernel_timestamps() && sysdns::adapter_rx_stamps();
     let q = dns::encode_query(0, &dns::QuerySpec::new("calibration.recursa.invalid", dns::TYPE_A)).expect("static name");
     let mut rtt = Vec::with_capacity(samples as usize);
     let mut wake = Vec::with_capacity(samples as usize);
@@ -119,7 +120,8 @@ mod tests {
     fn stamps_on_the_network() {
         clock::prioritize_thread();
         let mut client = UdpX::connect("1.1.1.1:53".parse().unwrap()).unwrap();
-        let kernel_rx = client.kernel_timestamps();
+        let socket_rx = client.kernel_timestamps();
+        let adapter_rx = sysdns::adapter_rx_stamps();
         let q = dns::encode_query(0, &dns::QuerySpec::new("calibration.recursa.invalid", dns::TYPE_A)).unwrap();
         let (mut rtt, mut user, mut gap) = (Vec::new(), Vec::new(), Vec::new());
         for i in 0..100u16 {
@@ -135,11 +137,19 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         println!("clock            {}", clock::SOURCE);
-        println!("kernel rx stamps {}", if kernel_rx { "enabled" } else { "no (userspace fallback)" });
+        let stamps = match (socket_rx, adapter_rx) {
+            (true, true) => "enabled, the adapter stamps",
+            (true, false) => "enabled, but the adapter does not stamp (userspace fallback)",
+            (false, _) => "no (userspace fallback)",
+        };
+        println!("kernel rx stamps {stamps}");
         println!("replies          {} of 100, {} kernel-stamped", rtt.len(), gap.len());
         println!("rtt              p50 {:.1} µs   p99 {:.1} µs", pct(&mut rtt, 0.5), pct(&mut rtt, 0.99));
         println!("userspace rtt    p50 {:.1} µs   p99 {:.1} µs", pct(&mut user, 0.5), pct(&mut user, 0.99));
         println!("wake-up removed  p50 {:.1} µs   p99 {:.1} µs", pct(&mut gap, 0.5), pct(&mut gap, 0.99));
         assert!(!rtt.is_empty(), "no answer from 1.1.1.1");
+        if socket_rx && adapter_rx {
+            assert!(!gap.is_empty(), "stamps are on, yet no answer carried one");
+        }
     }
 }
