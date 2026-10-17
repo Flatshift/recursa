@@ -444,6 +444,8 @@ export interface RunRow {
   started_at: number;
   finished_at: number | null;
   status: string;
+  /** Kept by hand: skipped by Clear all runs and by automatic cleanup. */
+  saved: boolean;
   summary: {
     /** The fastest pick; `tied_with` names the next resolver when the run can't tell them apart (older runs were picked with the CDN cost included and have none). */
     best?: { resolver_id: string; label: string; transport: Transport; composite_ms: number; success: number; tied_with?: string | null } | null;
@@ -452,6 +454,12 @@ export interface RunRow {
     queries?: number;
     vantage?: string | null;
   };
+}
+
+/** Automatic cleanup of unsaved runs; `null` switches a rule off. */
+export interface Housekeeping {
+  keep_runs: number | null;
+  keep_days: number | null;
 }
 
 export interface MonitorConfig {

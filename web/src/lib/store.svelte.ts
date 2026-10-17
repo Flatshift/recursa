@@ -299,6 +299,40 @@ class AppState {
     }
   }
 
+  /** Mark a run as saved, or not. Saved runs are skipped by Clear all runs and by automatic cleanup. */
+  async setSaved(id: string, saved: boolean) {
+    try {
+      await api.put(`/api/runs/${id}/saved`, { saved });
+      if (this.boot) this.boot = { ...this.boot, runs: this.boot.runs.map((r) => (r.id === id ? { ...r, saved } : r)) };
+    } catch (e) {
+      this.notify((e as Error).message, 'error');
+    }
+  }
+
+  /** Delete every unsaved finished run, after asking with the count. */
+  async clearRuns() {
+    try {
+      const runs = await api.get<RunRow[]>('/api/runs');
+      const n = runs.filter((r) => !r.saved && r.id !== this.boot?.active_run).length;
+      if (n === 0) {
+        this.notify(runs.length ? 'Every run is saved.' : 'There are no runs to clear.');
+        return;
+      }
+      const what = n === 1 ? 'the 1 unsaved run' : `all ${n} unsaved runs`;
+      if (!(await confirmAction(`Delete ${what}? Saved runs stay. Results can’t be recovered.`, 'Clear Runs'))) return;
+      await api.del('/api/runs');
+      if (this.boot) this.boot = { ...this.boot, runs: this.boot.runs.filter((r) => r.saved || r.id === this.boot?.active_run) };
+      const open = this.route.name === 'run' ? this.route.id : null;
+      if (open && this.run?.status !== 'running' && !this.boot?.runs.some((r) => r.id === open)) {
+        this.run = null;
+        this.navigate('/', true);
+      }
+      this.notify(n === 1 ? 'Run deleted.' : `${n} runs deleted.`);
+    } catch (e) {
+      this.notify((e as Error).message, 'error');
+    }
+  }
+
   /** Save a run as CSV or JSON: the one on screen, unless `id` names another. */
   async exportRun(format: 'csv' | 'json', id?: string) {
     const onScreen = this.route.name === 'run' ? this.run : null;
@@ -434,7 +468,7 @@ class AppState {
 
   #recordRun(r: RunState) {
     if (!this.boot) return;
-    const row: RunRow = { id: r.id, started_at: r.started_at, finished_at: r.finished_at, status: r.status, summary: {} };
+    const row: RunRow = { id: r.id, started_at: r.started_at, finished_at: r.finished_at, status: r.status, summary: {}, saved: false };
     this.boot = { ...this.boot, active_run: null, runs: [row, ...this.boot.runs.filter((x) => x.id !== r.id)] };
     api.get<RunRow[]>('/api/runs').then((runs) => this.boot && (this.boot = { ...this.boot, runs }));
   }

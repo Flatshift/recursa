@@ -2,7 +2,7 @@
   // App settings. In the desktop app this is its own window (⌘, or Ctrl+,); in the browser, a page.
   import { app } from '../lib/store.svelte';
   import { api, desktop, loginItem } from '../lib/api';
-  import type { MonitorConfig, RpkiStatus } from '../lib/types';
+  import type { Housekeeping, MonitorConfig, RpkiStatus } from '../lib/types';
   import { ago, pct, plural } from '../lib/format';
   import { HIT_SHARE, MIX_LABEL, type Mix } from '../lib/verdict';
   import Toolbar from '../components/Toolbar.svelte';
@@ -39,6 +39,31 @@
       saving = false;
     }
   }
+
+  // Automatic cleanup of unsaved runs. The engine applies it at start and after each run.
+  let keep = $state<Housekeeping | null>(null);
+  async function loadKeep() {
+    try {
+      keep = await api.get<Housekeeping>('/api/housekeeping');
+    } catch (e) {
+      error = (e as Error).message;
+    }
+  }
+  $effect(() => {
+    loadKeep();
+  });
+  async function saveKeep(next: Housekeeping) {
+    saving = true;
+    error = null;
+    try {
+      keep = await api.put<Housekeeping>('/api/housekeeping', next);
+    } catch (e) {
+      error = (e as Error).message;
+    } finally {
+      saving = false;
+    }
+  }
+  const offOr = (v: string) => (v === 'off' ? null : Number(v));
 
   async function setLogin(on: boolean) {
     try {
@@ -162,6 +187,33 @@
         </div>
         <p class="note">
           {cfg.resolvers.length} resolvers are monitored. Choose them, and see the record, in Reliability.
+        </p>
+      {:else if !error}
+        <p class="note">Loading…</p>
+      {/if}
+    </section>
+
+    <section>
+      <h2>Run history</h2>
+      {#if keep}
+        <div class="row">
+          <label class="lbl" for="keep-runs">Keep the last</label>
+          <select id="keep-runs" value={keep.keep_runs ?? 'off'} disabled={saving} onchange={(e) => saveKeep({ ...keep!, keep_runs: offOr((e.currentTarget as HTMLSelectElement).value) })}>
+            {#each [10, 25, 50, 100, 250, 500] as n}<option value={n}>{n} runs</option>{/each}
+            <option value="off">All runs</option>
+          </select>
+        </div>
+        <div class="row">
+          <label class="lbl" for="keep-days">Keep runs from</label>
+          <select id="keep-days" value={keep.keep_days ?? 'off'} disabled={saving} onchange={(e) => saveKeep({ ...keep!, keep_days: offOr((e.currentTarget as HTMLSelectElement).value) })}>
+            {#each [7, 30, 90, 180, 365] as d}<option value={d}>the last {d} days</option>{/each}
+            <option value="off">any time</option>
+          </select>
+        </div>
+        <p class="note">
+          Older runs are deleted when Recursa starts and after each run finishes. A run is a few hundred kilobytes; 50 runs is a season of
+          weekly checks, and 90 days is about as long as a comparison stays current. Saved runs are never counted or deleted: right-click a
+          run in the sidebar to save it, or to clear all runs now.
         </p>
       {:else if !error}
         <p class="note">Loading…</p>

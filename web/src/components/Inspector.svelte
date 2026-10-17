@@ -33,6 +33,9 @@
     onclose,
   }: { resolver: Resolver; run?: RunState | null; rows?: Row[]; overlay?: boolean; onclose: () => void } = $props();
 
+  // The run's row in history, for its saved mark.
+  const row = $derived(run ? (app.boot?.runs.find((r) => r.id === run.id) ?? null) : null);
+
   // The inspector follows the selection; it loads the status feed it shows.
   $effect(() => {
     status.load();
@@ -122,6 +125,15 @@
       <button class="btn sm" onclick={() => app.navigate(`/deep-dive/${id}`)} title="Sends 18 ordinary queries to this resolver"
         ><Icon name="pulse" size={13} />Deep dive…</button
       >
+      {#if run && run.status !== 'running' && row}
+        <button
+          class="btn sm"
+          class:on={row.saved}
+          aria-pressed={row.saved}
+          title={row.saved ? 'Saved: kept when runs are cleared. Click to unsave.' : 'Keep this run when runs are cleared or cleaned up'}
+          onclick={() => app.setSaved(run!.id, !row!.saved)}><Icon name="bookmark" size={13} />{row.saved ? 'Saved' : 'Save run'}</button
+        >
+      {/if}
     </p>
 
     {#if run}
@@ -547,6 +559,11 @@
   }
   .dive {
     margin: 10px 0 0;
+    display: flex;
+    gap: 8px;
+  }
+  .dive .btn.on {
+    color: var(--accent);
   }
   .facts {
     margin: 0;

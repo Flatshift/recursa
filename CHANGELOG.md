@@ -2,6 +2,13 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- **Run housekeeping**: **Save Run** in a run's sidebar menu, or the Save button in the Inspector, keeps a run
+  for good; **Clear All Runs…** deletes every unsaved run after confirming how many go. Settings gains a **Run
+  history** section that deletes old unsaved runs automatically, keeping the last 50 and the last 90 days by
+  default, each rule switchable off. Cleanup runs when Recursa starts and after each run, never during one.
+
 ## 0.2.1 (2026-10-17)
 
 - **Accurate mode** keeps one query in flight per resolver with sends 4 ms apart, so a run with many resolvers

@@ -48,6 +48,8 @@ pub struct RunRow {
     pub finished_at: Option<i64>,
     pub status: String,
     pub summary: serde_json::Value,
+    /// Kept by hand: skipped by Clear all runs and by automatic cleanup.
+    pub saved: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -104,6 +106,12 @@ impl Store {
                independent INTEGER NOT NULL);",
         )?;
         let mut conn = conn;
+        // Older databases: runs had no `saved` flag.
+        let has_saved: bool =
+            conn.prepare("PRAGMA table_info(runs)")?.query_map([], |r| r.get::<_, String>(1))?.filter_map(Result::ok).any(|c| c == "saved");
+        if !has_saved {
+            conn.execute_batch("ALTER TABLE runs ADD COLUMN saved INTEGER NOT NULL DEFAULT 0")?;
+        }
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version < 1
             && let Err(e) = build_rollups(&mut conn)
@@ -143,14 +151,50 @@ impl Store {
     pub fn save_run(&self, id: &str, started_at: i64, finished_at: Option<i64>, status: &str, summary: &serde_json::Value, body: &str) {
         let c = self.conn.lock().unwrap();
         let _ = c.execute(
-            "INSERT OR REPLACE INTO runs(id, started_at, finished_at, status, summary, body) VALUES(?1,?2,?3,?4,?5,?6)",
+            "INSERT INTO runs(id, started_at, finished_at, status, summary, body) VALUES(?1,?2,?3,?4,?5,?6)
+             ON CONFLICT(id) DO UPDATE SET started_at=excluded.started_at, finished_at=excluded.finished_at,
+               status=excluded.status, summary=excluded.summary, body=excluded.body",
             params![id, started_at, finished_at, status, summary.to_string(), body],
         );
     }
 
+    /// Mark a run as saved (kept by hand) or not. False if there is no such run.
+    pub fn set_run_saved(&self, id: &str, saved: bool) -> bool {
+        let c = self.conn.lock().unwrap();
+        c.execute("UPDATE runs SET saved=?2 WHERE id=?1", params![id, saved as i32]).map(|n| n > 0).unwrap_or(false)
+    }
+
+    /// Delete every run that isn't saved. Returns how many went.
+    pub fn clear_runs(&self) -> usize {
+        let c = self.conn.lock().unwrap();
+        c.execute("DELETE FROM runs WHERE saved=0", []).unwrap_or(0)
+    }
+
+    /// Automatic cleanup of unsaved runs: keep the newest `keep_last` of them, and only those
+    /// started at or after `since`; `None` switches a rule off. Saved runs are never counted or
+    /// removed. Returns how many went.
+    pub fn cleanup_runs(&self, keep_last: Option<u32>, since: Option<i64>) -> usize {
+        let c = self.conn.lock().unwrap();
+        let mut n = 0;
+        if let Some(keep) = keep_last {
+            n += c
+                .execute(
+                    "DELETE FROM runs WHERE saved=0 AND id NOT IN
+                       (SELECT id FROM runs WHERE saved=0 ORDER BY started_at DESC, id DESC LIMIT ?1)",
+                    params![keep],
+                )
+                .unwrap_or(0);
+        }
+        if let Some(since) = since {
+            n += c.execute("DELETE FROM runs WHERE saved=0 AND started_at < ?1", params![since]).unwrap_or(0);
+        }
+        n
+    }
+
     pub fn list_runs(&self, limit: u32) -> Vec<RunRow> {
         let c = self.conn.lock().unwrap();
-        let Ok(mut st) = c.prepare("SELECT id, started_at, finished_at, status, summary FROM runs ORDER BY started_at DESC LIMIT ?1")
+        let Ok(mut st) =
+            c.prepare("SELECT id, started_at, finished_at, status, summary, saved FROM runs ORDER BY started_at DESC LIMIT ?1")
         else {
             return vec![];
         };
@@ -162,6 +206,7 @@ impl Store {
                 finished_at: r.get(2)?,
                 status: r.get(3)?,
                 summary: serde_json::from_str(&s).unwrap_or(serde_json::Value::Null),
+                saved: r.get::<_, i32>(5)? != 0,
             })
         })
         .map(|it| it.filter_map(Result::ok).collect())
@@ -516,4 +561,86 @@ fn build_rollups(conn: &mut Connection) -> rusqlite::Result<()> {
     }
     tx.pragma_update(None, "user_version", 1)?;
     tx.commit()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_path() -> PathBuf {
+        std::env::temp_dir().join(format!("recursa-store-{:x}.db", fastrand::u64(..)))
+    }
+
+    fn remove(path: &std::path::Path) {
+        for ext in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{ext}", path.display()));
+        }
+    }
+
+    fn ids(store: &Store) -> Vec<String> {
+        store.list_runs(100).into_iter().map(|r| r.id).collect()
+    }
+
+    #[test]
+    fn saved_runs_survive_clear_and_both_cleanup_rules() {
+        let path = temp_path();
+        let store = Store::open(path.clone()).unwrap();
+        for (i, id) in ["r1", "r2", "r3", "r4", "r5"].iter().enumerate() {
+            store.save_run(id, 1_000 * (i as i64 + 1), None, "done", &serde_json::json!({}), "{}");
+        }
+        assert!(store.set_run_saved("r2", true));
+        assert!(!store.set_run_saved("nope", true));
+        assert!(store.list_runs(100).iter().find(|r| r.id == "r2").unwrap().saved);
+        // Keep the last two unsaved runs: r2 is saved and doesn't count.
+        assert_eq!(store.cleanup_runs(Some(2), None), 2);
+        assert_eq!(ids(&store), ["r5", "r4", "r2"]);
+        // Keep runs started at or after 5000: r4 goes, r2 is saved and stays.
+        assert_eq!(store.cleanup_runs(None, Some(5_000)), 1);
+        assert_eq!(ids(&store), ["r5", "r2"]);
+        // Both rules off: nothing goes.
+        assert_eq!(store.cleanup_runs(None, None), 0);
+        // Clear all takes every unsaved run; unsaving r2 then lets it go.
+        assert_eq!(store.clear_runs(), 1);
+        assert_eq!(ids(&store), ["r2"]);
+        assert!(store.set_run_saved("r2", false));
+        assert_eq!(store.clear_runs(), 1);
+        assert!(ids(&store).is_empty());
+        remove(&path);
+    }
+
+    #[test]
+    fn a_saved_mark_outlives_the_run_being_rewritten() {
+        let path = temp_path();
+        let store = Store::open(path.clone()).unwrap();
+        store.save_run("r1", 1, None, "running", &serde_json::json!({}), "{}");
+        assert!(store.set_run_saved("r1", true));
+        store.save_run("r1", 1, Some(2), "done", &serde_json::json!({}), "{}");
+        let rows = store.list_runs(1);
+        assert!(rows[0].saved && rows[0].status == "done");
+        remove(&path);
+    }
+
+    #[test]
+    fn older_databases_get_the_saved_column() {
+        let path = temp_path();
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE runs(id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, finished_at INTEGER,
+                   status TEXT NOT NULL, summary TEXT NOT NULL, body TEXT NOT NULL);
+                 INSERT INTO runs VALUES('old', 1, 2, 'done', '{}', '{}');",
+            )
+            .unwrap();
+        }
+        let store = Store::open(path.clone()).unwrap();
+        let rows = store.list_runs(10);
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].saved);
+        assert!(store.set_run_saved("old", true));
+        drop(store);
+        // Opening again leaves the column and the mark alone.
+        let store = Store::open(path.clone()).unwrap();
+        assert!(store.list_runs(10)[0].saved);
+        remove(&path);
+    }
 }

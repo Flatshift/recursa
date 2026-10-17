@@ -38,10 +38,15 @@
         { id: 'csv', label: 'Export Samples as CSV…', enabled: done },
         { id: 'json', label: 'Export Run as JSON…', enabled: done },
         SEPARATOR,
+        { id: 'save', label: r.saved ? 'Unsave Run' : 'Save Run', enabled: done },
         { id: 'delete', label: 'Delete Run…', enabled: done },
+        SEPARATOR,
+        { id: 'clear', label: 'Clear All Runs…' },
       ],
       (id) => {
         if (id === 'delete') app.deleteRun(r.id);
+        else if (id === 'save') app.setSaved(r.id, !r.saved);
+        else if (id === 'clear') app.clearRuns();
         else if (id === 'csv' || id === 'json') app.exportRun(id, r.id);
         else if (current !== r.id) app.navigate(`/run/${r.id}`);
       },
@@ -99,6 +104,7 @@
           <span class="rt">
             {#if live}<span class="dot" aria-hidden="true"></span>{/if}
             <span>{shortWhen(r.started_at)}</span>
+            {#if r.saved}<span class="kept" title="Saved: kept when runs are cleared"><Icon name="bookmark" size={10} /></span>{/if}
           </span>
           <span class="rb">
             {#if live}
@@ -238,6 +244,14 @@
     color: var(--ink-3);
   }
   .item.on .rt {
+    color: var(--ink-2);
+  }
+  .kept {
+    display: inline-flex;
+    margin-left: auto;
+    color: var(--ink-3);
+  }
+  .item.on .kept {
     color: var(--ink-2);
   }
   .dot {

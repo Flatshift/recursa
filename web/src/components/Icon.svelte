@@ -28,6 +28,7 @@
     | 'list'
     | 'book'
     | 'gear'
+    | 'bookmark'
     | 'search';
   let { name, size = 16 }: { name: Name; size?: number } = $props();
 </script>
@@ -69,6 +70,8 @@
     <path d="M8 2.5v8M4.5 7.5L8 11l3.5-3.5M3 13.5h10" />
   {:else if name === 'plus'}
     <path d="M8 3.5v9M3.5 8h9" />
+  {:else if name === 'bookmark'}
+    <path d="M4.5 2.5h7v11l-3.5-2.6-3.5 2.6z" />
   {:else if name === 'trash'}
     <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" />
   {:else if name === 'chevron-down'}

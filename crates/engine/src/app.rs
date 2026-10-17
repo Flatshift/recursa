@@ -109,6 +109,40 @@ fn stored_monitor(store: &Store) -> Option<MonitorConfig> {
     store.setting("monitor").and_then(|v| serde_json::from_value(v).ok())
 }
 
+/// Automatic cleanup of unsaved runs. `None` switches a rule off; saved runs are never counted or removed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Housekeeping {
+    /// Keep this many of the newest unsaved runs.
+    pub keep_runs: Option<u32>,
+    /// Keep unsaved runs started within this many days.
+    pub keep_days: Option<u32>,
+}
+
+impl Default for Housekeeping {
+    fn default() -> Self {
+        // A run is a few hundred KB; 50 of them is a season of weekly runs and a few MB of
+        // database. 90 days is as far back as a resolver comparison stays current.
+        Housekeeping { keep_runs: Some(50), keep_days: Some(90) }
+    }
+}
+
+impl Housekeeping {
+    fn clamped(mut self) -> Self {
+        self.keep_runs = self.keep_runs.map(|n| n.clamp(1, 10_000));
+        self.keep_days = self.keep_days.map(|d| d.clamp(1, 3_650));
+        self
+    }
+}
+
+/// The housekeeping setting as saved, else the default.
+fn stored_housekeeping(store: &Store) -> Housekeeping {
+    store
+        .setting("housekeeping")
+        .and_then(|v| serde_json::from_value::<Housekeeping>(v).ok())
+        .map(Housekeeping::clamped)
+        .unwrap_or_default()
+}
+
 fn stored_ntp_monitor(store: &Store) -> Option<NtpMonitorConfig> {
     store.setting("ntp_monitor").and_then(|v| serde_json::from_value::<NtpMonitorConfig>(v).ok()).map(NtpMonitorConfig::clamped)
 }
@@ -153,6 +187,11 @@ impl AppState {
                 && let Ok(Ok(c)) = tokio::task::spawn_blocking(|| crate::calibrate::run(200)).await
             {
                 *app.calibration.write().unwrap() = Some(c);
+            }
+            // Old runs go while nothing is measuring, here or in another process; else the
+            // next run's end does it.
+            if let Some(_measuring) = lock::try_lock(&lock::measure_path()) {
+                app.cleanup_runs();
             }
             tokio::spawn(detect_vantage(app.clone()));
             tokio::spawn(detect_interception(app.clone()));
@@ -432,6 +471,7 @@ impl AppState {
                 let body = serde_json::to_string(s).unwrap_or_default();
                 app.store.save_run(&s.id, s.started_at, s.finished_at, &s.status, &bench::summary(s), &body);
                 *app.active_run.lock().unwrap() = None;
+                app.cleanup_runs();
                 drop(measure);
             }),
         };
@@ -507,12 +547,31 @@ impl AppState {
                 ok(json!({ "id": h.id }))
             }
             ("GET", ["runs", id]) => self.run_json(id).ok_or_else(|| ApiError::new(404, "No such run.")),
+            ("DELETE", ["runs"]) => {
+                // Every unsaved finished run. The live one has no row yet and stays in memory.
+                let active = self.active_run.lock().unwrap().clone();
+                self.runs.lock().unwrap().retain(|id, _| Some(id) == active.as_ref());
+                ok(json!({ "deleted": self.store.clear_runs() }))
+            }
             ("DELETE", ["runs", id]) => {
                 if self.active_run.lock().unwrap().as_deref() == Some(*id) {
                     return Err(ApiError::new(409, "Cancel the run before deleting it."));
                 }
                 self.runs.lock().unwrap().remove(*id);
                 ok(json!({ "deleted": self.store.delete_run(id) }))
+            }
+            ("PUT", ["runs", id, "saved"]) => {
+                let saved = body["saved"].as_bool().ok_or_else(|| ApiError::new(400, "Say whether the run is saved."))?;
+                if !self.store.set_run_saved(id, saved) {
+                    return Err(ApiError::new(404, "No such run."));
+                }
+                ok(json!({ "id": id, "saved": saved }))
+            }
+            ("GET", ["housekeeping"]) => ok(json!(stored_housekeeping(&self.store))),
+            ("PUT", ["housekeeping"]) => {
+                let cfg = parse::<Housekeeping>(body)?.clamped();
+                self.store.set_setting("housekeeping", &serde_json::to_value(&cfg).unwrap());
+                ok(json!(cfg))
             }
             ("POST", ["runs", id, "cancel"]) => {
                 let h = self.run_handle(id).ok_or_else(|| ApiError::new(404, "No such run."))?;
@@ -744,6 +803,14 @@ impl AppState {
         if let Some(new) = stored_monitor(&self.store) {
             self.monitor.send_if_modified(|c| std::mem::replace(c, new.clone()) != new);
         }
+    }
+
+    /// Delete old unsaved runs by the saved housekeeping setting (read fresh, so another
+    /// process's Settings apply too). Call it only while nothing is measuring. Returns how many went.
+    pub fn cleanup_runs(&self) -> usize {
+        let cfg = stored_housekeeping(&self.store);
+        let since = cfg.keep_days.map(|d| bench::now_ms() - d as i64 * 86_400_000);
+        self.store.cleanup_runs(cfg.keep_runs, since)
     }
 
     /// As [`AppState::reload_monitors`], for the NTP monitor.
@@ -1064,6 +1131,45 @@ mod tests {
         assert_eq!(v["last"].as_i64(), Some(now - 3_600_000));
         a.call("DELETE", "/api/ntp/monitor/history", Value::Null).await.unwrap();
         assert_eq!(get("1").await["history"]["cycles"].as_u64(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn runs_are_saved_cleared_and_cleaned_up_by_the_housekeeping_setting() {
+        let a = app();
+        let get = |s: String| serde_json::from_str::<Value>(&s).unwrap();
+        let now = bench::now_ms();
+        let day = 86_400_000;
+        for (i, id) in ["r1", "r2", "r3"].iter().enumerate() {
+            a.store.save_run(id, now - (3 - i as i64) * 100 * day, None, "done", &json!({}), "{}");
+        }
+        a.store.save_run("r4", now, None, "done", &json!({}), "{}");
+        // Defaults: 50 runs, 90 days.
+        let cfg = get(a.call("GET", "/api/housekeeping", Value::Null).await.unwrap());
+        assert_eq!(cfg, json!({ "keep_runs": 50, "keep_days": 90 }));
+        assert_eq!(a.call("PUT", "/api/runs/zzz/saved", json!({ "saved": true })).await.unwrap_err().status, 404);
+        assert_eq!(a.call("PUT", "/api/runs/r1/saved", json!({})).await.unwrap_err().status, 400);
+        let r = get(a.call("PUT", "/api/runs/r1/saved", json!({ "saved": true })).await.unwrap());
+        assert_eq!(r, json!({ "id": "r1", "saved": true }));
+        let rows = get(a.call("GET", "/api/runs", Value::Null).await.unwrap());
+        assert_eq!(rows[3]["saved"], true);
+        // The 90-day rule: r2 and r3 are 200 and 100 days old, r1 is saved and 300 days old.
+        assert_eq!(a.cleanup_runs(), 2);
+        let ids = |rows: Value| rows.as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+        assert_eq!(ids(get(a.call("GET", "/api/runs", Value::Null).await.unwrap())), ["r4", "r1"]);
+        // Days off, keep one run: still nothing but unsaved runs beyond the newest go.
+        let saved = get(a.call("PUT", "/api/housekeeping", json!({ "keep_runs": 1, "keep_days": null })).await.unwrap());
+        assert_eq!(saved, json!({ "keep_runs": 1, "keep_days": null }));
+        a.store.save_run("r5", now + 1, None, "done", &json!({}), "{}");
+        assert_eq!(a.cleanup_runs(), 1);
+        assert_eq!(ids(get(a.call("GET", "/api/runs", Value::Null).await.unwrap())), ["r5", "r1"]);
+        // Out-of-range values are clamped, and a bad body is refused.
+        let saved = get(a.call("PUT", "/api/housekeeping", json!({ "keep_runs": 0, "keep_days": 99999 })).await.unwrap());
+        assert_eq!(saved, json!({ "keep_runs": 1, "keep_days": 3650 }));
+        assert_eq!(a.call("PUT", "/api/housekeeping", json!({ "keep_runs": "many" })).await.unwrap_err().status, 400);
+        // Clear all: the saved run stays, and the count says how many went.
+        let r = get(a.call("DELETE", "/api/runs", Value::Null).await.unwrap());
+        assert_eq!(r, json!({ "deleted": 1 }));
+        assert_eq!(ids(get(a.call("GET", "/api/runs", Value::Null).await.unwrap())), ["r1"]);
     }
 
     #[tokio::test]
