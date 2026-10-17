@@ -5,7 +5,7 @@
   import { shortcut } from '../lib/keys';
   import { CAPS, PUBLISHED_ONLY, type CapGroup } from '../lib/caps';
   import { capCell, cdnCell, roaCell, rovCell } from '../lib/cells';
-  import { TEST_LABEL, TRANSPORT_LABEL, day, holder, ms, pct, when } from '../lib/format';
+  import { TEST_LABEL, TRANSPORT_LABEL, day, holder, list, ms, pct, when } from '../lib/format';
   import { status, stateLabel, stateGlyph, localNote } from '../lib/status.svelte';
   import Cell from './Cell.svelte';
   import Ecdf from './Ecdf.svelte';
@@ -14,7 +14,7 @@
   import Provenance from './Provenance.svelte';
   import { logDomain } from '../lib/scale';
   import { app } from '../lib/store.svelte';
-  import { cellPenalty, edgeIps, youOf } from '../lib/cdn';
+  import { cellPenalty, ecsByAuthority, edgeIps, youOf } from '../lib/cdn';
   import type { HostStatus } from '../lib/types';
 
   const STATUS: Record<HostStatus, string> = {
@@ -62,17 +62,18 @@
   const id = $derived(resolver.id);
   const mine = $derived(rows.filter((r) => r.target.resolver_id === id && r.measured));
   const probe = $derived(run?.probes[id] ?? null);
-  // The client subnet each authority saw, for the CDN mapping line.
-  const ecsSeen = $derived(
-    probe?.ecs_by_authority
-      ? Object.entries(probe.ecs_by_authority)
-          .map(([who, s]) => `to ${who} ${s ?? 'none'}`)
-          .join(', ')
-      : null,
-  );
   const intel = $derived(run?.intel[id] ?? null);
   const path = $derived(run?.paths?.[id] ?? null);
   const cdn = $derived(run?.cdn?.resolvers[id] ?? null);
+  // The client subnet each authority saw, grouped for the CDN mapping line:
+  // "203.0.113.0/24 to Fastly and Google, none to Akamai and PowerDNS". Empty when no authority answered.
+  const ecsSeen = $derived.by(() => {
+    if (!cdn) return '';
+    const by = ecsByAuthority(cdn, probe);
+    const groups = new Map<string, string[]>();
+    for (const [who, s] of Object.entries(by)) groups.set(s ?? 'none', [...(groups.get(s ?? 'none') ?? []), who]);
+    return [...groups].map(([s, whos]) => `${s} to ${list(whos)}`).join(', ');
+  });
   const feed = $derived(status.feedFor(resolver.status_feed));
   const incidents = $derived(status.incidentsFor(id));
 
@@ -197,11 +198,7 @@
               <dt>CDN mapping</dt>
               <dd>
                 <Cell c={cdnCell(run, id)} />
-                <span class="muted"
-                  >· ECS {#if ecsSeen}{ecsSeen}{:else}to Google {cdn.ecs ?? 'none'}{#if (cdn.ecs_akamai ?? probe?.ecs_akamai) !== undefined}, to Akamai {cdn.ecs_akamai ??
-                        probe?.ecs_akamai ??
-                        'none'}{/if}{/if}</span
-                >
+                <span class="muted">· ECS {ecsSeen || 'not tested'}</span>
               </dd>
             </div>
           {/if}

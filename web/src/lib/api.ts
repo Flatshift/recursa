@@ -151,7 +151,6 @@ export function notifyDone(title: string, body: string) {
   if (desktop) invoke('notify', { title, body }).catch(() => {});
 }
 
-/** Desktop only: open the Settings window. */
 /** Open the Settings window, on `section` (a Settings pane id) when given. */
 export function openSettings(section?: string) {
   if (desktop) invoke('open_settings', { section: section ?? null }).catch(() => {});

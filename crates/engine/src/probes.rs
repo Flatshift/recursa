@@ -340,20 +340,18 @@ pub fn probe(
     for (e, r) in &echoes {
         match r {
             Ok(m) => {
-                let seen = (e.parse)(m);
-                match e.label {
-                    "Google" => {
-                        rep.ecs = seen.clone();
-                        rep.egress.extend(m.txt_answers().into_iter().filter(|t| t.parse::<IpAddr>().is_ok()));
-                    }
-                    "Akamai" => rep.ecs_akamai = seen.clone(),
-                    _ => {}
+                rep.ecs_by_authority.insert(e.label.to_string(), (e.parse)(m));
+                // Google's echo also lists the resolver's egress addresses.
+                if e.label == "Google" {
+                    rep.egress.extend(m.txt_answers().into_iter().filter(|t| t.parse::<IpAddr>().is_ok()));
                 }
-                rep.ecs_by_authority.insert(e.label.to_string(), seen);
             }
             Err(err) => unanswered.push((e.label, err)),
         }
     }
+    // The two views older runs stored, still read by the UI for them.
+    rep.ecs = rep.ecs_by_authority.get("Google").cloned().flatten();
+    rep.ecs_akamai = rep.ecs_by_authority.get("Akamai").cloned().flatten();
     rep.checks.push(ecs_check(&rep.ecs_by_authority, &unanswered));
     if rep.egress.is_empty()
         && let Ok(m) = c.ask(&QuerySpec::new("whoami.akamai.net", dns::TYPE_A))
@@ -577,7 +575,10 @@ fn ecs_check(seen: &BTreeMap<String, Option<String>>, unanswered: &[(&str, &XErr
     lens.sort_unstable();
     lens.dedup();
     let lens = lens.iter().map(|l| format!("/{l}")).collect::<Vec<_>>().join(", ");
-    if sent.is_empty() {
+    if sent.is_empty() && seen.len() < 2 && !unanswered.is_empty() {
+        // One authority saw nothing and the rest didn't answer: too little to call a selective sender a non-sender.
+        check("ecs", Status::Unknown, None, "Inconclusive", detail)
+    } else if sent.is_empty() {
         check("ecs", Status::Info, Some(false), "Not sent", detail)
     } else if sent.len() == seen.len() {
         check("ecs", Status::Info, Some(true), format!("Sends {lens}"), detail)
@@ -588,7 +589,11 @@ fn ecs_check(seen: &BTreeMap<String, Option<String>>, unanswered: &[(&str, &XErr
 
 /// "203.0.113.0/24": an address and a prefix length.
 fn is_prefix(s: &str) -> bool {
-    s.split_once('/').is_some_and(|(addr, len)| addr.parse::<IpAddr>().is_ok() && len.parse::<u8>().is_ok())
+    s.split_once('/').is_some_and(|(addr, len)| match (addr.parse::<IpAddr>(), len.parse::<u8>()) {
+        (Ok(IpAddr::V4(_)), Ok(l)) => l <= 32,
+        (Ok(IpAddr::V6(_)), Ok(l)) => l <= 128,
+        _ => false,
+    })
 }
 
 /// The ECS that Google's myaddr saw, from a TXT string `edns0-client-subnet 203.0.113.0/24`
@@ -678,9 +683,12 @@ mod tests {
             some.evidence,
             "Akamai's nameservers saw ECS 10.0.0.120/29; Fastly's nameservers saw no client subnet; Google's nameservers saw no client subnet"
         );
-        let none = ecs_check(&seen(&[("Google", None)]), &[("Fastly", &XErr::Timeout)]);
+        let none = ecs_check(&seen(&[("Fastly", None), ("Google", None)]), &[("Akamai", &XErr::Timeout)]);
         assert_eq!((none.value.as_str(), none.present), ("Not sent", Some(false)));
-        assert!(none.evidence.ends_with("Fastly's test didn't answer"));
+        assert!(none.evidence.ends_with("Akamai's test didn't answer"));
+        // One silent authority and the rest unanswered can't tell a selective sender from a non-sender.
+        let thin = ecs_check(&seen(&[("Google", None)]), &[("Fastly", &XErr::Timeout)]);
+        assert_eq!((thin.value.as_str(), thin.status), ("Inconclusive", Status::Unknown));
         let dead = ecs_check(&BTreeMap::new(), &[("Google", &XErr::Timeout)]);
         assert_eq!(dead.status, Status::Unknown);
     }

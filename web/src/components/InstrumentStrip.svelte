@@ -57,7 +57,7 @@
     if (!bar || !pop) return;
     const b = bar.getBoundingClientRect();
     const w = Math.min(420, innerWidth - 16);
-    pop.style.left = `${Math.max(8, b.right - 8 - w)}px`;
+    pop.style.left = `${Math.max(8, Math.min(b.right - 8 - w, innerWidth - w - 8))}px`;
     pop.style.bottom = `${innerHeight - b.top + 6}px`;
   }
 </script>

@@ -73,6 +73,7 @@
 
   // Delete or Backspace on a focused run, as in a file list.
   function runKey(e: KeyboardEvent, r: RunRow) {
+    if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
     if ((e.key === 'Delete' || e.key === 'Backspace') && done(r)) {
       e.preventDefault();
       app.deleteRun(r.id);
@@ -154,7 +155,7 @@
               class:on={r.saved}
               aria-pressed={r.saved}
               aria-label={r.saved ? 'Unsave run' : 'Save run'}
-              title={r.saved ? 'Saved: kept when runs are cleared. Click to unsave.' : 'Save: keep when runs are cleared or cleaned up'}
+              title={r.saved ? 'Saved: kept when runs are cleared. Click to unsave.' : 'Save run: keep it when runs are cleared or cleaned up'}
               onclick={() => app.setSaved(r.id, !r.saved)}><Icon name="bookmark" size={12} /></button
             >
             <button class="act" aria-label="Run actions" title="Export, save or delete" onclick={(e) => runMenu(e, r, e.currentTarget as HTMLElement)}
@@ -291,7 +292,7 @@
     display: flex;
     gap: 1px;
     opacity: 0;
-    transition: opacity 120ms ease;
+    transition: opacity 160ms var(--ease-out);
   }
   .row:hover .acts,
   .row:focus-within .acts,

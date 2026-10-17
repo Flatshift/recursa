@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { CdnInfo, CdnReport, Mapping, Reference, Resolver, RunState } from '../lib/types';
   import { app } from '../lib/store.svelte';
-  import { holder, label, ms } from '../lib/format';
-  import { cellPenalty, edgeIps, level, youOf } from '../lib/cdn';
+  import { holder, label, list, ms } from '../lib/format';
+  import { cellPenalty, ecsByAuthority, edgeIps, level, youOf } from '../lib/cdn';
   import CdnLogo from './CdnLogo.svelte';
   import Info from './Info.svelte';
 
@@ -42,20 +42,20 @@
   /** What a resolver tells CDNs about you, short enough for a column. */
   function ecs(id: string): { text: string; title: string; tone: 'you' | 'other' | 'none' } {
     const r = cdn.resolvers[id];
-    const g = r.ecs;
-    const a = r.ecs_akamai ?? run.probes[id]?.ecs_akamai ?? null;
+    const p = run.probes[id];
+    const by = ecsByAuthority(r, p);
+    const sent = Object.values(by).filter((s): s is string => !!s);
     const len = (s: string) => `/${s.split('/')[1] ?? '?'}`;
-    const by = run.probes[id]?.ecs_by_authority;
-    const seen = by
-      ? Object.entries(by)
-          .map(([who, s]) => `${who}'s nameservers saw ${s ?? 'no subnet'}`)
-          .join('; ') + '.'
-      : `Google's nameservers saw ${g ?? 'no subnet'}; Akamai's saw ${a ?? (r.ecs_akamai === undefined ? 'not checked' : 'no subnet')}.`;
+    const seen =
+      Object.entries(by)
+        .map(([who, s]) => `${who}'s nameservers saw ${s ?? 'no subnet'}`)
+        .join('; ') + '.';
     if (r.basis === 'on_net') return { text: 'On-net', title: `Resolves from inside your own network${clientNet?.asn ? ` (AS${clientNet.asn})` : ''}. ${seen}`, tone: 'you' };
-    if (r.ecs_is_client === false) return { text: `Other ${len(g!)}`, title: `Sends a subnet that isn't yours, so CDNs map that network instead. ${seen}`, tone: 'other' };
-    if (g) return { text: len(g), title: `Sends your subnet. ${seen}`, tone: 'you' };
-    if (a) return { text: `${len(a)} Akamai`, title: `Sends your subnet to Akamai only. ${seen}`, tone: 'you' };
-    if (!run.probes[id]) return { text: '?', title: 'Not probed in this run.', tone: 'none' };
+    if (r.ecs_is_client === false && sent[0]) return { text: `Other ${len(sent[0])}`, title: `Sends a subnet that isn't yours, so CDNs map that network instead. ${seen}`, tone: 'other' };
+    if (sent.length === Object.keys(by).length && sent[0]) return { text: len(sent[0]), title: `Sends your subnet. ${seen}`, tone: 'you' };
+    if (sent[0]) return { text: 'Selective', title: `Sends your subnet (${len(sent[0])}) to some authorities and not others. ${seen}`, tone: 'you' };
+    if (!p) return { text: '?', title: 'Not probed in this run.', tone: 'none' };
+    if (!Object.keys(by).length) return { text: '?', title: "Couldn't be tested: no echoing authority answered.", tone: 'none' };
     return { text: 'None', title: `Sends no client subnet: CDNs see only the resolver's own address. ${seen}`, tone: 'none' };
   }
 
@@ -136,7 +136,6 @@
     }
     return out;
   });
-  const list = (xs: string[]) => (xs.length < 3 ? xs.join(' and ') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
 </script>
 
 <section class="cdn" aria-labelledby="cdn-h">

@@ -140,15 +140,16 @@
   });
   function pick(id: string) {
     pane = id;
+    error = null;
     history.replaceState(null, '', `#${id}`);
   }
-  // Up and Down move through the list, as in any tab list.
+  // Up, Down, Home and End move through the list, as in any tab list.
   function paneKey(e: KeyboardEvent) {
-    const d = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
-    if (!d) return;
-    e.preventDefault();
     const i = panes.findIndex((p) => p.id === current);
-    const next = panes[(i + d + panes.length) % panes.length];
+    const to = e.key === 'ArrowDown' ? i + 1 : e.key === 'ArrowUp' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? panes.length - 1 : null;
+    if (to === null) return;
+    e.preventDefault();
+    const next = panes[(to + panes.length) % panes.length];
     pick(next.id);
     (document.getElementById(`pane-tab-${next.id}`) as HTMLElement | null)?.focus();
   }
@@ -187,7 +188,7 @@
       </div>
     </nav>
 
-    <div class="pane scroll" role="tabpanel" id="pane-{current}" aria-labelledby="pane-tab-{current}">
+    <div class="pane scroll" role="tabpanel" id="pane-{current}" aria-labelledby="pane-tab-{current}" tabindex="0">
       {#if current === 'general'}
         <h2>General</h2>
         <div class="row">

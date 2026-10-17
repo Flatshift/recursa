@@ -35,3 +35,16 @@ export function youOf(c: CdnInfo): Reference | null {
     error: null,
   };
 }
+
+/**
+ * The client subnet each echoing authority saw, by name, or null where it answered without one. Runs from before
+ * the per-authority map carry Google's view and, later, Akamai's. Empty when no authority answered.
+ */
+export function ecsByAuthority(
+  r: { ecs: string | null; ecs_akamai?: string | null },
+  p: { ecs_akamai?: string | null; ecs_by_authority?: Record<string, string | null> } | null | undefined,
+): Record<string, string | null> {
+  if (p?.ecs_by_authority) return p.ecs_by_authority;
+  const akamai = r.ecs_akamai ?? p?.ecs_akamai;
+  return { Google: r.ecs, ...(akamai !== undefined ? { Akamai: akamai } : {}) };
+}

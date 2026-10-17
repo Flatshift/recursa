@@ -181,9 +181,12 @@ fn on_menu(app: &AppHandle, id: &str) {
 /// The Settings window (⌘,): one at a time, brought forward if already open.
 /// Open Settings, on `section` (a pane id the page knows) when given.
 pub fn show_settings(app: &AppHandle, section: Option<&str>) {
+    // A pane id is a short slug; anything else from IPC is ignored rather than spliced into a URL.
+    let section =
+        section.filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_'));
     if let Some(w) = app.get_webview_window(SETTINGS) {
         if let Some(s) = section {
-            let _ = w.eval(format!("location.hash = {}", serde_json::to_string(s).unwrap_or_default()));
+            let _ = w.eval(format!("location.hash = '{s}'"));
         }
         let _ = w.show();
         let _ = w.set_focus();
