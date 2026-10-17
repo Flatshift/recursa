@@ -533,12 +533,6 @@
     align-items: center;
     cursor: default;
   }
-  .toggle input {
-    accent-color: var(--ink);
-    width: 15px;
-    height: 15px;
-    margin: 0;
-  }
   .inline {
     display: inline-flex;
     gap: 7px;

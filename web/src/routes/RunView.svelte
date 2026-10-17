@@ -200,7 +200,7 @@
   const row = $derived(run ? (app.boot?.runs.find((r) => r.id === run.id) ?? null) : null);
 
   // Everything else about this run, under one "…": the same menu a run has in the sidebar.
-  function runMenu(e: MouseEvent) {
+  function runMenu(e: MouseEvent, id: string) {
     menu.show(
       e,
       [
@@ -209,9 +209,9 @@
         SEPARATOR,
         { id: 'delete', label: 'Delete Run…' },
       ],
-      (id) => {
-        if (id === 'delete') app.deleteRun(run!.id);
-        else app.exportRun(id as 'csv' | 'json');
+      (pick) => {
+        if (pick === 'delete') app.deleteRun(id);
+        else app.exportRun(pick as 'csv' | 'json');
       },
       e.currentTarget as HTMLElement,
     );
@@ -259,16 +259,17 @@
         <button class="btn" onclick={() => app.cancelRun()}><Icon name="stop" size={11} />Stop</button>
       {:else if run}
         {#if row}
+          {@const saved = row.saved}
           <button
             class="tb-icon save"
-            class:on={row.saved}
-            aria-pressed={row.saved}
-            aria-label={row.saved ? 'Unsave run' : 'Save run'}
-            title={row.saved ? 'Saved: kept when runs are cleared. Click to unsave.' : 'Save run: keep it when runs are cleared or cleaned up'}
-            onclick={() => app.setSaved(run.id, !row!.saved)}><Icon name="bookmark" size={15} /></button
+            class:on={saved}
+            aria-pressed={saved}
+            aria-label={saved ? 'Unsave run' : 'Save run'}
+            title={saved ? 'Saved: kept when runs are cleared. Click to unsave.' : 'Save run: keep it when runs are cleared or cleaned up'}
+            onclick={() => app.setSaved(run.id, !saved)}><Icon name="bookmark" size={15} /></button
           >
         {/if}
-        <button class="tb-icon" aria-label="Run actions" title="Export or delete this run" onclick={runMenu}><Icon name="more" size={16} /></button>
+        <button class="tb-icon" aria-label="Run actions" title="Export or delete this run" onclick={(e) => runMenu(e, run.id)}><Icon name="more" size={16} /></button>
         <button
           class="tb-icon"
           aria-label={app.inspect ? 'Hide inspector' : 'Show inspector'}

@@ -90,6 +90,8 @@ fn app_menu(app: &AppHandle, login: &CheckMenuItem<Wry>) -> tauri::Result<Menu<W
     let (view_mod, sidebar) =
         if cfg!(target_os = "macos") { ("Alt+CmdOrCtrl", "Ctrl+CmdOrCtrl+S") } else { ("CmdOrCtrl+Shift", "CmdOrCtrl+Alt+S") };
     let view_accel = |key: &str| format!("{view_mod}+{key}");
+    // ⌘⌫ is the Finder's delete key; Ctrl+Backspace deletes a word in every Windows text field, so no key there.
+    let delete_key = if cfg!(target_os = "macos") { Some("CmdOrCtrl+Backspace") } else { None };
     let recursa = SubmenuBuilder::new(app, "Recursa")
         .about(Some(about))
         .separator()
@@ -109,7 +111,7 @@ fn app_menu(app: &AppHandle, login: &CheckMenuItem<Wry>) -> tauri::Result<Menu<W
         .item(&item("export:json", "Export Run as JSON…", None)?)
         .separator()
         .item(&item("run:save", "Save Run", Some("CmdOrCtrl+S"))?)
-        .item(&item("run:delete", "Delete Run…", Some("CmdOrCtrl+Backspace"))?)
+        .item(&item("run:delete", "Delete Run…", delete_key)?)
         .item(&item("runs:clear", "Clear All Runs…", None)?)
         .separator()
         .close_window()

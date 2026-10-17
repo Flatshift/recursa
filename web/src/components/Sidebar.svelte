@@ -82,8 +82,7 @@
 
   function settings(e: MouseEvent, section?: string) {
     if (desktop) return openSettings(section);
-    go(e, '/settings');
-    if (section) location.hash = section;
+    go(e, section ? `/settings#${section}` : '/settings');
   }
 </script>
 
