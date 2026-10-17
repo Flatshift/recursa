@@ -52,17 +52,21 @@
   $effect(() => {
     loadKeep();
   });
-  async function saveKeep(next: Housekeeping) {
+  // Only the changed rule goes over; the engine keeps the other as it is.
+  async function saveKeep(next: Partial<Housekeeping>) {
     saving = true;
     error = null;
     try {
       keep = await api.put<Housekeeping>('/api/housekeeping', next);
     } catch (e) {
       error = (e as Error).message;
+      await loadKeep();
     } finally {
       saving = false;
     }
   }
+  // Keep a stored value the presets lack (the engine accepts any count) so the select never shows blank.
+  const presetWith = (list: number[], v: number | null) => (v == null || list.includes(v) ? list : [v, ...list]);
   const offOr = (v: string) => (v === 'off' ? null : Number(v));
 
   async function setLogin(on: boolean) {
@@ -198,21 +202,21 @@
       {#if keep}
         <div class="row">
           <label class="lbl" for="keep-runs">Keep the last</label>
-          <select id="keep-runs" value={keep.keep_runs ?? 'off'} disabled={saving} onchange={(e) => saveKeep({ ...keep!, keep_runs: offOr((e.currentTarget as HTMLSelectElement).value) })}>
-            {#each [10, 25, 50, 100, 250, 500] as n}<option value={n}>{n} runs</option>{/each}
-            <option value="off">All runs</option>
+          <select id="keep-runs" value={keep.keep_runs ?? 'off'} disabled={saving} onchange={(e) => saveKeep({ keep_runs: offOr((e.currentTarget as HTMLSelectElement).value) })}>
+            {#each presetWith([10, 25, 50, 100, 250, 500], keep.keep_runs) as n}<option value={n}>{plural(n, 'run')}</option>{/each}
+            <option value="off">every run</option>
           </select>
         </div>
         <div class="row">
           <label class="lbl" for="keep-days">Keep runs from</label>
-          <select id="keep-days" value={keep.keep_days ?? 'off'} disabled={saving} onchange={(e) => saveKeep({ ...keep!, keep_days: offOr((e.currentTarget as HTMLSelectElement).value) })}>
-            {#each [7, 30, 90, 180, 365] as d}<option value={d}>the last {d} days</option>{/each}
+          <select id="keep-days" value={keep.keep_days ?? 'off'} disabled={saving} onchange={(e) => saveKeep({ keep_days: offOr((e.currentTarget as HTMLSelectElement).value) })}>
+            {#each presetWith([7, 30, 90, 180, 365], keep.keep_days) as d}<option value={d}>the last {plural(d, 'day')}</option>{/each}
             <option value="off">any time</option>
           </select>
         </div>
         <p class="note">
           Older runs are deleted when Recursa starts and after each run finishes. A run is a few hundred kilobytes; 50 runs is a season of
-          weekly checks, and 90 days is about as long as a comparison stays current. Saved runs are never counted or deleted: right-click a
+          weekly checks, and 90 days is about as long as a comparison stays current. Saved runs are never counted or deleted: Control-click a
           run in the sidebar to save it, or to clear all runs now.
         </p>
       {:else if !error}

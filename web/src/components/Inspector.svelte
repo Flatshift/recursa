@@ -131,7 +131,7 @@
           class:on={row.saved}
           aria-pressed={row.saved}
           title={row.saved ? 'Saved: kept when runs are cleared. Click to unsave.' : 'Keep this run when runs are cleared or cleaned up'}
-          onclick={() => app.setSaved(run!.id, !row!.saved)}><Icon name="bookmark" size={13} />{row.saved ? 'Saved' : 'Save run'}</button
+          onclick={() => app.setSaved(run!.id, !row!.saved)}><Icon name="bookmark" size={13} />Save run</button
         >
       {/if}
     </p>
@@ -563,7 +563,9 @@
     gap: 8px;
   }
   .dive .btn.on {
-    color: var(--accent);
+    background: var(--surface-3);
+    color: var(--ink);
+    box-shadow: inset 0 0 0 0.5px color-mix(in oklch, var(--ink) 18%, transparent);
   }
   .facts {
     margin: 0;

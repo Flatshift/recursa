@@ -104,7 +104,7 @@
           <span class="rt">
             {#if live}<span class="dot" aria-hidden="true"></span>{/if}
             <span>{shortWhen(r.started_at)}</span>
-            {#if r.saved}<span class="kept" title="Saved: kept when runs are cleared"><Icon name="bookmark" size={10} /></span>{/if}
+            {#if r.saved}<span class="kept" title="Saved: kept when runs are cleared"><Icon name="bookmark" size={10} /><span class="visually-hidden">Saved</span></span>{/if}
           </span>
           <span class="rb">
             {#if live}

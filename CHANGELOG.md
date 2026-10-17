@@ -4,10 +4,14 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 
 ## Unreleased
 
+- **Check progress**: after the latency rounds, a progress line names the check under way (path check, capability
+  probes, CDN mapping, network intel) with a sweeping segment on the progress rail. The segment holds still when
+  reduced motion is on.
 - **Run housekeeping**: **Save Run** in a run's sidebar menu, or the Save button in the Inspector, keeps a run
   for good; **Clear All Runs…** deletes every unsaved run after confirming how many go. Settings gains a **Run
   history** section that deletes old unsaved runs automatically, keeping the last 50 and the last 90 days by
-  default, each rule switchable off. Cleanup runs when Recursa starts and after each run, never during one.
+  default, each rule switchable off. Cleanup runs when Recursa starts and after each run, never during one. A
+  database with runs from an earlier version starts with both rules off.
 
 ## 0.2.1 (2026-10-17)
 

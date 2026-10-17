@@ -551,7 +551,7 @@ impl AppState {
                 // Every unsaved finished run. The live one has no row yet and stays in memory.
                 let active = self.active_run.lock().unwrap().clone();
                 self.runs.lock().unwrap().retain(|id, _| Some(id) == active.as_ref());
-                ok(json!({ "deleted": self.store.clear_runs() }))
+                ok(json!({ "deleted": self.store.clear_runs(active.as_deref()) }))
             }
             ("DELETE", ["runs", id]) => {
                 if self.active_run.lock().unwrap().as_deref() == Some(*id) {
@@ -569,7 +569,16 @@ impl AppState {
             }
             ("GET", ["housekeeping"]) => ok(json!(stored_housekeeping(&self.store))),
             ("PUT", ["housekeeping"]) => {
-                let cfg = parse::<Housekeeping>(body)?.clamped();
+                // A key left out keeps that rule as it is; null switches it off.
+                let obj = body.as_object().ok_or_else(|| ApiError::new(400, "Invalid request: expected an object."))?;
+                if let Some(k) = obj.keys().find(|k| !matches!(k.as_str(), "keep_runs" | "keep_days")) {
+                    return Err(ApiError::new(400, format!("Invalid request: unknown field `{k}`.")));
+                }
+                let mut cfg = stored_housekeeping(&self.store);
+                let rule = |key: &str, cur: Option<u32>| obj.get(key).map_or(Ok(cur), |v| parse(v.clone()));
+                cfg.keep_runs = rule("keep_runs", cfg.keep_runs)?;
+                cfg.keep_days = rule("keep_days", cfg.keep_days)?;
+                let cfg = cfg.clamped();
                 self.store.set_setting("housekeeping", &serde_json::to_value(&cfg).unwrap());
                 ok(json!(cfg))
             }
@@ -752,7 +761,7 @@ impl AppState {
             "defaults": defaults,
             "monitor": *self.monitor.borrow(),
             "active_run": *self.active_run.lock().unwrap(),
-            "runs": self.store.list_runs(50),
+            "runs": self.store.list_runs(200),
             "method": {
                 "cached_names": bench::CACHED_NAMES,
                 "uncached_zones": bench::UNCACHED_ZONES,
@@ -810,7 +819,13 @@ impl AppState {
     pub fn cleanup_runs(&self) -> usize {
         let cfg = stored_housekeeping(&self.store);
         let since = cfg.keep_days.map(|d| bench::now_ms() - d as i64 * 86_400_000);
-        self.store.cleanup_runs(cfg.keep_runs, since)
+        let n = self.store.cleanup_runs(cfg.keep_runs, since);
+        if n > 0 {
+            // Recent runs are held in memory too; a deleted one mustn't answer GET /runs/:id.
+            let active = self.active_run.lock().unwrap().clone();
+            self.runs.lock().unwrap().retain(|id, _| Some(id) == active.as_ref() || self.store.has_run(id));
+        }
+        n
     }
 
     /// As [`AppState::reload_monitors`], for the NTP monitor.
@@ -1166,6 +1181,13 @@ mod tests {
         let saved = get(a.call("PUT", "/api/housekeeping", json!({ "keep_runs": 0, "keep_days": 99999 })).await.unwrap());
         assert_eq!(saved, json!({ "keep_runs": 1, "keep_days": 3650 }));
         assert_eq!(a.call("PUT", "/api/housekeeping", json!({ "keep_runs": "many" })).await.unwrap_err().status, 400);
+        assert_eq!(a.call("PUT", "/api/housekeeping", json!({ "keep_run": 5 })).await.unwrap_err().status, 400);
+        assert_eq!(a.call("PUT", "/api/housekeeping", json!(7)).await.unwrap_err().status, 400);
+        // A key left out keeps that rule.
+        let saved = get(a.call("PUT", "/api/housekeeping", json!({ "keep_runs": 20 })).await.unwrap());
+        assert_eq!(saved, json!({ "keep_runs": 20, "keep_days": 3650 }));
+        let saved = get(a.call("PUT", "/api/housekeeping", json!({})).await.unwrap());
+        assert_eq!(saved, json!({ "keep_runs": 20, "keep_days": 3650 }));
         // Clear all: the saved run stays, and the count says how many went.
         let r = get(a.call("DELETE", "/api/runs", Value::Null).await.unwrap());
         assert_eq!(r, json!({ "deleted": 1 }));

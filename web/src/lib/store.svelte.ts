@@ -313,21 +313,24 @@ class AppState {
   async clearRuns() {
     try {
       const runs = await api.get<RunRow[]>('/api/runs');
+      // The list stops at 200 rows, so past that the count is unknown.
+      const capped = runs.length >= 200;
       const n = runs.filter((r) => !r.saved && r.id !== this.boot?.active_run).length;
-      if (n === 0) {
+      if (n === 0 && !capped) {
         this.notify(runs.length ? 'Every run is saved.' : 'There are no runs to clear.');
         return;
       }
-      const what = n === 1 ? 'the 1 unsaved run' : `all ${n} unsaved runs`;
+      const what = capped ? 'every unsaved run' : n === 1 ? 'the 1 unsaved run' : `all ${n} unsaved runs`;
       if (!(await confirmAction(`Delete ${what}? Saved runs stay. Results can’t be recovered.`, 'Clear Runs'))) return;
-      await api.del('/api/runs');
+      const res = await api.del<{ deleted: number }>('/api/runs');
+      const deleted = res?.deleted ?? n;
       if (this.boot) this.boot = { ...this.boot, runs: this.boot.runs.filter((r) => r.saved || r.id === this.boot?.active_run) };
       const open = this.route.name === 'run' ? this.route.id : null;
       if (open && this.run?.status !== 'running' && !this.boot?.runs.some((r) => r.id === open)) {
         this.run = null;
         this.navigate('/', true);
       }
-      this.notify(n === 1 ? 'Run deleted.' : `${n} runs deleted.`);
+      this.notify(deleted === 1 ? 'Run deleted.' : `${deleted} runs deleted.`);
     } catch (e) {
       this.notify((e as Error).message, 'error');
     }

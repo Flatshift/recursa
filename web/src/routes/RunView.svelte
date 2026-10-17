@@ -132,7 +132,7 @@
       };
     }
     const n = new Set(run.targets.map((t) => t.resolver_id)).size || run.config.resolvers.length;
-    return { sentence: `Measuring ${plural(n, 'resolver')} from this network.`, detail: `${waiting}.` };
+    return { sentence: `Measuring ${plural(n, 'resolver')} from this network.`, detail: checking ? 'Latency is measured. The picks settle as the remaining checks finish.' : `${waiting}.` };
   });
   const warns = $derived(run?.notes.filter((n) => n.level === 'warn') ?? []);
   const infos = $derived(run?.notes.filter((n) => n.level === 'info') ?? []);

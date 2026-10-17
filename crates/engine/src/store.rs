@@ -110,7 +110,22 @@ impl Store {
         let has_saved: bool =
             conn.prepare("PRAGMA table_info(runs)")?.query_map([], |r| r.get::<_, String>(1))?.filter_map(Result::ok).any(|c| c == "saved");
         if !has_saved {
-            conn.execute_batch("ALTER TABLE runs ADD COLUMN saved INTEGER NOT NULL DEFAULT 0")?;
+            // A database with runs from before the flag starts with cleanup off: nobody has had
+            // the chance to save anything yet. A new database gets the defaults. Seeded before
+            // the column lands, so a crash in between can't leave the defaults to run.
+            let has_runs: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM runs)", [], |r| r.get(0))?;
+            if has_runs {
+                conn.execute(
+                    "INSERT OR IGNORE INTO settings(key, body) VALUES('housekeeping', ?1)",
+                    params![r#"{"keep_runs":null,"keep_days":null}"#],
+                )?;
+            }
+            // Another process may add the column between the check and this.
+            if let Err(e) = conn.execute_batch("ALTER TABLE runs ADD COLUMN saved INTEGER NOT NULL DEFAULT 0")
+                && !e.to_string().contains("duplicate column")
+            {
+                return Err(e);
+            }
         }
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version < 1
@@ -164,10 +179,16 @@ impl Store {
         c.execute("UPDATE runs SET saved=?2 WHERE id=?1", params![id, saved as i32]).map(|n| n > 0).unwrap_or(false)
     }
 
-    /// Delete every run that isn't saved. Returns how many went.
-    pub fn clear_runs(&self) -> usize {
+    /// Delete every run that isn't saved, except `keep` (the live run, whose row may land
+    /// meanwhile). Returns how many went.
+    pub fn clear_runs(&self, keep: Option<&str>) -> usize {
         let c = self.conn.lock().unwrap();
-        c.execute("DELETE FROM runs WHERE saved=0", []).unwrap_or(0)
+        c.execute("DELETE FROM runs WHERE saved=0 AND (?1 IS NULL OR id != ?1)", params![keep]).unwrap_or(0)
+    }
+
+    pub fn has_run(&self, id: &str) -> bool {
+        let c = self.conn.lock().unwrap();
+        c.query_row("SELECT 1 FROM runs WHERE id=?1", params![id], |_| Ok(())).optional().ok().flatten().is_some()
     }
 
     /// Automatic cleanup of unsaved runs: keep the newest `keep_last` of them, and only those
@@ -599,11 +620,13 @@ mod tests {
         assert_eq!(ids(&store), ["r5", "r2"]);
         // Both rules off: nothing goes.
         assert_eq!(store.cleanup_runs(None, None), 0);
-        // Clear all takes every unsaved run; unsaving r2 then lets it go.
-        assert_eq!(store.clear_runs(), 1);
+        // Clear all takes every unsaved run except the one named; unsaving r2 then lets it go.
+        assert_eq!(store.clear_runs(Some("r5")), 0);
+        assert_eq!(store.clear_runs(None), 1);
         assert_eq!(ids(&store), ["r2"]);
+        assert!(store.has_run("r2") && !store.has_run("r5"));
         assert!(store.set_run_saved("r2", false));
-        assert_eq!(store.clear_runs(), 1);
+        assert_eq!(store.clear_runs(None), 1);
         assert!(ids(&store).is_empty());
         remove(&path);
     }
@@ -637,10 +660,30 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert!(!rows[0].saved);
         assert!(store.set_run_saved("old", true));
+        // Its runs predate saving, so cleanup starts switched off.
+        assert_eq!(store.setting("housekeeping"), Some(serde_json::json!({ "keep_runs": null, "keep_days": null })));
         drop(store);
         // Opening again leaves the column and the mark alone.
         let store = Store::open(path.clone()).unwrap();
         assert!(store.list_runs(10)[0].saved);
+        remove(&path);
+    }
+
+    #[test]
+    fn an_empty_or_new_database_keeps_the_default_cleanup() {
+        let path = temp_path();
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE runs(id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, finished_at INTEGER,
+                   status TEXT NOT NULL, summary TEXT NOT NULL, body TEXT NOT NULL);",
+            )
+            .unwrap();
+        }
+        assert_eq!(Store::open(path.clone()).unwrap().setting("housekeeping"), None);
+        remove(&path);
+        let path = temp_path();
+        assert_eq!(Store::open(path.clone()).unwrap().setting("housekeeping"), None);
         remove(&path);
     }
 }
