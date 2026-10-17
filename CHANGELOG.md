@@ -2,7 +2,7 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.3.0 (2026-10-17)
 
 - **Check progress**: after the latency rounds, a progress line names the check under way (path check, capability
   probes, CDN mapping, network intel) with a sweeping segment on the progress rail. The segment holds still when
