@@ -4,7 +4,7 @@
   import { api, confirmAction } from '../lib/api';
   import { status, stateLabel, stateGlyph, localNote } from '../lib/status.svelte';
   import type { MonitorConfig, MonitorHist, MonitorHistory } from '../lib/types';
-  import { ago, day, ms, pct, plural, when } from '../lib/format';
+  import { ago, day, list, ms, pct, plural, when } from '../lib/format';
   import Glyph from '../components/Glyph.svelte';
   import Icon from '../components/Icon.svelte';
   import Toolbar from '../components/Toolbar.svelte';
@@ -121,7 +121,6 @@
   // A bound, so round up: "up to 32 min", not "31 m 37 s".
   const mins = (t: number) => (t < 90 * 60_000 ? `${Math.ceil(t / 60_000)} min` : `${Math.ceil(t / 3_600_000)} h`);
   const times = (n: number) => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
-  const list = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 
   const verdict = $derived.by(() => {
     if (!recorded.length) return null;

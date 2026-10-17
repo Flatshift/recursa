@@ -104,6 +104,11 @@ export function country(code: string | undefined | null): string {
   }
 }
 
+/** "a", "a and b", "a, b and c". */
+export function list(xs: string[]): string {
+  return xs.length < 3 ? xs.join(' and ') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`;
+}
+
 export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n.toLocaleString()} ${n === 1 ? one : many}`;
 }
