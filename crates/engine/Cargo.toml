@@ -4,6 +4,7 @@ description = "Recursa's measurement engine and application state, shared by the
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 aes-siv.workspace = true

@@ -10,7 +10,23 @@ permissions:
   contents: read
 
 jobs:
+  # The installers are named after the crate version, so the tag must match it.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tag matches the crate version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "v$version" != "$TAG" ]; then
+            echo "Tag $TAG, but Cargo.toml says $version"
+            exit 1
+          fi
+
   macos:
+    needs: check
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -39,6 +55,7 @@ jobs:
 
   # x64 and ARM64 NSIS installers; ARM64 is cross-compiled on the x64 runner.
   windows:
+    needs: check
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -83,12 +100,21 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      - name: Checksums and release notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          (cd dist && sha256sum * > SHA256SUMS)
+          # The CHANGELOG section for this version, without its heading.
+          awk -v v="${TAG#v}" '/^## /{p = index($0, "## " v " ") == 1 || $0 == "## " v; next} p' CHANGELOG.md > notes.md
+          test -s notes.md || echo "See CHANGELOG.md." > notes.md
       - name: Draft release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Recursa ${TAG#v}"
+        run: gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Recursa ${TAG#v}" --notes-file notes.md

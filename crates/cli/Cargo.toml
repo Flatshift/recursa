@@ -4,6 +4,7 @@ description = "Recursa command line and browser UI (local HTTP server)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 recursa-engine.workspace = true

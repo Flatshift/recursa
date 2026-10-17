@@ -6,10 +6,29 @@ covers latency, what each resolver actually does, how well it maps you onto CDNs
 
 It comes two ways, built from the same engine and interface:
 
-* **Recursa.app**, a native macOS app. It keeps a menu-bar item, so monitoring continues with the window closed, and it
-  can open at login.
+* **Recursa.app**, a native app for macOS and Windows. It keeps a menu-bar (tray) item, so monitoring continues with
+  the window closed, and it can open at login.
 * **`recursa`**, a single command-line binary. It runs benchmarks in the terminal, or serves the same interface to your
   browser on `127.0.0.1`.
+
+## Install
+
+Download from the [Releases page](https://github.com/flatshift/recursa/releases). The builds are not yet signed with
+a developer certificate, so each system warns once:
+
+* **macOS** (`Recursa_<version>_universal.dmg`, Apple silicon and Intel): open the DMG and drag Recursa to Applications.
+  The first time, right-click Recursa.app and choose **Open**. If macOS says the app is damaged, clear the download
+  quarantine mark and open it again:
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/Recursa.app
+  ```
+
+* **Windows** (`Recursa_<version>_x64-setup.exe`, or `_arm64-setup.exe` for Windows on ARM): run the installer; it
+  installs for the current user and needs no administrator rights. When SmartScreen appears, choose **More info**, then
+  **Run anyway**.
+
+Or build it yourself (Rust, Node 22):
 
 ```bash
 ./build.sh            # builds the UI, then the command-line binary

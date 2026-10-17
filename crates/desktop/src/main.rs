@@ -90,7 +90,7 @@ fn main() {
             _ => {}
         })
         .build(tauri::generate_context!())
-        .expect("start Recursa")
+        .unwrap_or_else(|e| fail("Recursa couldn't start.", &e.to_string()))
         .run(|app, event| match event {
             // The last window closed: keep running in the menu bar. Quit still quits.
             RunEvent::ExitRequested { code: None, api, .. } => api.prevent_exit(),
@@ -102,9 +102,9 @@ fn main() {
         });
 }
 
-/// Nothing works without the database: say why in a native alert (nobody sees stderr when
-/// the app was opened from Finder or at login), then quit. Runs before Tauri starts, so it
-/// uses AppKit directly; there is no window yet for a dialog plugin sheet to attach to.
+/// Nothing works without the database or the app shell: say why in a native alert (nobody sees
+/// stderr when the app was opened from Finder or at login), then quit. Runs before Tauri's event loop,
+/// so it uses AppKit directly; there is no window yet for a dialog plugin sheet to attach to.
 fn fail(message: &str, detail: &str) -> ! {
     eprintln!("{message}\n{detail}");
     #[cfg(target_os = "macos")]

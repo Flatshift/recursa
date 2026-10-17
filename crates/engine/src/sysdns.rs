@@ -235,7 +235,9 @@ mod win {
         let mut d = a.FirstDnsServerAddress;
         while !d.is_null() {
             let s = unsafe { &*d };
-            if let Some(ip) = ip_of(s.Address.lpSockaddr) {
+            // Link-local servers lose their zone here (`fe80::1%12` would go out unscoped), and adapters
+            // with no IPv6 DNS list the fec0:0:0:ffff::1-3 placeholders; neither is reachable.
+            if let Some(ip) = ip_of(s.Address.lpSockaddr).filter(|ip| !placeholder_v6(ip)) {
                 dns.push(ip);
             }
             d = s.Next;
@@ -250,6 +252,13 @@ mod win {
         // The link check pings over IPv4, so an IPv4 gateway comes first.
         let gateway = gateways.iter().find(|ip| ip.is_ipv4()).or(gateways.first()).copied();
         Adapter { dns, gateway, name: wide(a.FriendlyName), wifi: a.IfType == IF_TYPE_IEEE80211 }
+    }
+
+    fn placeholder_v6(ip: &IpAddr) -> bool {
+        match ip {
+            IpAddr::V6(v6) => matches!(v6.segments()[0] & 0xffc0, 0xfe80 | 0xfec0),
+            IpAddr::V4(_) => false,
+        }
     }
 
     fn ip_of(p: *const SOCKADDR) -> Option<IpAddr> {

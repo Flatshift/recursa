@@ -1,6 +1,6 @@
 # Trademarks
 
-Recursa and the Recursa icon (the nested zones with the coral answer) identify this project and its official builds.
+Recursa and the Recursa icon (the Cantor dial) identify this project and its official builds.
 
 The GNU General Public License covers Recursa's code. It gives no rights to the name or the icon (GPL-3.0 section 7(e)).
 This page explains what you can do with them. The aim is to let people trust that anything called Recursa came from

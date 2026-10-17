@@ -79,6 +79,11 @@ fn app_menu(app: &AppHandle, login: &CheckMenuItem<Wry>) -> tauri::Result<Menu<W
         ..Default::default()
     };
     let item = |id: &str, text: &str, accel: Option<&str>| MenuItem::with_id(app, id, text, true, accel);
+    // The view and panel shortcuts, in the terms keys.ts labels them: ⌥⌘ and ⌃⌘ on a Mac; off a Mac Ctrl+Alt is
+    // AltGr on many layouts, so the views take Ctrl+Shift and the sidebar Ctrl+Alt.
+    let (view_mod, sidebar) =
+        if cfg!(target_os = "macos") { ("Alt+CmdOrCtrl", "Ctrl+CmdOrCtrl+S") } else { ("CmdOrCtrl+Shift", "CmdOrCtrl+Alt+S") };
+    let view_accel = |key: &str| format!("{view_mod}+{key}");
     let recursa = SubmenuBuilder::new(app, "Recursa")
         .about(Some(about))
         .separator()
@@ -121,14 +126,14 @@ fn app_menu(app: &AppHandle, login: &CheckMenuItem<Wry>) -> tauri::Result<Menu<W
         .item(&item("go:/method", "Method", Some("CmdOrCtrl+4"))?)
         .item(&item("go:/time", "Time", Some("CmdOrCtrl+5"))?)
         .separator()
-        .item(&item("view:overview", "Results Overview", Some("Alt+CmdOrCtrl+1"))?)
-        .item(&item("view:latency", "Latency", Some("Alt+CmdOrCtrl+2"))?)
-        .item(&item("view:cdn", "CDN Mapping", Some("Alt+CmdOrCtrl+3"))?)
-        .item(&item("view:caps", "Capabilities", Some("Alt+CmdOrCtrl+4"))?)
-        .item(&item("view:numbers", "Numbers", Some("Alt+CmdOrCtrl+5"))?)
+        .item(&item("view:overview", "Results Overview", Some(view_accel("1").as_str()))?)
+        .item(&item("view:latency", "Latency", Some(view_accel("2").as_str()))?)
+        .item(&item("view:cdn", "CDN Mapping", Some(view_accel("3").as_str()))?)
+        .item(&item("view:caps", "Capabilities", Some(view_accel("4").as_str()))?)
+        .item(&item("view:numbers", "Numbers", Some(view_accel("5").as_str()))?)
         .separator()
-        .item(&item("toggle:sidebar", "Toggle Sidebar", Some("Ctrl+CmdOrCtrl+S"))?)
-        .item(&item("toggle:inspector", "Toggle Inspector", Some("Alt+CmdOrCtrl+I"))?)
+        .item(&item("toggle:sidebar", "Toggle Sidebar", Some(sidebar))?)
+        .item(&item("toggle:inspector", "Toggle Inspector", Some(view_accel("I").as_str()))?)
         .separator()
         .fullscreen()
         .build()?;

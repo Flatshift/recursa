@@ -104,7 +104,7 @@
       </p>
       <p>
         To find this, Recursa pings the default gateway (usually your router) every 100 ms while a run measures. It times each reply
-        with the same kernel stamps. A ping is a stall if it gets no reply, or if it is slower than both 20 ms and five times the
+        with the same clock{env?.kernel_rx ? ' and kernel stamps' : ', in userspace'}. A ping is a stall if it gets no reply, or if it is slower than both 20 ms and five times the
         link's median. If stalls are more than 2% of the pings, or the 95th percentile of the pings is more than 20 ms, the run shows
         a warning and the status bar highlights the link. Recursa does not change the scores. The warning tells you that they are too
         high: run again on a quieter link. If the gateway does not reply to ping, or there is no gateway, the run says that it did

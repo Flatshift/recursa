@@ -153,12 +153,12 @@
     }
   }
 
-  const transports: { v: Transport; hint: string }[] = [
-    { v: 'udp', hint: 'Plain DNS, port 53. Kernel-stamped.' },
+  const transports: { v: Transport; hint: string }[] = $derived([
+    { v: 'udp', hint: app.env?.kernel_rx === false ? 'Plain DNS, port 53.' : 'Plain DNS, port 53. Kernel-stamped.' },
     { v: 'tcp', hint: 'Plain DNS over a persistent TCP connection.' },
     { v: 'dot', hint: 'DNS over TLS, port 853.' },
     { v: 'doh', hint: 'DNS over HTTPS/2, port 443.' },
-  ];
+  ]);
   const tests: TestKind[] = ['cached', 'uncached', 'tld'];
   const icpt = $derived(app.env?.interception ?? null);
   let checking = $state(false);

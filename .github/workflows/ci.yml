@@ -43,10 +43,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --release -- -D warnings
       - run: cargo test --workspace --release
 
-  # Windows runners bill at 2x and this job takes ~20 min, so it runs on manual dispatch only; tag
-  # pushes build Windows in release.yml.
   windows:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -66,8 +63,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets --release -- -D warnings
       - run: cargo test --workspace --release
 
-  # Unsigned NSIS installers for testing, on manual runs only (see windows). ARM64 is cross-compiled on the x64
-  # runner with the MSVC ARM64 tools it ships.
+  # Unsigned NSIS installers for testing, on manual runs only; tag pushes build them in release.yml. ARM64 is
+  # cross-compiled on the x64 runner with the MSVC ARM64 tools it ships.
   windows-installer:
     if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest

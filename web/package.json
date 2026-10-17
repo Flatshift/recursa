@@ -2,6 +2,7 @@
   "name": "recursa-web",
   "private": true,
   "license": "GPL-3.0-or-later",
+  "repository": "github:flatshift/recursa",
   "version": "0.2.0",
   "type": "module",
   "scripts": {
