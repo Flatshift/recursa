@@ -35,16 +35,22 @@ pub fn install(app: &AppHandle, hidden: bool) -> tauri::Result<()> {
             &monitor,
             &login_tray,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::quit(app, Some("Quit Recursa"))?,
+            &PredefinedMenuItem::quit(app, Some(if cfg!(target_os = "macos") { "Quit Recursa" } else { "Exit" }))?,
         ],
     )?;
-    TrayIconBuilder::with_id("recursa")
-        .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?)
-        .icon_as_template(true)
-        .tooltip("Recursa")
-        .menu(&tray_menu)
-        .show_menu_on_left_click(true)
-        .build(app)?;
+    // macOS: a template glyph in the menu bar, and the menu drops on any click. Elsewhere the taskbar may be dark or
+    // light, so the tray shows the colour icon; a left click opens the window and a right click the menu.
+    let tray = TrayIconBuilder::with_id("recursa").tooltip("Recursa").menu(&tray_menu).show_menu_on_left_click(cfg!(target_os = "macos"));
+    #[cfg(target_os = "macos")]
+    let tray = tray.icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?).icon_as_template(true);
+    #[cfg(not(target_os = "macos"))]
+    let tray = tray.icon(tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?).on_tray_icon_event(|tray, event| {
+        use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+            show_main(tray.app_handle(), None);
+        }
+    });
+    tray.build(app)?;
     app.manage(Toggles { monitor, login: vec![login_app, login_tray] });
     sync_menus(app);
     // Keep the menus and the UI in step with monitoring, whoever changed it.
@@ -89,15 +95,11 @@ fn app_menu(app: &AppHandle, login: &CheckMenuItem<Wry>) -> tauri::Result<Menu<W
         .separator()
         .item(&item("settings", "Settings…", Some("CmdOrCtrl+,"))?)
         .item(login)
-        .separator()
-        .services()
-        .separator()
-        .hide()
-        .hide_others()
-        .show_all()
-        .separator()
-        .quit()
-        .build()?;
+        .separator();
+    // The application-menu items only macOS has; on Windows muda would drop all but Hide and leave the separators.
+    #[cfg(target_os = "macos")]
+    let recursa = recursa.services().separator().hide().hide_others().show_all().separator();
+    let recursa = recursa.quit().build()?;
     let file = SubmenuBuilder::new(app, "File")
         .item(&item("go:/", "New Benchmark", Some("CmdOrCtrl+N"))?)
         .item(&item("run:start", "Start Benchmark", Some("CmdOrCtrl+Enter"))?)
@@ -108,17 +110,11 @@ fn app_menu(app: &AppHandle, login: &CheckMenuItem<Wry>) -> tauri::Result<Menu<W
         .separator()
         .close_window()
         .build()?;
-    let edit = SubmenuBuilder::new(app, "Edit")
-        .undo()
-        .redo()
-        .separator()
-        .cut()
-        .copy()
-        .paste()
-        .select_all()
-        .separator()
-        .item(&item("find", "Filter…", Some("CmdOrCtrl+F"))?)
-        .build()?;
+    // Clipboard items are macOS menu entries; WebView2 handles those keys itself and muda has no Windows versions.
+    let edit = SubmenuBuilder::new(app, "Edit");
+    #[cfg(target_os = "macos")]
+    let edit = edit.undo().redo().separator().cut().copy().paste().select_all().separator();
+    let edit = edit.item(&item("find", "Filter…", Some("CmdOrCtrl+F"))?).build()?;
     let view = SubmenuBuilder::new(app, "View")
         .item(&item("go:/", "Benchmark", Some("CmdOrCtrl+1"))?)
         .item(&item("go:/resolvers", "Resolvers", Some("CmdOrCtrl+2"))?)
@@ -134,9 +130,13 @@ fn app_menu(app: &AppHandle, login: &CheckMenuItem<Wry>) -> tauri::Result<Menu<W
         .separator()
         .item(&item("toggle:sidebar", "Toggle Sidebar", Some(sidebar))?)
         .item(&item("toggle:inspector", "Toggle Inspector", Some(view_accel("I").as_str()))?)
-        .separator()
-        .fullscreen()
-        .build()?;
+        .separator();
+    // The predefined Full Screen item acts only on macOS; elsewhere the window toggles it itself.
+    #[cfg(target_os = "macos")]
+    let view = view.fullscreen();
+    #[cfg(not(target_os = "macos"))]
+    let view = view.item(&item("fullscreen", "Full Screen", Some("F11"))?);
+    let view = view.build()?;
     let window: Submenu<Wry> = SubmenuBuilder::new(app, "Window").minimize().maximize().build()?;
     #[cfg(target_os = "macos")]
     window.set_as_windows_menu_for_nsapp()?;
@@ -149,6 +149,15 @@ fn on_menu(app: &AppHandle, id: &str) {
         "monitor" => toggle_monitor(app),
         "login" => toggle_login(app),
         "settings" => show_settings(app),
+        #[cfg(not(target_os = "macos"))]
+        "fullscreen" => {
+            if let Some(w) = app.get_webview_window(MAIN) {
+                let full = !w.is_fullscreen().unwrap_or(false);
+                // The menu bar would stay drawn over a full-screen window; F11 still works while it is hidden.
+                let _ = if full { w.hide_menu() } else { w.show_menu() };
+                let _ = w.set_fullscreen(full);
+            }
+        }
         // A pick from a context menu the UI asked for (see ipc::context_menu).
         _ if id.starts_with("ctx:") => {
             let _ = app.emit_to(MAIN, "recursa:context", &id[4..]);
@@ -182,6 +191,9 @@ pub fn show_settings(app: &AppHandle) {
         .build();
     match built {
         Ok(w) => {
+            // Off macOS the app menu lands on every new window; a dialog has no use for it.
+            #[cfg(not(target_os = "macos"))]
+            let _ = w.remove_menu();
             let _ = w.set_focus();
         }
         Err(e) => eprintln!("Couldn't open Settings: {e}"),

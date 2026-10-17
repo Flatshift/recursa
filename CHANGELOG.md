@@ -22,7 +22,8 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
   not the loopback echo or interface counters the macOS check reads.
 - Cleanup: unused result fields, two API routes (`GET /api/resolvers`, `POST /api/env/refresh`) and `ntp --json` are
   gone (`ntp --format` stays); `--port` and `--no-open` go before the subcommand; the desktop app takes `--db=path`;
-  Copy works on Windows.
+  Copy works on Windows. The Windows tray shows the app icon, a left click on it opens the window, the menus hold
+  only the items Windows has, and F11 toggles full screen.
 
 ## 0.1.0-rc1
 

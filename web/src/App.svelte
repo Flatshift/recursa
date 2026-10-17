@@ -92,7 +92,7 @@
               <h2>Recursa can't reach its engine</h2>
               <p class="ink-2">{app.bootError}</p>
               {#if desktop}
-                <p class="ink-2">Quit Recursa ({isMac ? shortcut('cmd+Q') : 'Recursa › Quit, or from the tray icon'}) and open it again.</p>
+                <p class="ink-2">Quit Recursa ({isMac ? shortcut('cmd+Q') : 'Recursa › Exit, or from the tray icon'}) and open it again.</p>
               {:else}
                 <p class="ink-2">Start it from a terminal with <code>recursa</code>, then reload this page.</p>
               {/if}

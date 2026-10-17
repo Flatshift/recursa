@@ -6,8 +6,8 @@ covers latency, what each resolver actually does, how well it maps you onto CDNs
 
 It comes two ways, built from the same engine and interface:
 
-* **Recursa.app**, a native app for macOS and Windows. It keeps a menu-bar (tray) item, so monitoring continues with
-  the window closed, and it can open at login.
+* **The Recursa app** for macOS and Windows. It keeps a menu-bar (tray) item, so monitoring continues with the window
+  closed, and it can open at login.
 * **`recursa`**, a single command-line binary. It runs benchmarks in the terminal, or serves the same interface to your
   browser on `127.0.0.1`.
 
@@ -130,7 +130,7 @@ crates/engine/src/   the engine (library), shared by both front ends
 crates/cli/src/      the `recursa` binary
   main.rs        CLI commands and server start-up
   server.rs      HTTP transport: embedded UI, API, SSE, export; Host/Origin/token guards
-crates/desktop/src/  Recursa.app (Tauri 2)
+crates/desktop/src/  the desktop app (Tauri 2)
   ipc.rs         IPC transport: API calls, live run channels, native save and confirm dialogs
   shell.rs       window, app menu, menu-bar item, launch at login
   chrome.rs      keeps the page clear of the macOS title bar and full-screen menu bar
