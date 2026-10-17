@@ -26,13 +26,17 @@
   const idx = $derived(run.phase === 'done' ? phases.length : phases.indexOf(run.phase));
   const running = $derived(run.status === 'running');
   const frac = $derived(run.total > 0 ? Math.min(1, run.done / run.total) : 0);
+  // After the latency rounds the engine reports little or nothing until a check finishes (the path check and the CDN
+  // mapping report only at the end), so these phases sweep the track instead of standing at zero.
+  const QUIET = new Set(['path', 'probes', 'cdn', 'intel']);
+  const busy = $derived(QUIET.has(run.phase));
 </script>
 
 {#if running}
   <div class="prog chrome">
     <ol class="rail" aria-label="Run progress">
       {#each phases as p, i}
-        <li class:done={i < idx} class:now={i === idx} aria-current={i === idx ? 'step' : undefined}>
+        <li class:done={i < idx} class:now={i === idx} class:busy={i === idx && busy} aria-current={i === idx ? 'step' : undefined}>
           <span class="lbl">{NAMES[p] ?? p}</span>
           <span class="track"><span class="fill" style:transform="scaleX({i < idx ? 1 : i === idx ? frac : 0})"></span></span>
         </li>
@@ -77,12 +81,40 @@
     color: var(--ink-2);
   }
   .track {
+    position: relative;
     height: 3px;
     border-radius: 2px;
     background: var(--rule);
     overflow: hidden;
   }
+  /* A query going out along the path: a soft ink segment glides the length of the track, under the measured fill. */
+  .busy .track::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 36%;
+    background: linear-gradient(90deg, transparent, color-mix(in oklch, var(--accent) 60%, transparent), transparent);
+    animation: sweep 2200ms linear infinite;
+  }
+  @keyframes sweep {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(278%);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    /* Still: a dashed track says in progress. */
+    .busy .track::before {
+      animation: none;
+      width: 100%;
+      background: repeating-linear-gradient(90deg, var(--accent) 0 4px, transparent 4px 8px);
+      opacity: 0.45;
+    }
+  }
   .fill {
+    position: relative;
     display: block;
     height: 100%;
     background: var(--accent);

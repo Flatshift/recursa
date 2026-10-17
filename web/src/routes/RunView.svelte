@@ -11,6 +11,7 @@
   import { onResolverContext } from '../lib/resolverMenu';
   import Toolbar from '../components/Toolbar.svelte';
   import RunProgress from '../components/RunProgress.svelte';
+  import Working from '../components/Working.svelte';
   import Verdict from '../components/Verdict.svelte';
   import RankList from '../components/RankList.svelte';
   import Ladder from '../components/Ladder.svelte';
@@ -114,6 +115,8 @@
   );
   const placeholders = $derived(run && !run.targets.length ? run.resolvers.length || run.config.resolvers.length || 6 : 0);
   const leader = $derived(running ? rank(rows).find((r) => !r.baseline && (r.eligible || (r.measured && !r.intercepted))) : null);
+  // The checks after the latency rounds: the ranking holds, the picks still wait on them.
+  const checking = $derived(running && ['path', 'probes', 'cdn', 'intel'].includes(run?.phase ?? ''));
   const liveVerdict = $derived.by(() => {
     if (!run || !running) return null;
     // Name a leader only once every target has answered and the leader has a few answers, not after one lucky query.
@@ -123,7 +126,9 @@
       const who = label(leader.target.provider, leader.target.variant) + (multi ? ` over ${TRANSPORT_LABEL[leader.target.transport]}` : '');
       return {
         sentence: `${who} leads so far.`,
-        detail: `${ms(leader.composite)} speed score on the rounds run so far. The ranking and the picks settle once every round has run.`,
+        detail: checking
+          ? `${ms(leader.composite)} speed score over every round. The picks settle as the remaining checks finish.`
+          : `${ms(leader.composite)} speed score on the rounds run so far. The ranking and the picks settle once every round has run.`,
       };
     }
     const n = new Set(run.targets.map((t) => t.resolver_id)).size || run.config.resolvers.length;
@@ -301,6 +306,7 @@
               {:else if running}
                 <div>
                   <Verdict v={null} live={liveVerdict} cdn={run.config.cdn} onopen={open}>
+                    {#snippet status()}<Working {run} />{/snippet}
                     <RankList
                       rows={rank(rows)}
                       samples={run.samples}
@@ -382,6 +388,7 @@
                 onopen={open}
               />
             </div>
+            {#if running}<div class="under"><Working {run} /></div>{/if}
           {:else if app.runView === 'cdn'}
             {#if run.cdn?.version === 2 && Object.keys(run.cdn.resolvers).length}
               <CdnPanel {run} cdn={run.cdn} onopen={open} />
@@ -397,13 +404,17 @@
                     No CDN results: none of the resolvers answered the CDN lookups.
                   {/if}
                 </p>
+                {#if running}<Working {run} />{/if}
               </div>
             {/if}
           {:else if app.runView === 'caps'}
             {#if !running || Object.keys(run.probes).length}
               <CapMatrix {run} rows={ordered} {v} bind:view={capView} onopen={open} />
             {:else}
-              <div class="empty"><p>Capability probes run after the latency tests.</p></div>
+              <div class="empty">
+                <p>Capability probes run after the latency tests.</p>
+                <Working {run} />
+              </div>
             {/if}
           {:else if app.runView === 'numbers'}
             <div class="fill">
@@ -557,6 +568,14 @@
   .empty h2 {
     font-size: var(--t-xl);
     color: var(--ink);
+  }
+  /* The working line keeps to the bottom edge of the pane while the ladder is taller than it, then takes its place
+     under the sheet. */
+  .under {
+    position: sticky;
+    bottom: 0;
+    padding: 2px 32px 0;
+    background: var(--bg);
   }
   @media (max-width: 560px) {
     .ladder {

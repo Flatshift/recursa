@@ -17,6 +17,7 @@
     caution = null,
     onopen,
     children,
+    status,
   }: {
     v: Verdict | null;
     /** While the run is measuring: what to say in place of the verdict. The picks hold ghosts. */
@@ -25,6 +26,8 @@
     caution?: string | null;
     onopen: (id: string) => void;
     children?: Snippet;
+    /** While the run keeps working after the latency rounds: the line naming the check under way. */
+    status?: Snippet;
   } = $props();
 
   const sentence = $derived(v?.sentence ?? live?.sentence ?? '');
@@ -39,6 +42,7 @@
       <p class="eyebrow"><Mark size={15} />Recursa</p>
       <h2 id="verdict-h">{sentence}</h2>
       {#if detail}<p class="detail">{detail}</p>{/if}
+      {#if status}{@render status()}{/if}
       {#if caution}
         <p class="caution" role="note"><Icon name="info" size={14} /><span><b>No reliability record.</b> {caution}</span></p>
       {/if}
