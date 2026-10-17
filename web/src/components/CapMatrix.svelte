@@ -11,6 +11,7 @@
 
 <script lang="ts">
   import { app } from '../lib/store.svelte';
+  import { mobile } from '../lib/api';
   import type { Resolver, RunState } from '../lib/types';
   import type { Row, Verdict } from '../lib/verdict';
   import { capCell, cdnCell, egressCell, roaCell, rovCell, type Cell as C } from '../lib/cells';
@@ -93,6 +94,29 @@
     return f && f.tested ? f : null;
   };
 
+  // Phone: each capability lists its values, with the resolvers that share each one, in ranking order.
+  const bucket = (l: { line: Line; cells: C[] }) => {
+    const out = new Map<string, { c: C; s: ReturnType<typeof share>; names: string[] }>();
+    resolvers.forEach((r, i) => {
+      const c = l.cells[i];
+      const s = share(l.line.key, r);
+      const k = `${c.status}|${c.text}|${c.prov}|${s ? `${s.blocked}/${s.tested}` : ''}`;
+      const b = out.get(k);
+      if (b) b.names.push(short(r));
+      else out.set(k, { c, s, names: [short(r)] });
+    });
+    return [...out.values()];
+  };
+  const MOBILE_VIEW: Record<CapView, string> = { all: 'All', privacy: 'Privacy', blocking: 'Blocking', routing: 'Routing', protocol: 'Protocol' };
+
+  function withProbes() {
+    if (app.draft) {
+      app.draft.probes = true;
+      app.saveDraft();
+    }
+    app.navigate('/');
+  }
+
   const probed = $derived(run.config.probes !== false && Object.keys(run.probes).length > 0);
 
   // The verdict: the two picks that are about capabilities, then what this run found to differ.
@@ -102,7 +126,9 @@
     if (!probed) {
       return {
         sentence: 'Probes were off for this run.',
-        detail: 'So this shows only what operators publish (○), not what the resolvers did from your network. Turn on Capability probes in the next run’s setup to measure them.',
+        detail: mobile
+          ? 'Probes test DNSSEC validation, ECS, QNAME minimisation and the rest from your network. Start a new run with them on to see what each resolver does.'
+          : 'So this shows only what operators publish (○), not what the resolvers did from your network. Turn on Capability probes in the next run’s setup to measure them.',
         picks: [],
       };
     }
@@ -173,17 +199,51 @@
   </section>
 {/if}
 
+{#if mobile && !probed}
+  <!-- Phone: without probes the matrix only repeats what operators publish, which the resolver sheet shows too. -->
+  <button class="btn" onclick={withProbes}>New run with probes</button>
+{:else}
 <div class="bar chrome">
   <div class="segmented" role="group" aria-label="Capabilities shown">
-    {#each CAP_VIEWS as [k, l]}<button aria-pressed={view === k} onclick={() => (view = k)}>{l}</button>{/each}
+    {#each CAP_VIEWS as [k, l]}<button aria-pressed={view === k} onclick={() => (view = k)}>{mobile ? MOBILE_VIEW[k] : l}</button>{/each}
   </div>
   <Info label="About the probes">
     <p>What each resolver actually does, probed from this network with fresh, uncacheable names.</p>
-    <p>Hover a cell for its evidence. Select a resolver’s name for the full record, with the raw responses.</p>
+    <p>{mobile ? 'Open a resolver from Overview for its evidence.' : 'Hover a cell for its evidence.'} Select a resolver’s name for the full record, with the raw responses.</p>
     <p>A capability every resolver shares collapses to one line. Blocking shows the share of live malicious hosts blocked.</p>
   </Info>
 </div>
 
+{#if mobile}
+  <div class="mcaps">
+    {#each shown as g (g.k)}
+      {#if view === 'all'}<h3 class="mgrp">{g.title}</h3>{/if}
+      {#each g.lines as l (l.line.key)}
+        <div class="mcap">
+          <p class="mcap-h"><span class="cap">{l.line.label}</span>{#if l.line.ref}<span class="ref">{l.line.ref}</span>{/if}</p>
+          {#if l.same}
+            <p class="mval"><Cell c={l.cells[0]} sheet /><span class="who">every resolver</span></p>
+          {:else}
+            {#each bucket(l) as b}
+              <p class="mval">
+                {#if b.s}
+                  <span class="blk">
+                    <Glyph status={b.c.status} size={13} />
+                    <span class="track" aria-hidden="true"><span style:width="{(b.s.blocked / b.s.tested) * 100}%"></span></span>
+                    <span class="t">{b.s.blocked}/{b.s.tested}</span>
+                  </span>
+                {:else}
+                  <Cell c={b.c} sheet />
+                {/if}
+                <span class="who">{b.names.join(', ')}</span>
+              </p>
+            {/each}
+          {/if}
+        </div>
+      {/each}
+    {/each}
+  </div>
+{:else}
 <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable region must be keyboard-reachable) -->
 <div class="wrap" class:across role="region" aria-label="Capabilities by resolver" tabindex="0" style:--n={resolvers.length} bind:clientWidth={wrapW}>
   <table bind:clientWidth={tableW}>
@@ -236,11 +296,13 @@
     {/each}
   </table>
 </div>
+{/if}
 <p class="legend">
   <span>Measured from your network in this run, unless marked:</span>
   <span><Provenance kind="published" /> published by the operator, not verified</span>
   <span>— unknown</span>
 </p>
+{/if}
 
 <style>
   /* The verdict sits on the page plane, as on Overview and Reliability; the sheet below is the one raised surface. */
@@ -501,5 +563,51 @@
     display: inline-flex;
     gap: 6px;
     align-items: center;
+  }
+  /* Phone: a smaller headline, and capabilities as a list rather than a sheet. */
+  :global(html.mobile) h2#cv-h {
+    font-size: var(--t-lg);
+    letter-spacing: -0.01em;
+  }
+  :global(html.mobile) .verdict {
+    padding: 0 0 16px;
+    gap: 14px;
+  }
+  .mcaps {
+    display: grid;
+    border-top: 1px solid var(--rule);
+  }
+  .mgrp {
+    padding: 18px 0 6px;
+    font-size: var(--t-xs);
+    font-weight: 620;
+    color: var(--ink-2);
+    border-bottom: 1px solid var(--rule);
+  }
+  .mcaps > .mgrp:first-child {
+    padding-top: 10px;
+  }
+  .mcap {
+    display: grid;
+    gap: 6px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  .mcap-h .ref {
+    font-size: var(--t-xs);
+  }
+  .mval {
+    display: grid;
+    grid-template-columns: minmax(0, auto) 1fr;
+    align-items: baseline;
+    gap: 10px;
+    font-size: var(--t-xs);
+  }
+  .mval :global(.cell) {
+    white-space: normal;
+  }
+  .who {
+    color: var(--ink-3);
+    text-align: right;
   }
 </style>

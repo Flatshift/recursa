@@ -31,7 +31,9 @@
 //! * `Cargo.toml` (workspace): the `routinator` line.
 //! * `crates/engine/Cargo.toml`: the `routinator` and `log` dependencies, `rpki-local` in `[features]` and in `default`.
 //! * `crates/cli/Cargo.toml`, `crates/desktop/Cargo.toml`: the `rpki-local` lines in `[features]` and in `default`.
-//! * `crates/engine/src/lib.rs`: `#[cfg(feature = "rpki-local")] pub mod rpki;`
+//! * `crates/engine/src/lib.rs`: `#[cfg(all(feature = "rpki-local", not(target_os = "ios")))] pub mod rpki;`
+//! * Everything above is also gated `not(target_os = "ios")` (no child processes there), and `routinator`/`log` sit under
+//!   `[target.'cfg(not(target_os = "ios"))'.dependencies]` in `crates/engine/Cargo.toml`.
 //! * `crates/cli/src/main.rs`, `crates/desktop/src/main.rs`: the `recursa_engine::rpki::child_entry();` line at the top of `main`.
 //! * `crates/engine/src/intel.rs`: the `rpki` field of `Intel`, its line in `Intel::new`, and the
 //!   `rpki()` method (its `not(feature)` arm is what a build without the module returns).

@@ -21,6 +21,8 @@
   import Inspector from '../components/Inspector.svelte';
   import Info from '../components/Info.svelte';
   import Icon from '../components/Icon.svelte';
+  import { mobile } from '../lib/api';
+  import { showConditions } from '../components/InstrumentStrip.svelte';
 
   const run = $derived(app.run);
   const running = $derived(run?.status === 'running');
@@ -168,6 +170,12 @@
       : '',
   );
 
+  // The phone folds Numbers into Overview.
+  const PHONE_VIEWS = RUN_VIEWS.filter((v) => v !== 'numbers');
+  $effect(() => {
+    if (mobile && app.runView === 'numbers') app.setRunView('overview');
+  });
+
   const VIEW_LABEL: Record<RunView, string> = {
     overview: 'Overview',
     latency: 'Latency',
@@ -200,17 +208,28 @@
   const row = $derived(run ? (app.boot?.runs.find((r) => r.id === run.id) ?? null) : null);
 
   // Everything else about this run, under one "…": the same menu a run has in the sidebar.
+  // Phone: the bar keeps only back, the title and this menu, so saving, a new run and the run's measurement
+  // conditions move in here. Export isn't available there yet.
   function runMenu(e: MouseEvent, id: string) {
+    const phone = mobile
+      ? [
+          { id: 'new', label: 'New Run' },
+          ...(row ? [{ id: 'save', label: row.saved ? 'Unsave Run' : 'Save Run' }] : []),
+          { id: 'conditions', label: 'Measurement Conditions' },
+          SEPARATOR,
+        ]
+      : [{ id: 'csv', label: 'Export Samples as CSV…' }, { id: 'json', label: 'Export Run as JSON…' }, SEPARATOR];
     menu.show(
       e,
       [
-        { id: 'csv', label: 'Export Samples as CSV…' },
-        { id: 'json', label: 'Export Run as JSON…' },
-        SEPARATOR,
+        ...phone,
         { id: 'delete', label: 'Delete Run…' },
       ],
       (pick) => {
-        if (pick === 'delete') app.deleteRun(id);
+        if (pick === 'new') app.navigate('/');
+        else if (pick === 'save') app.setSaved(id, !row?.saved);
+        else if (pick === 'conditions') showConditions();
+        else if (pick === 'delete') app.deleteRun(id);
         else app.exportRun(pick as 'csv' | 'json');
       },
       e.currentTarget as HTMLElement,
@@ -234,7 +253,7 @@
 <div class="view-root">
   <Toolbar {title} {subtitle}>
     {#snippet center()}
-      {#if run}
+      {#if run && !mobile}
         <div class="segmented views" role="tablist" aria-label="Results view">
           {#each RUN_VIEWS as view, i}
             <button
@@ -257,6 +276,8 @@
     {#snippet actions()}
       {#if run && running}
         <button class="btn" onclick={() => app.cancelRun()}><Icon name="stop" size={11} />Stop</button>
+      {:else if run && mobile}
+        <button class="tb-icon" aria-label="Run actions" onclick={(e) => runMenu(e, run.id)}><Icon name="more" size={18} /></button>
       {:else if run}
         {#if row}
           {@const saved = row.saved}
@@ -285,6 +306,15 @@
   {#if run}
     <div class="view-body" bind:clientWidth={bodyW}>
       <div class="col">
+        {#if mobile}
+          <div class="viewstrip" role="tablist" aria-label="Results view">
+            {#each PHONE_VIEWS as view}
+              <button role="tab" class="vtab" class:on={app.runView === view} aria-selected={app.runView === view} aria-controls="run-panel" onclick={() => app.setRunView(view)}
+                >{VIEW_LABEL[view]}</button
+              >
+            {/each}
+          </div>
+        {/if}
         <RunProgress {run} />
         <p class="visually-hidden" aria-live="polite">{announce}</p>
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -319,7 +349,21 @@
                     />
                   {/if}
                 </Verdict>
-                {#each v.caveats as c}<p class="caveat">{c}</p>{/each}
+                {#if mobile && v.caveats.length}
+                  <details class="notes">
+                    <summary>{v.caveats.length === 1 ? 'One caveat' : `${v.caveats.length} caveats`}</summary>
+                    {#each v.caveats as c}<p class="caveat">{c}</p>{/each}
+                  </details>
+                {:else}
+                  {#each v.caveats as c}<p class="caveat">{c}</p>{/each}
+                {/if}
+                {#if mobile && rows.some((r) => r.measured)}
+                  <!-- The phone has no Numbers tab: the same table sits under the answer. -->
+                  <details class="notes numbers">
+                    <summary>Medians and p95 for every test</summary>
+                    <LatencyTable rows={ordered} tests={run.config.tests} onopen={open} />
+                  </details>
+                {/if}
               {:else if running}
                 <div>
                   <Verdict v={null} live={liveVerdict} cdn={run.config.cdn} onopen={open}>
@@ -489,6 +533,38 @@
     height: 28px;
     font-size: var(--t-xs);
   }
+  /* Phone: four views (Numbers folds into Overview) as a strip of tabs under the bar, all in view at once. */
+  .viewstrip {
+    flex: none;
+    display: flex;
+    gap: 2px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--rule);
+    background: var(--surface);
+  }
+  .vtab {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: var(--r-md);
+    background: transparent;
+    color: var(--ink-2);
+    font-size: var(--t-sm);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .vtab:active {
+    background: var(--surface-2);
+  }
+  .vtab.on {
+    background: var(--side-sel);
+    color: var(--ink);
+    font-weight: 620;
+  }
   /* Not enough room for five tabs: a pop-up button, as a Mac toolbar would. */
   @container toolbar (max-width: 900px) {
     .views {
@@ -549,6 +625,54 @@
     flex: none;
     margin-top: 3px;
     color: var(--ink-3);
+  }
+  :global(html.mobile) .overview {
+    gap: 10px;
+  }
+  :global(html.mobile) .caveat {
+    margin-top: 0;
+    font-size: var(--t-sm);
+  }
+  .notes {
+    font-size: var(--t-sm);
+    color: var(--ink-3);
+  }
+  .notes summary {
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    color: var(--ink-2);
+    cursor: default;
+  }
+  .notes summary::-webkit-details-marker {
+    display: none;
+  }
+  .notes summary::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    margin-right: 10px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(-45deg);
+    transition: transform var(--dur) var(--ease-out);
+  }
+  .notes[open] summary::before {
+    transform: rotate(45deg);
+  }
+  .notes[open] summary {
+    margin-bottom: 4px;
+  }
+  .notes p + p {
+    margin-top: 8px;
+  }
+  .notes.numbers {
+    margin-top: 8px;
+    border-top: 1px solid var(--rule);
+    color: var(--ink);
+  }
+  :global(html.mobile) .infos li {
+    font-size: var(--t-sm);
   }
   .bar {
     display: flex;

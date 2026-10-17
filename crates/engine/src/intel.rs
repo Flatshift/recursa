@@ -32,7 +32,7 @@ pub struct Intel {
     measuring: Arc<AtomicBool>,
     /// The system resolvers, which carry the Team Cymru questions.
     system: Arc<RwLock<Vec<IpAddr>>>,
-    #[cfg(feature = "rpki-local")]
+    #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
     pub rpki: Arc<crate::rpki::Rpki>,
     /// Bounds concurrent outbound requests so a run's intel phase stays polite.
     permits: Semaphore,
@@ -103,7 +103,7 @@ impl Intel {
             .expect("http client");
         // Earlier builds downloaded a location database here; remove what they left behind.
         let _ = std::fs::remove_dir_all(store.path.parent().map(|p| p.to_path_buf()).unwrap_or_default().join("dbip"));
-        #[cfg(feature = "rpki-local")]
+        #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
         let rpki = crate::rpki::Rpki::new(
             store.path.parent().map(|p| p.to_path_buf()).unwrap_or_default().join("rpki"),
             store.clone(),
@@ -114,7 +114,7 @@ impl Intel {
             store,
             measuring,
             system,
-            #[cfg(feature = "rpki-local")]
+            #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
             rpki,
             permits: Semaphore::new(8),
         }
@@ -140,7 +140,7 @@ impl Intel {
 
     /// Whether a background download (an RPKI sync) is under way in this process.
     pub fn fetching(&self) -> bool {
-        #[cfg(feature = "rpki-local")]
+        #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
         if self.rpki.syncing() {
             return true;
         }
@@ -220,9 +220,9 @@ impl Intel {
     /// ROA validity of `prefix` announced by AS`asn`, from the local check. Never waits for a sync,
     /// and is not cached: it follows the setting and the data as they are now.
     fn rpki(&self, asn: u64, prefix: &str) -> Value {
-        #[cfg(feature = "rpki-local")]
+        #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
         return self.rpki.lookup(asn, prefix);
-        #[cfg(not(feature = "rpki-local"))]
+        #[cfg(not(all(feature = "rpki-local", not(target_os = "ios"))))]
         {
             let _ = (asn, prefix);
             json!({ "status": "not_checked", "state": "off", "reason": "This build doesn’t check route origins.", "roas": [], "validator": null })

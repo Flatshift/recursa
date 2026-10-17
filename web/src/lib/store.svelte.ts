@@ -1,4 +1,4 @@
-import { api, confirmAction, desktop, mac, notifyDone, onDesktop, saveExport, streamRun, type RunStream } from './api';
+import { api, confirmAction, desktop, mac, mobile, notifyDone, onDesktop, saveExport, streamRun, type RunStream } from './api';
 import type { Mix } from './verdict';
 import type { Bootstrap, Env, Outcome, Resolver, RunConfig, RunRow, RunState, Sample } from './types';
 
@@ -88,6 +88,7 @@ class AppState {
     if (desktop) {
       document.documentElement.classList.add('desktop');
       if (mac) document.documentElement.classList.add('mac');
+      if (mobile) document.documentElement.classList.add('mobile');
       onDesktop('recursa:menu', (cmd) => this.command(cmd));
       onDesktop('recursa:monitor', () => {
         this.monitorRev++;

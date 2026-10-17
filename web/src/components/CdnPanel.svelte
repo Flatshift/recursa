@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { CdnInfo, CdnReport, Mapping, Reference, Resolver, RunState } from '../lib/types';
   import { app } from '../lib/store.svelte';
+  import { mobile } from '../lib/api';
   import { holder, label, list, ms } from '../lib/format';
   import { cellPenalty, ecsByAuthority, edgeIps, level, youOf } from '../lib/cdn';
   import CdnLogo from './CdnLogo.svelte';
@@ -189,6 +190,85 @@
     </div>
   </header>
 
+  {#if mobile}
+    <!-- Phone: one row per resolver, tapped open for its edge per CDN. The page scrolls; nothing scrolls sideways. -->
+    <p class="mlegend muted">
+      <span><span class="mine">●</span> same edge as your address</span>
+      <span><span class="mine">○</span> about as near</span>
+      <span><span class="onnet">ISP</span> edge inside your ISP</span>
+      <span>+ms: extra time over the best edge</span>
+    </p>
+    <div class="mlist">
+      {#if hasRef}
+        <details class="mrow ref">
+          <summary>
+            <span class="mname"><b>Your address</b> <span class="mono">{clientIp ?? 'this device'}</span></span>
+            <span class="mpen muted">asked directly: each CDN's own pick</span>
+          </summary>
+          <ul class="medges">
+            {#each tableCols as c}
+              {@const y = you(c)}
+              <li style:--shade={shade(y?.penalty_ms)}>
+                <span class="mcdn"><CdnLogo id={c.id} name={short(c)} /><span>{short(c)}</span></span>
+                {#if y?.rtt_ms != null}
+                  <span class="rt num">{ms(y.rtt_ms)}</span>
+                  <span class="dp num">{(y.penalty_ms ?? 0) >= 0.5 ? `+${ms(y.penalty_ms)}` : ''}</span>
+                {:else}
+                  <span class="muted wide">{y?.error ? 'no answer' : '—'}</span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        </details>
+      {/if}
+      {#each rows as { id, r, res } (id)}
+        {@const e = ecs(id)}
+        <details class="mrow" data-resolver={id} class:sel={app.inspect === id}>
+          <summary>
+            <span class="mname"><b>{res?.provider}</b> <span>{res?.variant}</span></span>
+            <span class="chip {e.tone}">{e.text}</span>
+            <span class="mpen">
+              {#if r.penalty_ms != null}
+                <span class="bar" aria-hidden="true"><span style:width="{Math.max(3, (r.penalty_ms / maxPen) * 100)}%"></span></span>
+                <span class="num pv">{r.penalty_ms < 0.05 ? 'best' : `+${ms(r.penalty_ms)}`}</span>
+                {#if r.tier != null}<span class="muted">tier {r.tier}</span>{/if}
+              {:else}
+                <span class="muted">insufficient data</span>
+              {/if}
+            </span>
+            {#if r.coverage && r.coverage.cdns_used < r.coverage.cdns_total}
+              <span class="mcov muted">{r.coverage.cdns_used}/{r.coverage.cdns_total} CDNs · {r.coverage.hosts_used}/{r.coverage.hosts_total} hosts</span>
+            {/if}
+          </summary>
+          <p class="mecs muted">{e.title}</p>
+          <ul class="medges">
+            {#each tableCols as c}
+              {@const m = r.mappings[c.id]}
+              {@const k = cell(c, m)}
+              {@const mine = m?.as_you}
+              <li style:--shade={shade(k.level ? 0 : k.pen)}>
+                <span class="mcdn"
+                  ><CdnLogo id={c.id} name={short(c)} /><span>{short(c)}</span>{#if c.role === 'control'}<span class="muted any">anycast</span>{/if}</span
+                >
+                {#if m?.rtt_ms != null}
+                  <span class="rt num"
+                    >{#if edgeIps(m).some((ip) => cdn.edges[ip]?.on_net)}<span class="onnet">ISP</span>{/if}{#if mine === 'same'}<span
+                        class="mine"
+                        aria-label="same as your address">●</span
+                      >{:else if mine === 'near'}<span class="mine" aria-label="near your address's edges">○</span>{/if}{ms(m.rtt_ms)}</span
+                  >
+                  <span class="dp num">{k.pen != null && k.pen >= 0.5 && !k.level ? `+${ms(k.pen)}` : ''}</span>
+                {:else}
+                  <span class="muted wide">{m?.error ? 'error' : '—'}</span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+          <button class="btn mopen" onclick={() => onopen(id)}>Resolver details</button>
+        </details>
+      {/each}
+    </div>
+  {:else}
   <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable region must be keyboard-reachable) -->
   <div class="wrap panel" role="region" aria-label="CDN edge round trips by resolver" tabindex="0">
     <table class="sticky-head">
@@ -272,6 +352,7 @@
       </tbody>
     </table>
   </div>
+  {/if}
 
   <div class="foot">
     {#if hasRef}
@@ -295,7 +376,7 @@
       {:else}
         None of the {edges.length} edges sit inside your ISP's network.
       {/if}
-      Hover a cell for its edges, their networks and round trips.
+      {mobile ? 'Tap a resolver for its edge on each CDN, in milliseconds.' : 'Hover a cell for its edges, their networks and round trips.'}
     </p>
   </div>
 </section>
@@ -535,5 +616,130 @@
     font-size: var(--t-xs);
     color: var(--ink-3);
     max-width: 110ch;
+  }
+  /* Phone: the page scrolls, and each resolver opens in place. */
+  :global(html.mobile) .cdn {
+    height: auto;
+    gap: 16px;
+  }
+  :global(html.mobile) .foot {
+    font-size: var(--t-sm);
+  }
+  .mlist {
+    display: grid;
+    border-top: 1px solid var(--rule);
+  }
+  .mrow {
+    border-bottom: 1px solid var(--rule);
+  }
+  .mrow.sel {
+    background: var(--sel);
+  }
+  .mrow.ref {
+    background: var(--surface-2);
+  }
+  .mrow summary {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 6px 10px;
+    min-height: 44px;
+    padding: 12px 2px;
+    list-style: none;
+    cursor: pointer;
+  }
+  .mrow summary::-webkit-details-marker {
+    display: none;
+  }
+  .mrow summary:active {
+    background: var(--surface-2);
+  }
+  .mname {
+    min-width: 0;
+    font-size: var(--t-base);
+    line-height: 1.25;
+  }
+  .mname b {
+    font-weight: 620;
+  }
+  .mname span {
+    color: var(--ink-3);
+    font-size: var(--t-sm);
+  }
+  .mpen,
+  .mcov {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--t-sm);
+  }
+  .mpen .bar {
+    flex: 1;
+    max-width: 160px;
+    margin: 0;
+  }
+  .mcov {
+    font-size: var(--t-xs);
+  }
+  .mecs {
+    padding: 0 2px 8px;
+    font-size: var(--t-xs);
+  }
+  .medges {
+    display: grid;
+    margin: 0 0 12px;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--rule);
+  }
+  .medges li {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    align-items: center;
+    gap: 10px;
+    min-height: 40px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--rule);
+    font-size: var(--t-sm);
+    background-image: linear-gradient(color-mix(in oklch, var(--ink) calc(var(--shade) * 100%), transparent), color-mix(in oklch, var(--ink) calc(var(--shade) * 100%), transparent));
+  }
+  .mcdn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--ink-2);
+  }
+  .mcdn .any {
+    font-size: var(--t-xs);
+  }
+  .medges .rt {
+    text-align: right;
+    font-weight: 560;
+  }
+  .medges .dp {
+    display: inline;
+    text-align: right;
+    font-size: var(--t-xs);
+  }
+  .medges .wide {
+    grid-column: 2 / -1;
+    text-align: right;
+  }
+  .medges .onnet {
+    margin: 0 6px 0 0;
+  }
+  .mlegend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin: 0 0 8px;
+    font-size: var(--t-sm);
+  }
+  .mopen {
+    width: 100%;
+    min-height: 44px;
+    margin-bottom: 12px;
   }
 </style>

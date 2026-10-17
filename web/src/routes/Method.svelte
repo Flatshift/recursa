@@ -8,6 +8,9 @@
   import Icon from '../components/Icon.svelte';
 
   const env = $derived(app.env);
+  // iOS is Darwin: same kernel stamps and link-cause mechanics as macOS, worded for the iPhone.
+  const ios = $derived(env?.platform === 'ios');
+  const here = $derived(ios ? 'this iPhone' : 'this computer');
   const cal = $derived(env?.calibration);
   const m = $derived(app.boot?.method);
   let busy = $state(false);
@@ -70,7 +73,7 @@
       <p>
         Each plain-DNS (UDP) target has its own connected socket, on a measurement thread apart from the web server. Recursa encodes
         each query before the clock starts. It takes the send stamp immediately before the <code>send()</code> system call. The
-        <b>kernel</b> gives the receive stamp when the packet arrives (<code>SO_TIMESTAMP_MONOTONIC</code> on macOS,
+        <b>kernel</b> gives the receive stamp when the packet arrives (<code>SO_TIMESTAMP_MONOTONIC</code> on macOS and iOS,
         <code>SO_TIMESTAMPNS</code> on Linux, <code>SIO_TIMESTAMPING</code> on Windows 10 2004 and later). The time that the
         scheduler needs to wake the thread is not part of the result. Windows stamps where the adapter hands the packet up, so
         it needs the adapter's software timestamping turned on. Where a stamp is unavailable, the receive stamp is taken when
@@ -108,7 +111,7 @@
         </p>
       {/if}
       <p>
-        The <b>loopback floor</b> sends queries through the same code path to a responder on this computer. The responder spins and
+        The <b>loopback floor</b> sends queries through the same code path to a responder on {here}. The responder spins and
         does not sleep, so the floor is only the tool's send path plus two trips through the kernel's loopback stack. It is the
         maximum time that the tool can add. A difference smaller than the floor has no meaning.
       </p>
@@ -130,8 +133,8 @@
         not check the link.
       </p>
       <p>
-        On macOS, Recursa also gives the probable cause. It looks at what the Mac did during the stalls: a ping to itself and the
-        timing of the check (a busy Mac), traffic on the network interface, AirDrop's awdl0 interface, and driver errors and drops.
+        {ios ? 'On iOS' : 'On macOS'}, Recursa also gives the probable cause. It looks at what the {ios ? 'iPhone' : 'Mac'} did during the stalls: a ping to itself and the
+        timing of the check (a busy {ios ? 'iPhone' : 'Mac'}), traffic on the network interface, AirDrop's awdl0 interface, and driver errors and drops.
         If none of these agrees, the cause is the Wi-Fi link.
       </p>
     </section>
@@ -219,7 +222,7 @@
       <p>
         <b>How Recursa finds it.</b> Recursa asks each local resolver for <code>version.bind</code> (a standard CHAOS query).
         dnsmasq replies with its name and version. Pi-hole, which uses dnsmasq, replies with <code>dnsmasq-pi-hole-…</code>. Some
-        configurations do not reply. A resolver that is this computer's default gateway is always a router DNS proxy. Recursa
+        configurations do not reply. A resolver that is {here}'s default gateway is always a router DNS proxy. Recursa
         treats nothing else as a forwarder. Your ISP's resolvers, a public resolver, or a real resolver on your network (Unbound,
         for example) are alternatives, and compete like all others, at any address.
       </p>
@@ -307,7 +310,7 @@
         {/each}
       </ul>
       <p>
-        Recursa also asks each CDN's own nameserver directly from this computer, with no resolver between them. It uses only
+        Recursa also asks each CDN's own nameserver directly from {here}, with no resolver between them. It uses only
         answers marked authoritative, so a device that intercepts port 53 cannot give a false one. That answer is the edge the CDN
         chooses for <b>your own address</b>. A resolver that sends a usable ECS should get the same edge. The table marks each
         resolver whose edges match it (● within about 4% or the run's noise) or nearly match it (○ in the same /24 cluster and
@@ -329,7 +332,7 @@
       <h2>Network intel</h2>
       <ul>
         <li>
-          <b>RPKI:</b> checked on this computer, only if you turn it on in Settings. Recursa downloads the signed route data of the five regional
+          <b>RPKI:</b> checked on {here}, only if you turn it on in Settings. Recursa downloads the signed route data of the five regional
           registries over RRDP and validates it, with built-in code that works like
           <a href="https://www.nlnetlabs.nl/projects/rpki/routinator/" target="_blank" rel="noreferrer">NLnet Labs' Routinator</a>. It keeps a compact
           table of route origins, and applies RFC 6811 to the resolver's prefix and origin AS. It does not read publication points that offer only
@@ -373,13 +376,13 @@
     <section id="ntp">
       <h2>Time (NTP)</h2>
       <p>
-        The Time page asks public NTP servers for the time and compares them. One exchange records four times: T1 when this computer
+        The Time page asks public NTP servers for the time and compares them. One exchange records four times: T1 when {here}
         sent the request, T2 when the server received it, T3 when the server replied, and T4 when the reply arrived. The
         <b>offset</b> is ((T2 − T1) + (T3 − T4)) / 2: how far the server's clock is ahead of yours. The <b>latency</b> is
         (T4 − T1) − (T3 − T2): the round trip minus the server's own time.
       </p>
       <p>
-        T1 and T4 come from this computer's clock. T4 is T1 plus a monotonic round trip, so a clock adjustment cannot change it. The
+        T1 and T4 come from {here}'s clock. T4 is T1 plus a monotonic round trip, so a clock adjustment cannot change it. The
         round trip ends when the kernel receives the reply (a socket receive timestamp), not when the program reads it. So a busy
         computer does not add its own scheduling delay to the server's latency. If the system gives no such stamp, Recursa uses the
         time when the program reads the reply.
@@ -557,6 +560,10 @@ recursa list                # list resolver ids</code></pre>
   }
   article {
     max-width: 74ch;
+    min-width: 0;
+  }
+  article :global(code) {
+    overflow-wrap: anywhere;
   }
   .lede {
     margin-top: 10px;
@@ -653,7 +660,7 @@ recursa list                # list resolver ids</code></pre>
   }
   @media (max-width: 860px) {
     .wrap {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
     }
     .toc {
       display: none;

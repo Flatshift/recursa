@@ -5,13 +5,15 @@
   import type { TestKind } from '../lib/types';
   import { TEST_LABEL, ms } from '../lib/format';
   import { logInvert, logScale, logTicks } from '../lib/scale';
+  import { mobile } from '../lib/api';
 
   let { dists, domain }: { dists: Partial<Record<TestKind, Dist>>; domain: [number, number] } = $props();
   const height = 120;
 
   let w = $state(320);
-  const padL = 30;
-  const padR = 8;
+  // The phone's larger axis labels need wider gutters, or "100%" and the last tick clip.
+  const padL = mobile ? 40 : 30;
+  const padR = mobile ? 14 : 8;
   const padT = 6;
   const padB = 20;
   const x = $derived(logScale(domain, padL, w - padR));

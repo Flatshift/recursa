@@ -1,6 +1,6 @@
 <script lang="ts">
   import { app } from '../lib/store.svelte';
-  import { api } from '../lib/api';
+  import { api, mobile } from '../lib/api';
   import { shortcut } from '../lib/keys';
   import type { Resolver, RunState } from '../lib/types';
   import { capCell } from '../lib/cells';
@@ -84,11 +84,13 @@
 <div class="view-root">
   <Toolbar title="Resolvers" subtitle={last ? `Verified in your latest run, ${ago(last.started_at)}` : 'Published claims until you run a benchmark'}>
     {#snippet actions()}
-      <label class="search">
-        <Icon name="search" size={13} />
-        <span class="visually-hidden">Filter</span>
-        <input bind:this={filterEl} type="search" bind:value={filter} placeholder="Filter" />
-      </label>
+      {#if !mobile}
+        <label class="search">
+          <Icon name="search" size={13} />
+          <span class="visually-hidden">Filter</span>
+          <input bind:this={filterEl} type="search" bind:value={filter} placeholder="Filter" />
+        </label>
+      {/if}
       <button
         class="tb-icon"
         aria-label={app.inspect ? 'Hide inspector' : 'Show inspector'}
@@ -102,6 +104,37 @@
   <div class="view-body" bind:clientWidth={bodyW}>
     <!-- svelte-ignore a11y_no_static_element_interactions (right-click menu for the rows inside) -->
     <div class="content scroll" oncontextmenu={onResolverContext}>
+      {#if mobile}
+        <!-- Phone: the filter spans the page, and each resolver is one row that opens the inspector. -->
+        <label class="search msearch">
+          <Icon name="search" size={15} />
+          <span class="visually-hidden">Filter</span>
+          <input bind:this={filterEl} type="search" bind:value={filter} placeholder="Filter by name, address or blocking" />
+        </label>
+        <div class="mres">
+          {#each groups as [g, rs]}
+            <h3 class="mgrp">{g}</h3>
+            {#each rs as r (r.id)}
+              {@const feed = status.feedFor(r.status_feed)}
+              {@const enc = encrypted(r)}
+              <button class="mrow" class:sel={app.inspect === r.id} data-resolver={r.id} onclick={() => (app.inspect = r.id)}>
+                <span class="mtop">
+                  <span class="nm">
+                    <b>{r.group === 'public' || r.group === 'legacy' ? r.variant || r.provider : `${r.provider} ${r.variant}`}</b>
+                    {#if inLast(r)}<span class="v"><Provenance kind="verified" /></span>{/if}
+                  </span>
+                  {#if feed}<span class="pub"><Glyph status={stateGlyph(feed.state)} size={12} />{stateLabel(feed)}</span>{/if}
+                </span>
+                <span class="mono addr">{r.ipv4[0] ?? r.ipv6[0] ?? r.name}{#if !r.udp}<span class="enc"> · encrypted only</span>{/if}</span>
+                <span class="mcaps">
+                  {#each caps as c}<span class="mc"><span class="mk">{capLabels[c]}</span><Cell c={capCell(last && inLast(r) ? last : null, r, c)} compact /></span>{/each}
+                  {#if enc.length}<span class="mc"><span class="mk">Encrypted</span><span class="t">{enc.map((t) => t.label).join(' · ')}</span></span>{/if}
+                </span>
+              </button>
+            {/each}
+          {/each}
+        </div>
+      {:else}
       <div class="tablewrap panel">
         <table class="sticky-head">
           <thead>
@@ -153,6 +186,7 @@
           {/each}
         </table>
       </div>
+      {/if}
       <p class="legend">
         <span><Provenance kind="verified" /> measured from your network</span>
         <span><Provenance kind="published" /> operator's documentation</span>
@@ -311,5 +345,74 @@
     display: inline-flex;
     gap: 6px;
     align-items: center;
+  }
+  /* Phone list. WebKit draws its own magnifier in a search field; ours is enough. */
+  .msearch {
+    margin-bottom: 8px;
+  }
+  .msearch input {
+    width: 100%;
+    height: 44px;
+    padding-left: 34px;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .msearch input::-webkit-search-decoration {
+    -webkit-appearance: none;
+  }
+  .msearch :global(svg) {
+    left: 12px;
+  }
+  .mres {
+    display: grid;
+  }
+  .mgrp {
+    padding: 18px 0 6px;
+    font-size: var(--t-xs);
+    font-weight: 620;
+    color: var(--ink-2);
+    border-bottom: 1px solid var(--rule);
+  }
+  .mrow {
+    display: grid;
+    gap: 4px;
+    width: 100%;
+    padding: 12px 2px;
+    border: 0;
+    border-bottom: 1px solid var(--rule);
+    background: none;
+    text-align: left;
+    color: var(--ink);
+  }
+  .mrow:active {
+    background: var(--surface-2);
+  }
+  .mrow.sel {
+    background: var(--sel);
+  }
+  .mtop {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .mrow .nm b {
+    font-size: var(--t-base);
+    font-weight: 620;
+  }
+  .mcaps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin-top: 4px;
+    font-size: var(--t-xs);
+  }
+  .mc {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .mk {
+    color: var(--ink-3);
   }
 </style>

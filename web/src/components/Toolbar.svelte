@@ -4,6 +4,7 @@
   import type { Snippet } from 'svelte';
   import { app } from '../lib/store.svelte';
   import { shortcut } from '../lib/keys';
+  import { mobile } from '../lib/api';
   import Icon from './Icon.svelte';
 
   let {
@@ -12,16 +13,29 @@
     center,
     actions,
   }: { title: string; subtitle?: string; center?: Snippet; actions?: Snippet } = $props();
+
+  // On the phone a pushed page (a run, a deep dive, settings) gets a Back chevron instead of
+  // the drawer button; the drawer is still a swipe away.
+  const parent: Record<string, string> = { run: '/', deepdive: '/resolvers', settings: '/' };
+  const back = $derived(mobile ? parent[app.route.name] : undefined);
+  function goBack() {
+    if (history.length > 1) history.back();
+    else app.navigate(back!);
+  }
 </script>
 
 <header class="toolbar chrome" class:bare={!app.sidebar} data-tauri-drag-region="deep">
-  <button
-    class="tb-icon"
-    aria-label={app.sidebar ? 'Hide sidebar' : 'Show sidebar'}
-    aria-pressed={app.sidebar}
-    title="{app.sidebar ? 'Hide' : 'Show'} sidebar ({shortcut('ctrl+cmd+S')})"
-    onclick={() => app.setSidebar(!app.sidebar)}><Icon name="sidebar" size={16} /></button
-  >
+  {#if back}
+    <button class="tb-icon" aria-label="Back" onclick={goBack}><Icon name="chevron-left" size={22} /></button>
+  {:else}
+    <button
+      class="tb-icon"
+      aria-label={app.sidebar ? 'Hide sidebar' : 'Show sidebar'}
+      aria-pressed={app.sidebar}
+      title={mobile ? undefined : `${app.sidebar ? 'Hide' : 'Show'} sidebar (${shortcut('ctrl+cmd+S')})`}
+      onclick={() => app.setSidebar(!app.sidebar, !mobile)}><Icon name={mobile ? 'menu' : 'sidebar'} size={mobile ? 20 : 16} /></button
+    >
+  {/if}
   <div class="title">
     <h1>{title}</h1>
     {#if subtitle}<p>{subtitle}</p>{/if}
@@ -46,6 +60,36 @@
      measures where they end (--lights), and they're gone in full screen. */
   :global(html.mac) .toolbar.bare {
     padding-left: calc(var(--lights, 78px) + 10px);
+  }
+  :global(html.mobile) .toolbar {
+    box-sizing: content-box;
+    padding-top: env(safe-area-inset-top);
+    padding-left: calc(10px + env(safe-area-inset-left));
+    padding-right: calc(14px + env(safe-area-inset-right));
+    gap: 6px;
+  }
+  :global(html.mobile) .toolbar :global(.tb-icon) {
+    width: 44px;
+    height: 44px;
+    margin-left: -8px;
+    color: var(--ink);
+  }
+  :global(html.mobile) h1 {
+    font-size: var(--t-md);
+  }
+  :global(html.mobile) .title p {
+    display: none;
+  }
+  /* Touch has no hover: the button tints only while pressed. */
+  :global(html.mobile) .toolbar :global(.tb-icon:hover) {
+    background: transparent;
+  }
+  :global(html.mobile) .toolbar :global(.tb-icon:active) {
+    background: var(--surface-2);
+  }
+  /* A page with its own view switcher gives it the room; the chevron already says where we are. */
+  :global(html.mobile) .toolbar:has(:global(.center > *)) .title {
+    display: none;
   }
   /* Full screen: the title bar slides down over the window's top edge when the pointer
      reaches it, and the toolbar rides down with it, as a native one does. The app reports
@@ -140,6 +184,10 @@
   @container toolbar (max-width: 560px) {
     .title {
       display: none;
+    }
+    /* The phone's navigation bar keeps its title; the page's own controls make room. */
+    :global(html.mobile) .title {
+      display: block;
     }
   }
 </style>

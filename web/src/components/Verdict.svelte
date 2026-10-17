@@ -7,6 +7,7 @@
   import Info from './Info.svelte';
   import Icon from './Icon.svelte';
   import Mark from './Mark.svelte';
+  import { mobile } from '../lib/api';
 
   import type { Snippet } from 'svelte';
 
@@ -32,6 +33,9 @@
 
   const sentence = $derived(v?.sentence ?? live?.sentence ?? '');
   const detail = $derived(v?.detail ?? live?.detail ?? '');
+  // Phone: a long explanation shows three lines until asked for the rest, so the ranking reaches the first screen.
+  let more = $state(false);
+  const clamp = $derived(mobile && !more && detail.length > 150);
   const ghostGoals = $derived(['Fastest answers', ...(cdn ? ['Nearest CDN edges'] : []), 'Best protection', 'Most private', 'Steadiest']);
 </script>
 
@@ -41,9 +45,17 @@
       <!-- The one place the brand shows inside the Mac app, so a screenshot of the results says where they came from. -->
       <p class="eyebrow"><Mark size={15} />Recursa</p>
       <h2 id="verdict-h">{sentence}</h2>
-      {#if detail}<p class="detail">{detail}</p>{/if}
+      {#if detail}
+        <p class="detail" class:clamp>{detail}</p>
+        {#if clamp}<button class="more" onclick={() => (more = true)}>More</button>{/if}
+      {/if}
       {#if status}{@render status()}{/if}
-      {#if caution}
+      {#if caution && mobile}
+        <details class="caution-d">
+          <summary><Icon name="info" size={14} />No reliability record</summary>
+          <p>{caution}</p>
+        </details>
+      {:else if caution}
         <p class="caution" role="note"><Icon name="info" size={14} /><span><b>No reliability record.</b> {caution}</span></p>
       {/if}
       <div class="rule-line">
@@ -308,5 +320,99 @@
     .verdict {
       padding: 4px 0 0;
     }
+  }
+  /* Phone: the sentence, then the ranking, then the picks as one row per goal with their evidence in full. The
+     lead's parts join the grid so the ranking can sit between the sentence and the picks. */
+  :global(html.mobile) .verdict {
+    padding: 0;
+  }
+  :global(html.mobile) .grid {
+    gap: 10px;
+  }
+  :global(html.mobile) .lead {
+    display: contents;
+  }
+  :global(html.mobile) .eyebrow {
+    display: none;
+  }
+  :global(html.mobile) h2 {
+    font-size: var(--t-lg);
+    max-width: none;
+  }
+  :global(html.mobile) .detail {
+    margin-top: -4px;
+    font-size: var(--t-sm);
+  }
+  .detail.clamp {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+  }
+  .more {
+    justify-self: start;
+    min-height: 32px;
+    margin-top: -10px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font-size: var(--t-sm);
+    font-weight: 560;
+    color: var(--ink);
+  }
+  .caution-d {
+    font-size: var(--t-sm);
+    color: var(--ink-2);
+  }
+  .caution-d summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    color: var(--ink);
+    font-weight: 560;
+    list-style: none;
+  }
+  .caution-d summary::-webkit-details-marker {
+    display: none;
+  }
+  .caution-d p {
+    margin-top: 8px;
+  }
+  :global(html.mobile) .extra {
+    order: 1;
+    margin: 2px 0 0;
+    padding: 12px 12px 10px;
+  }
+  :global(html.mobile) .rule-line {
+    order: 2;
+    margin-top: 6px;
+    font-size: var(--t-sm);
+  }
+  :global(html.mobile) .picks {
+    order: 3;
+    margin-top: -6px;
+  }
+  :global(html.mobile) .pick,
+  :global(html.mobile) .pick:first-child {
+    grid-template-columns: 104px minmax(0, 1fr);
+    gap: 10px;
+    padding: 9px 0;
+    border-top: 1px solid var(--rule);
+  }
+  :global(html.mobile) dt {
+    font-size: var(--t-sm);
+    padding-top: 1px;
+  }
+  :global(html.mobile) .name {
+    font-size: var(--t-base);
+  }
+  :global(html.mobile) .ev {
+    font-size: var(--t-sm);
+    display: block;
   }
 </style>

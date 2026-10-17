@@ -193,8 +193,8 @@ impl UdpX {
                 let h = &*c;
                 let data = libc::CMSG_DATA(c);
                 match (h.cmsg_level, h.cmsg_type) {
-                    // macOS reports the IPv4 TTL as one byte, Linux as an int.
-                    #[cfg(target_os = "macos")]
+                    // macOS and iOS report the IPv4 TTL as one byte, Linux as an int.
+                    #[cfg(any(target_os = "macos", target_os = "ios"))]
                     (libc::IPPROTO_IP, libc::IP_RECVTTL) => ttl = Some(*data),
                     #[cfg(target_os = "linux")]
                     (libc::IPPROTO_IP, libc::IP_TTL) => ttl = Some(std::ptr::read_unaligned(data as *const libc::c_int) as u8),
@@ -214,9 +214,9 @@ impl UdpX {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 const SO_TIMESTAMP_MONOTONIC: libc::c_int = 0x0800;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 const SCM_TIMESTAMP_MONOTONIC: libc::c_int = 0x04;
 
 #[cfg(unix)]
@@ -228,13 +228,13 @@ fn enable_rx_timestamps(sock: &socket2::Socket) -> bool {
 #[cfg(unix)]
 pub(crate) fn enable_rx_timestamps_fd(fd: libc::c_int) -> bool {
     let one: libc::c_int = 1;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     let opt = SO_TIMESTAMP_MONOTONIC;
     #[cfg(target_os = "linux")]
     let opt = libc::SO_TIMESTAMPNS;
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
     return false;
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
     unsafe {
         libc::setsockopt(fd, libc::SOL_SOCKET, opt, &one as *const _ as *const libc::c_void, std::mem::size_of_val(&one) as libc::socklen_t)
             == 0
@@ -263,7 +263,7 @@ unsafe fn arrival_stamp(c: *const libc::cmsghdr) -> Option<u64> {
         if h.cmsg_level != libc::SOL_SOCKET {
             return None;
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         if h.cmsg_type == SCM_TIMESTAMP_MONOTONIC {
             let ticks = std::ptr::read_unaligned(libc::CMSG_DATA(c) as *const u64);
             return Some(clock::ticks_to_ns(ticks));

@@ -6,12 +6,18 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+#[cfg(desktop)]
+use tauri::Manager;
 use tauri::async_runtime::JoinHandle;
 use tauri::ipc::{Channel, InvokeResponseBody, Response};
+#[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::{AppHandle, Manager, State, WebviewWindow};
+use tauri::{AppHandle, State, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::sync::broadcast::error::RecvError;
+
+#[cfg(desktop)]
+use crate::shell::MAIN;
 
 type App<'a> = State<'a, Arc<AppState>>;
 
@@ -37,6 +43,7 @@ pub struct Streams(Mutex<HashMap<u32, JoinHandle<()>>>);
 
 impl Streams {
     /// Stop every forwarder (the window that owned the channels is gone).
+    #[cfg(desktop)]
     pub fn clear(&self) {
         for (_, task) in self.0.lock().unwrap().drain() {
             task.abort();
@@ -85,12 +92,14 @@ pub fn unsubscribe(streams: State<'_, Streams>, id: u32) {
 /// native alert sheet instead.
 #[tauri::command]
 pub async fn confirm(handle: AppHandle, message: String, ok: String) -> bool {
+    #[cfg_attr(mobile, allow(unused_mut))]
     let mut dialog = handle
         .dialog()
         .message(message)
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(ok, "Cancel".into()));
-    if let Some(w) = handle.get_webview_window(crate::shell::MAIN) {
+    #[cfg(desktop)]
+    if let Some(w) = handle.get_webview_window(MAIN) {
         dialog = dialog.parent(&w);
     }
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -103,11 +112,24 @@ pub async fn confirm(handle: AppHandle, message: String, ok: String) -> bool {
 /// Save a run through the native save panel. Returns the file name, or null if cancelled.
 #[tauri::command]
 pub async fn export_run(handle: AppHandle, app: App<'_>, id: String, format: String) -> Result<Option<String>, ApiError> {
-    let csv = format == "csv";
-    let x = app.export(&id, csv).ok_or_else(|| ApiError::new(404, "No such run."))?;
+    #[cfg(mobile)]
+    {
+        let _ = (handle, app, id, format);
+        Err(ApiError::new(501, "Export isn't available on this platform yet."))
+    }
+    #[cfg(desktop)]
+    {
+        let csv = format == "csv";
+        let x = app.export(&id, csv).ok_or_else(|| ApiError::new(404, "No such run."))?;
+        export_dialog(handle, csv, x).await
+    }
+}
+
+#[cfg(desktop)]
+async fn export_dialog(handle: AppHandle, csv: bool, x: recursa_engine::app::Export) -> Result<Option<String>, ApiError> {
     let (label, ext) = if csv { ("CSV", "csv") } else { ("JSON", "json") };
     let mut dialog = handle.dialog().file().set_file_name(&x.filename).add_filter(label, &[ext]);
-    if let Some(w) = handle.get_webview_window(crate::shell::MAIN) {
+    if let Some(w) = handle.get_webview_window(MAIN) {
         dialog = dialog.set_parent(&w);
     }
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -129,22 +151,42 @@ pub fn notify(handle: AppHandle, title: String, body: String) {
     }
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 pub fn open_settings(handle: AppHandle, section: Option<String>) {
     crate::shell::show_settings(&handle, section.as_deref());
 }
 
+#[cfg(mobile)]
+#[tauri::command]
+pub fn open_settings(_handle: AppHandle, _section: Option<String>) {}
+
+#[cfg(desktop)]
 #[tauri::command]
 pub fn get_login(handle: AppHandle) -> bool {
     crate::shell::login_enabled(&handle)
 }
 
+#[cfg(mobile)]
+#[tauri::command]
+pub fn get_login(_handle: AppHandle) -> bool {
+    false
+}
+
+#[cfg(desktop)]
 #[tauri::command]
 pub fn set_login(handle: AppHandle, enabled: bool) -> Result<bool, String> {
     crate::shell::set_login(&handle, enabled)
 }
 
+#[cfg(mobile)]
+#[tauri::command]
+pub fn set_login(_handle: AppHandle, _enabled: bool) -> Result<bool, String> {
+    Err("Launch at login isn't available on iOS.".into())
+}
+
 #[derive(Deserialize)]
+#[cfg_attr(mobile, allow(dead_code))]
 pub(crate) struct MenuEntry {
     id: String,
     label: String,
@@ -153,6 +195,7 @@ pub(crate) struct MenuEntry {
 
 /// Pop up a native menu at the pointer. A pick comes back to the window as an
 /// `recursa:context` event carrying "<seq>:<id>"; dismissing it sends nothing.
+#[cfg(desktop)]
 #[tauri::command]
 pub fn context_menu(window: WebviewWindow, seq: u32, items: Vec<MenuEntry>) -> Result<(), String> {
     let app = window.app_handle();
@@ -168,6 +211,12 @@ pub fn context_menu(window: WebviewWindow, seq: u32, items: Vec<MenuEntry>) -> R
         r.map_err(|e| e.to_string())?;
     }
     window.popup_menu(&menu).map_err(|e| e.to_string())
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub fn context_menu(_window: WebviewWindow, _seq: u32, _items: Vec<MenuEntry>) -> Result<(), String> {
+    Err("Native menus aren't available here.".into())
 }
 
 /// Put text on the general pasteboard. A pick from a native menu isn't a user gesture

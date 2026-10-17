@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { app } from '../lib/store.svelte';
-  import { api, confirmAction } from '../lib/api';
+  import { api, confirmAction, mobile } from '../lib/api';
   import { status, stateLabel, stateGlyph, localNote } from '../lib/status.svelte';
   import type { MonitorConfig, MonitorHist, MonitorHistory } from '../lib/types';
   import { ago, day, list, ms, pct, plural, when } from '../lib/format';
@@ -219,11 +219,14 @@
 <div class="view-root">
   <Toolbar title="Reliability" subtitle="What Recursa measured from your network, kept apart from what operators publish">
     {#snippet center()}
-      <div class="segmented" role="group" aria-label="Time range">
-        {#each RANGES as [h, label]}
-          <button aria-pressed={hours === h} onclick={() => (hours = h)}>{label}</button>
-        {/each}
-      </div>
+      <!-- Phone: with nothing recorded there is nothing to range over. -->
+      {#if !mobile || verdict}
+        <div class="segmented" role="group" aria-label="Time range">
+          {#each RANGES as [h, label]}
+            <button aria-pressed={hours === h} onclick={() => (hours = h)}>{label}</button>
+          {/each}
+        </div>
+      {/if}
     {/snippet}
   </Toolbar>
   <div class="view-body">
@@ -352,8 +355,8 @@
               <p>Each operator's own status page, read where it publishes a machine-readable feed. It describes their service as a whole, not what reaches your network.</p>
             </Info>
           </div>
-          <button class="btn ghost sm" onclick={refresh} disabled={refreshing || status.data?.measuring}>
-            <Icon name="refresh" size={13} />{refreshing ? 'Refreshing…' : 'Refresh'}
+          <button class="btn ghost sm" onclick={refresh} disabled={refreshing || status.data?.measuring} aria-label={refreshing ? 'Refreshing' : 'Refresh'}>
+            <Icon name="refresh" size={13} /><span class="lbl">{refreshing ? 'Refreshing…' : 'Refresh'}</span>
           </button>
         </div>
         {#if status.data?.measuring}<p class="hint">Paused while a benchmark is measuring, so status checks don't add network noise.</p>{/if}
@@ -607,6 +610,10 @@
     align-items: center;
     gap: 12px;
     margin-bottom: 10px;
+  }
+  /* Phone: Refresh is icon-only so the heading keeps one line. */
+  :global(html.mobile) .bh .lbl {
+    display: none;
   }
   .hint {
     font-size: var(--t-xs);
@@ -878,5 +885,33 @@
     .last {
       margin-left: 0;
     }
+  }
+  :global(html.mobile) h2#rv-h {
+    font-size: var(--t-xl);
+  }
+  :global(html.mobile) .pick,
+  :global(html.mobile) .pick:first-child {
+    grid-template-columns: 112px minmax(0, 1fr);
+  }
+  /* Outages: the missed-cycle count is the same fact as the duration, so the phone drops it. */
+  :global(html.mobile) .outs th:nth-child(4),
+  :global(html.mobile) .outs td:nth-child(4) {
+    display: none;
+  }
+  :global(html.mobile) .outs td {
+    padding: 10px 0;
+  }
+  :global(html.mobile) .outs td + td,
+  :global(html.mobile) .outs th + th {
+    padding-left: 10px;
+  }
+  :global(html.mobile) .mcfg {
+    gap: 10px 14px;
+  }
+  :global(html.mobile) .pickers summary {
+    min-height: 44px;
+  }
+  :global(html.mobile) .chip {
+    min-height: 36px;
   }
 </style>
