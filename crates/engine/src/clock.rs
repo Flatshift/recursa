@@ -3,6 +3,8 @@
 //! * macOS: `mach_absolute_time` ticks, the same domain the kernel uses for
 //!   `SO_TIMESTAMP_MONOTONIC`, converted to nanoseconds.
 //! * Linux: `CLOCK_REALTIME` nanoseconds, the domain of `SO_TIMESTAMPNS`.
+//! * Windows: `QueryPerformanceCounter` ticks, the domain of `SO_TIMESTAMP` control messages
+//!   (`SIO_TIMESTAMPING`), converted to nanoseconds.
 //! * Elsewhere: nanoseconds since process start (userspace stamps only).
 
 #[cfg(target_os = "macos")]
@@ -55,7 +57,38 @@ mod imp {
     pub const SOURCE: &str = "CLOCK_REALTIME / SO_TIMESTAMPNS";
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(windows)]
+mod imp {
+    use std::sync::OnceLock;
+    use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+
+    fn frequency() -> u64 {
+        static F: OnceLock<u64> = OnceLock::new();
+        *F.get_or_init(|| {
+            let mut f = 0i64;
+            unsafe { QueryPerformanceFrequency(&mut f) };
+            f.max(1) as u64
+        })
+    }
+
+    #[inline]
+    pub fn now_ns() -> u64 {
+        let mut t = 0i64;
+        unsafe { QueryPerformanceCounter(&mut t) };
+        ticks_to_ns(t as u64)
+    }
+
+    /// Performance-counter ticks (what `SO_TIMESTAMP` carries) to nanoseconds.
+    #[inline]
+    pub fn ticks_to_ns(t: u64) -> u64 {
+        let f = frequency();
+        (t / f) * 1_000_000_000 + (t % f) * 1_000_000_000 / f
+    }
+
+    pub const SOURCE: &str = "QueryPerformanceCounter / SO_TIMESTAMP";
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 mod imp {
     use std::sync::OnceLock;
     use std::time::Instant;

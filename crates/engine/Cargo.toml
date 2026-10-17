@@ -28,7 +28,8 @@ tokio-rustls.workspace = true
 webpki-roots.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-# Adapters, their DNS servers and gateways (IP Helper), ICMP echoes for the link check, measurement-thread priority.
+# Adapters, their DNS servers and gateways (IP Helper), ICMP echoes for the link check, measurement-thread priority,
+# the performance counter and SIO_TIMESTAMPING receive stamps.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",
@@ -36,6 +37,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Networking_WinSock",
     "Win32_Security",
     "Win32_System_IO",
+    "Win32_System_Performance",
     "Win32_System_Threading",
 ] }
 

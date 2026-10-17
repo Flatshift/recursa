@@ -2,6 +2,14 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- **Kernel receive stamps on Windows**: UDP answers are stamped by the network stack as they arrive
+  (`SIO_TIMESTAMPING`, Windows 10 2004 and later) instead of when the measurement thread wakes up, and the engine's
+  clock is the performance counter those stamps use. The Conditions panel shows the clock source, and the
+  calibration reports the kernel-vs-userspace gap on Windows as it does on macOS and Linux. Older Windows keeps
+  the userspace stamps.
+
 ## 0.3.4 (2026-10-17)
 
 - **EDNS Client Subnet** is checked against four authorities (Akamai, Fastly, Google, PowerDNS) instead of two, so a
