@@ -2,7 +2,7 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
-## 0.2.0 (unreleased)
+## 0.2.1 (2026-10-17)
 
 - **Accurate mode** keeps one query in flight per resolver with sends 4 ms apart, so a run with many resolvers
   finishes in a fraction of the time and a slow resolver no longer delays the others.
