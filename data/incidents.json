@@ -1,0 +1,65 @@
+[
+  {
+    "id": "cf-2025-07-14", "providers": ["cloudflare", "cloudflare-security", "cloudflare-family"],
+    "date": "2025-07-14", "start": "2025-07-14T21:52:00Z", "end": "2025-07-14T22:54:00Z",
+    "kind": "outage", "confidence": "operator", "scope": "Global",
+    "title": "1.1.1.1 unreachable worldwide for 62 minutes",
+    "summary": "A configuration error introduced weeks earlier tied the resolver's prefixes to a new service topology. A later change triggered a global routing refresh that withdrew 1.1.1.1 prefixes from the Internet.",
+    "cause": "Internal configuration error (not an attack or BGP hijack)",
+    "source": "https://blog.cloudflare.com/cloudflare-1-1-1-1-incident-on-july-14-2025"
+  },
+  {
+    "id": "cf-2024-06-27", "providers": ["cloudflare", "cloudflare-security", "cloudflare-family"],
+    "date": "2024-06-27", "start": "2024-06-27T18:51:00Z", "end": "2024-06-28T02:28:00Z",
+    "kind": "routing", "confidence": "operator", "scope": "300+ networks in 70 countries",
+    "title": "BGP hijack and route leak of 1.1.1.1",
+    "summary": "AS267613 originated 1.1.1.1/32 and a separate leak spread 1.1.1.0/24. Networks that do not enforce RPKI route-origin validation followed the bogus routes, so some users could not reach the resolver.",
+    "cause": "External BGP hijack and route leak; RPKI ROV adoption limited the blast radius",
+    "source": "https://blog.cloudflare.com/cloudflare-1111-incident-on-june-27-2024"
+  },
+  {
+    "id": "cf-2023-10-04", "providers": ["cloudflare", "cloudflare-security", "cloudflare-family"],
+    "date": "2023-10-04", "start": "2023-10-04T07:00:00Z", "end": "2023-10-04T11:00:00Z",
+    "kind": "degradation", "confidence": "operator", "scope": "Global, partial",
+    "title": "SERVFAIL for some lookups after root-zone ZONEMD change",
+    "summary": "Resolver software could not parse the root zone's new ZONEMD record. Part of the fleet served a stale root zone whose signatures expired, and DNSSEC validation failed for some queries.",
+    "cause": "Software bug handling a new root zone record type",
+    "source": "https://blog.cloudflare.com/1-1-1-1-lookup-failures-on-october-4th-2023"
+  },
+  {
+    "id": "quad9-2026-05-08", "providers": ["quad9", "quad9-ecs", "quad9-unsecured"],
+    "date": "2026-05-08", "start": "2026-05-08T00:00:00Z", "end": null,
+    "kind": "degradation", "confidence": "operator", "scope": "quad9.net zone",
+    "title": "quad9.net names failed to resolve for up to ~40 minutes",
+    "summary": "Undocumented zone-transfer dependencies broke during maintenance. Resolution through 9.9.9.9 kept working, but new DoH/DoT clients that needed to resolve dns.quad9.net could not connect.",
+    "cause": "Maintenance change broke legacy zone imports",
+    "source": "https://quad9.net/news/blog/analysis-of-outage-8-may-2026/"
+  },
+  {
+    "id": "de-2026-05-05", "providers": ["*"],
+    "date": "2026-05-05", "start": null, "end": null,
+    "kind": "ecosystem", "confidence": "operator", "scope": "All DNSSEC-validating resolvers, .de names",
+    "title": ".de DNSSEC signing failure broke validation for ~3 hours",
+    "summary": "A defect in DENIC's key-rollover software published bad .de signatures. Validating resolvers (Google, Cloudflare and most others) returned SERVFAIL for .de names until operators added overrides or DENIC fixed the zone.",
+    "cause": "TLD operator software defect (not resolver-specific)",
+    "source": "https://blog.denic.de/en/final-report-dns-outage-of-5-may-2026/"
+  },
+  {
+    "id": "google-2026-01-09", "providers": ["google"],
+    "date": "2026-01-09", "start": "2026-01-09T19:57:00Z", "end": null,
+    "kind": "user-reported", "confidence": "unconfirmed", "scope": "Unknown",
+    "title": "Spike in user reports of Google Public DNS problems",
+    "summary": "Downdetector recorded a surge of user reports. Google published no incident or root cause.",
+    "cause": "Unconfirmed",
+    "source": "https://x.com/downdetector/status/2009716214998675766"
+  },
+  {
+    "id": "quad9-2025-12-15", "providers": ["quad9", "quad9-ecs", "quad9-unsecured"],
+    "date": "2025-12-15", "start": null, "end": null,
+    "kind": "change", "confidence": "operator", "scope": "DoH clients",
+    "title": "DoH over HTTP/1.1 discontinued",
+    "summary": "Quad9 stopped serving DNS-over-HTTPS over HTTP/1.1. Older clients, including some routers, must use HTTP/2 or DoT.",
+    "cause": "Planned change",
+    "source": "https://www.alternativeto.net/news/2025/12/quad9-dns-to-end-dns-over-https-http-1-1-support-by-december-2025/"
+  }
+]

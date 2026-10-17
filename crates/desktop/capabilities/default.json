@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main and Settings windows: app commands are allowed by default; this adds event listening plus title-bar dragging and zoom.",
+  "windows": ["main", "settings"],
+  "permissions": ["core:event:default", "core:window:allow-start-dragging", "core:window:allow-internal-toggle-maximize"]
+}

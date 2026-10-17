@@ -1,0 +1,38 @@
+[package]
+name = "recursa-desktop"
+description = "Recursa as a native desktop app: the engine in-process, the UI in the system WebView."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2.7.1", features = [] }
+
+[dependencies]
+recursa-engine.workspace = true
+open.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tauri = { version = "2.12.1", features = ["tray-icon", "image-png"] }
+tauri-plugin-autostart = "2.7.0"
+tauri-plugin-dialog = "2.8.1"
+tauri-plugin-single-instance = "2.5.2"
+tauri-plugin-window-state = "2.5.0"
+tauri-plugin-notification = "2.5.1"
+tauri-plugin-clipboard-manager = "2.5.0"
+
+# Only for the alert shown when the app can't start (no window exists to attach a dialog to).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+objc2-app-kit = "0.3.2"
+objc2-foundation = "0.3.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
+[features]
+# Serve the embedded UI (web/dist) instead of the Vite dev server. `tauri build` turns it on.
+custom-protocol = ["tauri/custom-protocol"]
+default = ["rpki-local"]
+rpki-local = ["recursa-engine/rpki-local"]

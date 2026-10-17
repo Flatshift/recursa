@@ -1,0 +1,620 @@
+/* Recursa design tokens. Values are OKLCH except chart colors, which are hex. The chrome is monochrome: the
+   primary action, selection and focus are ink, so the only hues on screen are data series and status.
+   Neutrals carry a trace of the icon's plum (hue 285). */
+
+@font-face {
+  font-family: 'Recursive Variable';
+  font-style: oblique 0deg 15deg;
+  font-display: swap;
+  font-weight: 300 1000;
+  src: url('./fonts/recursive-latin-ext-full-normal.woff2') format('woff2-variations');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Recursive Variable';
+  font-style: oblique 0deg 15deg;
+  font-display: swap;
+  font-weight: 300 1000;
+  src: url('./fonts/recursive-latin-full-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD, U+2190-21FF, U+2500-25FF;
+}
+
+:root {
+  color-scheme: light;
+  --bg: oklch(0.978 0.002 285);
+  --surface: oklch(0.995 0.001 285);
+  --surface-2: oklch(0.967 0.003 285);
+  --surface-3: oklch(0.938 0.004 285);
+  --ink: oklch(0.205 0.008 285);
+  --ink-2: oklch(0.41 0.008 285);
+  --ink-3: oklch(0.51 0.007 285);
+  --rule: oklch(0.912 0.003 285);
+  --rule-2: oklch(0.84 0.004 285);
+  --accent: oklch(0.205 0.008 285);
+  --accent-hover: oklch(0.32 0.008 285);
+  --accent-ink: oklch(0.985 0.002 285);
+  --accent-soft: oklch(0.935 0.004 285);
+  --accent-text: oklch(0.205 0.008 285);
+  --focus: oklch(0.205 0.008 285);
+  /* A selected row or item: a neutral step, never a hue. */
+  --sel: oklch(0.928 0.005 285);
+  /* Fill opacity of a latency density ridge. */
+  --ridge-a: 0.15;
+
+  /* Chart series: validated all-pairs (CVD ΔE ≥ 9.2, normal ≥ 24) on #fff. */
+  --s-cached: #2a78d6;
+  --s-uncached: #eb6834;
+  --s-tld: #1baf7a;
+  --s-neutral: oklch(0.62 0.008 285);
+
+  /* Status: glyph colors only; meaning always also carried by shape and text. */
+  --good: #0ca30c;
+  --warning: #a06800; /* 4.6:1 on the surface, so it also works as text */
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --warn-soft: oklch(0.96 0.045 85);
+
+  --shadow-sheet: 0 24px 60px -20px oklch(0.2 0.01 285 / 0.28), 0 0 0 1px oklch(0.2 0.01 285 / 0.06);
+  --backdrop: oklch(0.2 0.01 285 / 0.28);
+  --shadow-pop: 0 10px 30px -12px oklch(0.2 0.01 285 / 0.3), 0 0 0 1px oklch(0.2 0.01 285 / 0.08);
+
+  --font: 'Recursive Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --t-2xs: 0.6875rem; /* chart axes and chips only */
+  --t-xs: 0.75rem;
+  --t-sm: 0.8125rem;
+  --t-base: 0.9375rem;
+  --t-md: 1.0625rem;
+  --t-lg: 1.25rem;
+  --t-xl: 1.5rem;
+  --t-2xl: 1.875rem;
+
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 140ms;
+  --dur: 200ms;
+
+  --z-sticky: 10;
+  --z-dropdown: 20;
+  --z-backdrop: 30;
+  --z-sheet: 40;
+  --z-toast: 50;
+  --z-tooltip: 60;
+
+  --page-max: 1380px;
+  --gutter: clamp(16px, 3vw, 32px);
+
+  /* App shell: a second neutral layer for the sidebar, a toolbar that doubles as the title
+     bar, and a status bar. */
+  --side: oklch(0.958 0.003 285);
+  --side-sel: oklch(0.912 0.005 285);
+  /* Transport badges (UDP, TCP, DoT, DoH): a fill only, kept off the chart series hues (blue, orange, green). */
+  --tx-udp: oklch(0.94 0.006 240);
+  --tx-tcp: oklch(0.89 0.06 300);
+  --tx-dot: oklch(0.9 0.06 205);
+  --tx-doh: oklch(0.89 0.06 10);
+  --brand-answer: var(--s-cached);
+  --bar-h: 54px;
+  --status-h: 26px;
+  --side-w: 224px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: oklch(0.158 0.004 285);
+    --surface: oklch(0.19 0.005 285);
+    --surface-2: oklch(0.222 0.006 285);
+    --surface-3: oklch(0.256 0.007 285);
+    --ink: oklch(0.95 0.003 285);
+    --ink-2: oklch(0.8 0.006 285);
+    --ink-3: oklch(0.685 0.007 285);
+    --rule: oklch(0.282 0.006 285);
+    --rule-2: oklch(0.36 0.007 285);
+    --accent: oklch(0.93 0.003 285);
+    --accent-hover: oklch(0.99 0.002 285);
+    --accent-ink: oklch(0.18 0.005 285);
+    --accent-soft: oklch(0.29 0.006 285);
+    --accent-text: oklch(0.95 0.003 285);
+    --focus: oklch(0.93 0.003 285);
+    --sel: oklch(0.275 0.007 285);
+    --ridge-a: 0.2;
+    --s-cached: #3987e5;
+    --s-uncached: #d95926;
+    --s-tld: #199e70;
+    --s-neutral: oklch(0.6 0.008 285);
+    --warning: #fab219;
+    --warn-soft: oklch(0.3 0.05 80);
+    --shadow-sheet: 0 24px 60px -16px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.07);
+    --backdrop: oklch(0.05 0.005 285 / 0.55);
+    --shadow-pop: 0 10px 30px -10px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.09);
+    --side: oklch(0.175 0.005 285);
+    --side-sel: oklch(0.27 0.007 285);
+    --tx-udp: oklch(0.3 0.008 240);
+    --tx-tcp: oklch(0.37 0.08 300);
+    --tx-dot: oklch(0.37 0.062 205);
+    --tx-doh: oklch(0.37 0.08 10);
+  }
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: oklch(0.158 0.004 285);
+  --surface: oklch(0.19 0.005 285);
+  --surface-2: oklch(0.222 0.006 285);
+  --surface-3: oklch(0.256 0.007 285);
+  --ink: oklch(0.95 0.003 285);
+  --ink-2: oklch(0.8 0.006 285);
+  --ink-3: oklch(0.685 0.007 285);
+  --rule: oklch(0.282 0.006 285);
+  --rule-2: oklch(0.36 0.007 285);
+  --accent: oklch(0.93 0.003 285);
+  --accent-hover: oklch(0.99 0.002 285);
+  --accent-ink: oklch(0.18 0.005 285);
+  --accent-soft: oklch(0.29 0.006 285);
+  --accent-text: oklch(0.95 0.003 285);
+  --focus: oklch(0.93 0.003 285);
+  --sel: oklch(0.275 0.007 285);
+  --ridge-a: 0.2;
+  --s-cached: #3987e5;
+  --s-uncached: #d95926;
+  --s-tld: #199e70;
+  --s-neutral: oklch(0.6 0.008 285);
+  --warning: #fab219;
+  --warn-soft: oklch(0.3 0.05 80);
+  --shadow-sheet: 0 24px 60px -16px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.07);
+  --backdrop: oklch(0.05 0.005 285 / 0.55);
+  --shadow-pop: 0 10px 30px -10px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.09);
+  --side: oklch(0.175 0.005 285);
+  --side-sel: oklch(0.27 0.007 285);
+  --tx-udp: oklch(0.3 0.008 240);
+  --tx-tcp: oklch(0.37 0.08 300);
+  --tx-dot: oklch(0.37 0.062 205);
+  --tx-doh: oklch(0.37 0.08 10);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* The window is the layout: panes scroll on their own, the page never does. */
+body,
+#app {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: var(--t-base);
+  line-height: 1.5;
+  font-variation-settings: 'MONO' 0, 'CASL' 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 620;
+  line-height: 1.2;
+  text-wrap: balance;
+  letter-spacing: -0.01em;
+}
+
+p {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+/* Links are ink with a quiet rule under them; the rule darkens on hover. */
+a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--rule-2);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-color var(--dur-fast) var(--ease-out);
+}
+a:hover {
+  text-decoration-color: currentColor;
+}
+
+/* Focus rings for the keyboard only. */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+.mono,
+code,
+kbd {
+  font-family: var(--font);
+  font-variation-settings: 'MONO' 1, 'CASL' 0;
+}
+
+.num {
+  font-variation-settings: 'MONO' 1, 'CASL' 0;
+  font-variant-numeric: tabular-nums;
+}
+
+kbd {
+  font-size: 0.85em;
+  padding: 0 0.35em;
+  border: 1px solid var(--rule-2);
+  border-bottom-width: 2px;
+  border-radius: var(--r-sm);
+  color: var(--ink-2);
+  background: var(--surface);
+}
+
+code {
+  font-size: 0.92em;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  /* Controls in an app use the arrow cursor; the hand is for links that leave it. */
+  cursor: default;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--rule-2);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--t-sm);
+  font-weight: 560;
+  cursor: default;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.btn:hover {
+  background: var(--surface-2);
+}
+.btn:active {
+  background: var(--surface-3);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.btn.primary:active {
+  transform: translateY(0.5px);
+}
+.btn.primary:hover {
+  background: var(--accent-hover);
+}
+.btn.ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-2);
+}
+.btn.ghost:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.btn.danger {
+  color: var(--critical);
+}
+.btn.sm {
+  height: 28px;
+  padding: 0 10px;
+  font-size: var(--t-xs);
+}
+
+input[type='text'],
+input[type='number'],
+input[type='url'],
+select {
+  font: inherit;
+  font-size: var(--t-sm);
+  height: 34px;
+  padding: 0 10px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--rule-2);
+  background: var(--surface);
+  color: var(--ink);
+}
+input::placeholder {
+  color: var(--ink-3);
+}
+input:focus-visible,
+select:focus-visible {
+  outline-offset: 0;
+  border-color: var(--focus);
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.page {
+  width: 100%;
+  max-width: var(--page-max);
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+.page-title {
+  font-size: var(--t-2xl);
+  font-weight: 680;
+  letter-spacing: -0.02em;
+}
+
+.section-title {
+  font-size: var(--t-lg);
+  font-weight: 640;
+}
+
+/* Legend dot for a test series; color is always paired with a text label. */
+.key {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--s-neutral);
+}
+.key.cached {
+  background: var(--s-cached);
+}
+.key.uncached {
+  background: var(--s-uncached);
+}
+.key.tld {
+  background: var(--s-tld);
+}
+
+.muted {
+  color: var(--ink-3);
+}
+.ink-2 {
+  color: var(--ink-2);
+}
+
+::selection {
+  background: color-mix(in oklch, var(--ink) 16%, transparent);
+}
+
+/* Placeholder for a value still being measured: a quiet band with one slow sweep. The sweep is
+   fixed to the viewport, so every placeholder on screen moves as one wave. */
+.ghost {
+  display: block;
+  border-radius: 4px;
+  background: linear-gradient(
+      100deg,
+      transparent 30%,
+      color-mix(in oklch, var(--ink) 7%, transparent) 50%,
+      transparent 70%
+    )
+    var(--rule);
+  background-size: 200vw 100%;
+  background-attachment: fixed;
+  animation: ghost-sweep 2.4s linear infinite;
+}
+@keyframes ghost-sweep {
+  from {
+    background-position: 100vw 0;
+  }
+  to {
+    background-position: -100vw 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---- App shell -------------------------------------------------------------------- */
+
+/* Chrome isn't text: it doesn't select, and it uses the arrow cursor. */
+.chrome {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+/* A pane that scrolls by itself, without rubber-banding the window. */
+.scroll {
+  overflow: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Route layout: toolbar, then a body with the content and an optional inspector. */
+.view-root {
+  display: grid;
+  grid-template-rows: var(--bar-h) minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+}
+.view-body {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+}
+.view-body > .content {
+  flex: 1;
+}
+.content {
+  padding: 22px 28px 40px;
+}
+
+/* Segmented control: views, tests, ranges. */
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  gap: 1px;
+  border-radius: var(--r-md);
+  background: var(--surface-3);
+  max-width: 100%;
+}
+.segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 11px;
+  border: 0;
+  background: transparent;
+  border-radius: var(--r-sm);
+  font-size: var(--t-xs);
+  font-weight: 560;
+  color: var(--ink-2);
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.segmented button:hover {
+  color: var(--ink);
+}
+.segmented button.on,
+.segmented button[aria-selected='true'],
+.segmented button[aria-pressed='true'] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 0 0 0.5px color-mix(in oklch, var(--ink) 14%, transparent), 0 1px 2px color-mix(in oklch, var(--ink) 10%, transparent);
+}
+
+/* Segmented choice (radios, checkboxes or buttons in a sunken well; the chosen item is raised). `.xs` for a small control. */
+.seg {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-3);
+  border-radius: var(--r-md);
+  font-size: var(--t-sm);
+}
+.seg.xs {
+  font-size: var(--t-xs);
+}
+.seg.wide {
+  grid-template-columns: 1fr 1fr;
+}
+.seg.five {
+  grid-template-columns: repeat(5, 1fr);
+}
+.seg.three {
+  grid-template-columns: repeat(3, 1fr);
+}
+.segbtn {
+  position: relative;
+  min-width: 0;
+  cursor: default;
+}
+.segbtn input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  cursor: default;
+}
+button.segbtn,
+.segbtn span {
+  display: grid;
+  place-items: center;
+  height: 28px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  font: inherit;
+  font-weight: 560;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.segbtn:hover span,
+button.segbtn:hover:not(:disabled) {
+  color: var(--ink);
+}
+.segbtn input:checked + span,
+button.segbtn[aria-pressed='true'] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 0 0 0.5px color-mix(in oklch, var(--ink) 14%, transparent), 0 1px 2px color-mix(in oklch, var(--ink) 10%, transparent);
+}
+button.segbtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.segbtn input:focus-visible + span,
+button.segbtn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* A table whose header stays put while its pane scrolls. */
+.sticky-head thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+}

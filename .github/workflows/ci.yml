@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch cancels the run in progress.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Interface
+        working-directory: web
+        run: |
+          npm ci
+          npx svelte-check --tsconfig ./tsconfig.json
+          npm test
+          npm run build
+      - name: Third-party notices are current
+        run: |
+          python3 -I tools/notices.py
+          git diff --exit-code -- web/src/legal
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --release -- -D warnings
+      - run: cargo test --workspace --release
+
+  # Windows runners bill at 2x and this job takes ~20 min, so it runs on manual dispatch only; tag
+  # pushes build Windows in release.yml.
+  windows:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Interface
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --release -- -D warnings
+      - run: cargo test --workspace --release
+
+  # Unsigned NSIS installers for testing, on manual runs only (see windows). ARM64 is cross-compiled on the x64
+  # runner with the MSVC ARM64 tools it ships.
+  windows-installer:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x64
+          - target: aarch64-pc-windows-msvc
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Interface and Tauri CLI
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      # tauri.windows.conf.json switches the bundle targets to NSIS.
+      - name: Installer
+        working-directory: crates/desktop
+        shell: bash
+        run: ../../web/node_modules/.bin/tauri build --target ${{ matrix.target }} --features custom-protocol
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recursa-windows-${{ matrix.arch }}-setup
+          path: target/${{ matrix.target }}/release/bundle/nsis/*.exe
+          if-no-files-found: error

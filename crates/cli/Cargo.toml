@@ -1,0 +1,23 @@
+[package]
+name = "recursa"
+description = "Recursa command line and browser UI (local HTTP server)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+recursa-engine.workspace = true
+axum.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+open.workspace = true
+rust-embed.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+
+[features]
+default = ["rpki-local"]
+rpki-local = ["recursa-engine/rpki-local"]

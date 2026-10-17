@@ -1,0 +1,37 @@
+import type { CdnInfo, Mapping, Reference } from './types';
+
+/** The edge addresses a resolver returned for a CDN, across its hostnames. */
+export const edgeIps = (m: Mapping | undefined): string[] => [...new Set(Object.values(m?.hosts ?? {}).flatMap((h) => h.ips))];
+
+/** The penalty a cell shows. A CDN needs two usable hostnames for its own; an anycast control with one hostname shows that one. */
+export function cellPenalty(c: CdnInfo, m: Mapping | undefined): number | null {
+  if (!m) return null;
+  return m.penalty_ms ?? (c.role === 'control' ? (m.worst_host?.[1] ?? null) : null);
+}
+
+/** Every usable hostname sits within the noise of the best: the cell is level with it. */
+export function level(m: Mapping | undefined): boolean {
+  const ok = Object.values(m?.hosts ?? {}).filter((h) => h.status === 'ok' && h.same != null);
+  return ok.length > 0 && ok.every((h) => h.same);
+}
+
+const median = (v: number[]) => {
+  const s = [...v].sort((a, b) => a - b);
+  return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+};
+
+/** The CDN's own answer for this computer, as one figure per CDN: the median over its hostnames. */
+export function youOf(c: CdnInfo): Reference | null {
+  const asked = c.hosts.flatMap((h) => (h.you ? [h.you] : []));
+  const timed = asked.filter((y) => y.rtt_ms != null);
+  if (!timed.length) return asked.find((y) => y.error) ? { name: c.name, server: '', ips: [], rtt_ms: null, penalty_ms: null, error: asked.find((y) => y.error)!.error } : null;
+  const pens = timed.flatMap((y) => (y.penalty_ms != null ? [y.penalty_ms] : []));
+  return {
+    name: `${timed.length} of ${c.hosts.length} hostnames`,
+    server: '',
+    ips: timed.flatMap((y) => y.ips),
+    rtt_ms: median(timed.map((y) => y.rtt_ms!)),
+    penalty_ms: pens.length ? median(pens) : null,
+    error: null,
+  };
+}

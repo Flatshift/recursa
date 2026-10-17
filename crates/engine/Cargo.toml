@@ -1,0 +1,44 @@
+[package]
+name = "recursa-engine"
+description = "Recursa's measurement engine and application state, shared by the CLI and the desktop app."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aes-siv.workspace = true
+bytes.workspace = true
+dirs.workspace = true
+fastrand.workspace = true
+futures-util.workspace = true
+h2.workspace = true
+http.workspace = true
+log = { workspace = true, optional = true }
+libc.workspace = true
+reqwest.workspace = true
+routinator = { workspace = true, optional = true }
+rusqlite.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+socket2.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+webpki-roots.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# Adapters, their DNS servers and gateways (IP Helper), ICMP echoes for the link check, measurement-thread priority.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+] }
+
+[features]
+default = ["rpki-local"]
+# Route-origin validation on this computer (opt-in in Settings): see the top of `src/rpki/mod.rs` for how to remove it.
+rpki-local = ["dep:routinator", "dep:log"]

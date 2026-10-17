@@ -1,0 +1,756 @@
+//! Timestamped DNS transports.
+//!
+//! UDP is the precision path: a connected, non-blocking socket per target with kernel
+//! receive timestamps, so scheduler wake-up after the packet lands never counts toward
+//! the measured round trip. TCP, DoT and DoH keep a persistent connection, so handshakes
+//! are timed separately from queries. They use userspace stamps from the same clock.
+
+use crate::{clock, dns};
+use bytes::Bytes;
+use serde::{Deserialize, Serialize};
+use std::io::{self, Read, Write};
+use std::net::{SocketAddr, TcpStream};
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Transport {
+    Udp,
+    Tcp,
+    Dot,
+    Doh,
+}
+
+impl Transport {
+    pub fn label(self) -> &'static str {
+        match self {
+            Transport::Udp => "UDP",
+            Transport::Tcp => "TCP",
+            Transport::Dot => "DoT",
+            Transport::Doh => "DoH",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Endpoint {
+    pub transport: Transport,
+    pub addr: SocketAddr,
+    /// TLS server name (DoT/DoH).
+    pub host: Option<String>,
+    /// Full DoH URL.
+    pub url: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct Reply {
+    pub bytes: Vec<u8>,
+    /// Round trip used for statistics (kernel receive stamp when available).
+    pub rtt_ns: u64,
+    /// Round trip as seen by userspace after the receive call returned.
+    pub user_rtt_ns: u64,
+    pub kernel_stamp: bool,
+    /// IP TTL / hop limit of the answer (UDP only). An answer that arrives with an
+    /// untouched TTL came from the local network, whatever its source address says.
+    pub ttl: Option<u8>,
+}
+
+/// Router hops an answer crossed, assuming the sender used a common initial TTL.
+pub fn hops(ttl: u8) -> u8 {
+    let initial = if ttl > 128 {
+        255
+    } else if ttl > 64 {
+        128
+    } else {
+        64
+    };
+    initial - ttl
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
+pub enum XErr {
+    Timeout,
+    /// ICMP port unreachable / connection refused.
+    Refused,
+    Io(String),
+    Tls(String),
+    Http(String),
+    /// A DoH server answered with an HTTP error status: the connection itself is fine.
+    Status(u16),
+}
+
+impl std::fmt::Display for XErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            XErr::Timeout => f.write_str("timed out"),
+            XErr::Refused => f.write_str("connection refused"),
+            XErr::Io(e) => write!(f, "network error: {e}"),
+            XErr::Tls(e) => write!(f, "TLS error: {e}"),
+            XErr::Http(e) => write!(f, "HTTP error: {e}"),
+            XErr::Status(code) => write!(f, "HTTP status {code}"),
+        }
+    }
+}
+
+fn io_err(e: io::Error) -> XErr {
+    match e.kind() {
+        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => XErr::Timeout,
+        io::ErrorKind::ConnectionRefused => XErr::Refused,
+        _ => XErr::Io(e.to_string()),
+    }
+}
+
+pub trait Exchanger: Send {
+    fn exchange(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr>;
+    /// Connection or handshake time for the most recent (re)connect, if any.
+    fn setup_ns(&self) -> Option<u64> {
+        None
+    }
+}
+
+/// Open a transport for `ep`. Stream transports connect (and handshake) here, outside
+/// of any timed query.
+pub fn open(ep: &Endpoint, timeout: Duration) -> Result<Box<dyn Exchanger>, XErr> {
+    Ok(match ep.transport {
+        Transport::Udp => Box::new(UdpX::connect(ep.addr).map_err(io_err)?),
+        Transport::Tcp => {
+            let mut t = TcpX { addr: ep.addr, stream: None, setup_ns: None, buf: Vec::with_capacity(4096) };
+            t.ensure(timeout)?;
+            Box::new(t)
+        }
+        Transport::Dot => {
+            let host = ep.host.clone().ok_or_else(|| XErr::Tls("no TLS server name".into()))?;
+            let mut t = DotX::new(ep.addr, &host)?;
+            t.ensure(timeout)?;
+            Box::new(t)
+        }
+        Transport::Doh => {
+            let url = ep.url.clone().ok_or_else(|| XErr::Http("no DoH URL".into()))?;
+            let mut t = DohX::new(ep.addr, &url)?;
+            t.ensure(timeout)?;
+            Box::new(t)
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------------------
+// UDP with kernel receive timestamps
+// ---------------------------------------------------------------------------------------
+
+#[cfg(unix)]
+pub struct UdpX {
+    sock: socket2::Socket,
+    kernel_ts: bool,
+    buf: Box<[u8]>,
+    cmsg: [u64; 32],
+}
+
+/// Largest DNS message we accept on any transport.
+const MAX_MSG: usize = 65535;
+
+#[cfg(unix)]
+impl UdpX {
+    pub fn connect(addr: SocketAddr) -> io::Result<Self> {
+        use socket2::{Domain, Protocol, Socket, Type};
+        let sock = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP))?;
+        sock.set_nonblocking(true)?;
+        let _ = sock.set_recv_buffer_size(1 << 20);
+        let kernel_ts = enable_rx_timestamps(&sock);
+        enable_rx_ttl(&sock, addr.is_ipv6());
+        sock.connect(&addr.into())?;
+        Ok(UdpX { sock, kernel_ts, buf: vec![0u8; MAX_MSG].into_boxed_slice(), cmsg: [0u64; 32] })
+    }
+
+    pub fn kernel_timestamps(&self) -> bool {
+        self.kernel_ts
+    }
+
+    fn fd(&self) -> libc::c_int {
+        use std::os::fd::AsRawFd;
+        self.sock.as_raw_fd()
+    }
+
+    /// Receive one datagram, its kernel arrival stamp (ns in the [`clock`] domain) and
+    /// the TTL it arrived with.
+    fn recv(&mut self) -> io::Result<(usize, Option<u64>, Option<u8>)> {
+        let fd = self.fd();
+        let mut iov = libc::iovec { iov_base: self.buf.as_mut_ptr() as *mut libc::c_void, iov_len: self.buf.len() };
+        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+        msg.msg_iov = &mut iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = self.cmsg.as_mut_ptr() as *mut libc::c_void;
+        msg.msg_controllen = std::mem::size_of_val(&self.cmsg) as _;
+        let n = unsafe { libc::recvmsg(fd, &mut msg, 0) };
+        if n < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let (mut stamp, mut ttl) = (None, None);
+        unsafe {
+            let mut c = libc::CMSG_FIRSTHDR(&msg);
+            while !c.is_null() {
+                let h = &*c;
+                let data = libc::CMSG_DATA(c);
+                match (h.cmsg_level, h.cmsg_type) {
+                    // macOS reports the IPv4 TTL as one byte, Linux as an int.
+                    #[cfg(target_os = "macos")]
+                    (libc::IPPROTO_IP, libc::IP_RECVTTL) => ttl = Some(*data),
+                    #[cfg(target_os = "linux")]
+                    (libc::IPPROTO_IP, libc::IP_TTL) => ttl = Some(std::ptr::read_unaligned(data as *const libc::c_int) as u8),
+                    (libc::IPPROTO_IPV6, libc::IPV6_HOPLIMIT) => ttl = Some(std::ptr::read_unaligned(data as *const libc::c_int) as u8),
+                    _ => {}
+                }
+                stamp = stamp.or(arrival_stamp(c));
+                c = libc::CMSG_NXTHDR(&msg, c);
+            }
+        }
+        Ok((n as usize, stamp, ttl))
+    }
+
+    /// Discard late answers to earlier, timed-out queries.
+    fn drain(&mut self) {
+        while self.recv().is_ok() {}
+    }
+}
+
+#[cfg(target_os = "macos")]
+const SO_TIMESTAMP_MONOTONIC: libc::c_int = 0x0800;
+#[cfg(target_os = "macos")]
+const SCM_TIMESTAMP_MONOTONIC: libc::c_int = 0x04;
+
+#[cfg(unix)]
+fn enable_rx_timestamps(sock: &socket2::Socket) -> bool {
+    use std::os::fd::AsRawFd;
+    enable_rx_timestamps_fd(sock.as_raw_fd())
+}
+
+#[cfg(unix)]
+pub(crate) fn enable_rx_timestamps_fd(fd: libc::c_int) -> bool {
+    let one: libc::c_int = 1;
+    #[cfg(target_os = "macos")]
+    let opt = SO_TIMESTAMP_MONOTONIC;
+    #[cfg(target_os = "linux")]
+    let opt = libc::SO_TIMESTAMPNS;
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    return false;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    unsafe {
+        libc::setsockopt(fd, libc::SOL_SOCKET, opt, &one as *const _ as *const libc::c_void, std::mem::size_of_val(&one) as libc::socklen_t)
+            == 0
+    }
+}
+
+/// Ask the kernel to stamp datagrams arriving on a plain std socket (see [`recv_stamped`]). False where unsupported.
+pub fn stamp_arrivals(sock: &std::net::UdpSocket) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        enable_rx_timestamps_fd(sock.as_raw_fd())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = sock;
+        false
+    }
+}
+
+/// The kernel arrival stamp (ns, in the [`clock`] domain) in one control message, if it is that.
+#[cfg(unix)]
+unsafe fn arrival_stamp(c: *const libc::cmsghdr) -> Option<u64> {
+    unsafe {
+        let h = &*c;
+        if h.cmsg_level != libc::SOL_SOCKET {
+            return None;
+        }
+        #[cfg(target_os = "macos")]
+        if h.cmsg_type == SCM_TIMESTAMP_MONOTONIC {
+            let ticks = std::ptr::read_unaligned(libc::CMSG_DATA(c) as *const u64);
+            return Some(clock::ticks_to_ns(ticks));
+        }
+        #[cfg(target_os = "linux")]
+        if h.cmsg_type == libc::SCM_TIMESTAMPNS {
+            let t = std::ptr::read_unaligned(libc::CMSG_DATA(c) as *const libc::timespec);
+            return Some(t.tv_sec as u64 * 1_000_000_000 + t.tv_nsec as u64);
+        }
+        None
+    }
+}
+
+/// Receive one datagram on a std socket, with the kernel's arrival stamp when [`stamp_arrivals`] worked: the moment the
+/// packet came in, not the moment this thread got scheduled to read it. Honours the socket's read timeout.
+pub fn recv_stamped(sock: &std::net::UdpSocket, buf: &mut [u8]) -> io::Result<(usize, Option<u64>)> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        recv_stamped_fd(sock.as_raw_fd(), buf)
+    }
+    #[cfg(not(unix))]
+    {
+        sock.recv(buf).map(|n| (n, None))
+    }
+}
+
+/// [`recv_stamped`] over a raw descriptor, for sockets that are not `UdpSocket`s (the link check's ICMP socket).
+#[cfg(unix)]
+pub(crate) fn recv_stamped_fd(fd: libc::c_int, buf: &mut [u8]) -> io::Result<(usize, Option<u64>)> {
+    let mut cmsg = [0u64; 32];
+    let mut iov = libc::iovec { iov_base: buf.as_mut_ptr() as *mut libc::c_void, iov_len: buf.len() };
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cmsg.as_mut_ptr() as *mut libc::c_void;
+    msg.msg_controllen = std::mem::size_of_val(&cmsg) as _;
+    let n = unsafe { libc::recvmsg(fd, &mut msg, 0) };
+    if n < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut stamp = None;
+    unsafe {
+        let mut c = libc::CMSG_FIRSTHDR(&msg);
+        while !c.is_null() {
+            stamp = stamp.or(arrival_stamp(c));
+            c = libc::CMSG_NXTHDR(&msg, c);
+        }
+    }
+    Ok((n as usize, stamp))
+}
+
+#[cfg(unix)]
+fn enable_rx_ttl(sock: &socket2::Socket, v6: bool) {
+    use std::os::fd::AsRawFd;
+    let one: libc::c_int = 1;
+    let (level, opt) = if v6 { (libc::IPPROTO_IPV6, libc::IPV6_RECVHOPLIMIT) } else { (libc::IPPROTO_IP, libc::IP_RECVTTL) };
+    unsafe {
+        libc::setsockopt(
+            sock.as_raw_fd(),
+            level,
+            opt,
+            &one as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&one) as libc::socklen_t,
+        );
+    }
+}
+
+#[cfg(unix)]
+impl Exchanger for UdpX {
+    fn exchange(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
+        self.drain();
+        let fd = self.fd();
+        let t0 = clock::now_ns();
+        let deadline = t0 + timeout.as_nanos() as u64;
+        let sent = unsafe { libc::send(fd, query.as_ptr() as *const libc::c_void, query.len(), 0) };
+        if sent < 0 {
+            return Err(io_err(io::Error::last_os_error()));
+        }
+        loop {
+            let now = clock::now_ns();
+            if now >= deadline {
+                return Err(XErr::Timeout);
+            }
+            let wait_ms = ((deadline - now).div_ceil(1_000_000)).min(i32::MAX as u64) as libc::c_int;
+            let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+            let r = unsafe { libc::poll(&mut pfd, 1, wait_ms) };
+            if r == 0 {
+                continue;
+            }
+            if r < 0 {
+                let e = io::Error::last_os_error();
+                if e.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(io_err(e));
+            }
+            match self.recv() {
+                Ok((len, kstamp, ttl)) => {
+                    let t_user = clock::now_ns();
+                    let resp = &self.buf[..len];
+                    if !dns::is_response_to(resp, query) {
+                        continue;
+                    }
+                    let t_rx = kstamp.filter(|k| *k >= t0).unwrap_or(t_user);
+                    return Ok(Reply {
+                        bytes: resp.to_vec(),
+                        rtt_ns: t_rx - t0,
+                        user_rtt_ns: t_user - t0,
+                        kernel_stamp: kstamp.is_some(),
+                        ttl,
+                    });
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(io_err(e)),
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub struct UdpX {
+    sock: std::net::UdpSocket,
+    buf: Box<[u8]>,
+}
+
+#[cfg(not(unix))]
+impl UdpX {
+    pub fn connect(addr: SocketAddr) -> io::Result<Self> {
+        let bind: SocketAddr = if addr.is_ipv4() { "0.0.0.0:0".parse().unwrap() } else { "[::]:0".parse().unwrap() };
+        let sock = std::net::UdpSocket::bind(bind)?;
+        sock.connect(addr)?;
+        Ok(UdpX { sock, buf: vec![0u8; MAX_MSG].into_boxed_slice() })
+    }
+    pub fn kernel_timestamps(&self) -> bool {
+        false
+    }
+}
+
+#[cfg(not(unix))]
+impl Exchanger for UdpX {
+    fn exchange(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
+        let t0 = clock::now_ns();
+        let deadline = t0 + timeout.as_nanos() as u64;
+        self.sock.send(query).map_err(io_err)?;
+        loop {
+            let now = clock::now_ns();
+            if now >= deadline {
+                return Err(XErr::Timeout);
+            }
+            self.sock.set_read_timeout(Some(Duration::from_nanos(deadline - now))).map_err(io_err)?;
+            // Windows reports an ICMP port unreachable on a connected UDP socket as a reset (WSAECONNRESET).
+            let len = self.sock.recv(&mut self.buf[..]).map_err(|e| match e.kind() {
+                io::ErrorKind::ConnectionReset => XErr::Refused,
+                _ => io_err(e),
+            })?;
+            let t = clock::now_ns();
+            if dns::is_response_to(&self.buf[..len], query) {
+                return Ok(Reply { bytes: self.buf[..len].to_vec(), rtt_ns: t - t0, user_rtt_ns: t - t0, kernel_stamp: false, ttl: None });
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// TCP (RFC 7766) and DoT (RFC 7858): length-prefixed frames on a persistent stream
+// ---------------------------------------------------------------------------------------
+
+fn write_frame<W: Write>(w: &mut W, query: &[u8], scratch: &mut Vec<u8>) -> io::Result<()> {
+    scratch.clear();
+    scratch.extend_from_slice(&(query.len() as u16).to_be_bytes());
+    scratch.extend_from_slice(query);
+    w.write_all(scratch)?;
+    w.flush()
+}
+
+fn read_frame<R: Read>(r: &mut R) -> io::Result<Vec<u8>> {
+    let mut len = [0u8; 2];
+    r.read_exact(&mut len)?;
+    let mut body = vec![0u8; u16::from_be_bytes(len) as usize];
+    r.read_exact(&mut body)?;
+    Ok(body)
+}
+
+fn connect_tcp(addr: SocketAddr, timeout: Duration) -> Result<TcpStream, XErr> {
+    let s = TcpStream::connect_timeout(&addr, timeout).map_err(io_err)?;
+    s.set_nodelay(true).map_err(io_err)?;
+    Ok(s)
+}
+
+pub struct TcpX {
+    addr: SocketAddr,
+    stream: Option<TcpStream>,
+    setup_ns: Option<u64>,
+    buf: Vec<u8>,
+}
+
+impl TcpX {
+    fn ensure(&mut self, timeout: Duration) -> Result<(), XErr> {
+        if self.stream.is_none() {
+            let t = clock::now_ns();
+            self.stream = Some(connect_tcp(self.addr, timeout)?);
+            self.setup_ns = Some(clock::now_ns() - t);
+        }
+        Ok(())
+    }
+
+    fn once(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
+        let s = self.stream.as_mut().expect("connected");
+        s.set_read_timeout(Some(timeout)).map_err(io_err)?;
+        s.set_write_timeout(Some(timeout)).map_err(io_err)?;
+        let t0 = clock::now_ns();
+        write_frame(s, query, &mut self.buf).map_err(io_err)?;
+        loop {
+            let body = read_frame(s).map_err(io_err)?;
+            let t1 = clock::now_ns();
+            if dns::is_response_to(&body, query) {
+                return Ok(Reply { bytes: body, rtt_ns: t1 - t0, user_rtt_ns: t1 - t0, kernel_stamp: false, ttl: None });
+            }
+            if t1 - t0 > timeout.as_nanos() as u64 {
+                return Err(XErr::Timeout);
+            }
+        }
+    }
+}
+
+impl Exchanger for TcpX {
+    fn exchange(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
+        self.ensure(timeout)?;
+        match self.once(query, timeout) {
+            Ok(r) => Ok(r),
+            Err(XErr::Timeout) => {
+                self.stream = None;
+                Err(XErr::Timeout)
+            }
+            Err(_) => {
+                // Servers close idle connections; reconnect once and retry.
+                self.stream = None;
+                self.ensure(timeout)?;
+                let r = self.once(query, timeout);
+                if r.is_err() {
+                    self.stream = None;
+                }
+                r
+            }
+        }
+    }
+    fn setup_ns(&self) -> Option<u64> {
+        self.setup_ns
+    }
+}
+
+pub(crate) fn root_store() -> rustls::RootCertStore {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    roots
+}
+
+fn tls_config(alpn_h2: bool) -> Arc<rustls::ClientConfig> {
+    static DOT: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    static DOH: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    let cell = if alpn_h2 { &DOH } else { &DOT };
+    cell.get_or_init(|| {
+        let mut c = rustls::ClientConfig::builder().with_root_certificates(root_store()).with_no_client_auth();
+        // DoT sends no ALPN: some servers reject unknown protocol names outright.
+        c.alpn_protocols = if alpn_h2 { vec![b"h2".to_vec()] } else { vec![] };
+        Arc::new(c)
+    })
+    .clone()
+}
+
+pub struct DotX {
+    addr: SocketAddr,
+    name: rustls::pki_types::ServerName<'static>,
+    stream: Option<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>,
+    setup_ns: Option<u64>,
+    buf: Vec<u8>,
+}
+
+impl DotX {
+    fn new(addr: SocketAddr, host: &str) -> Result<Self, XErr> {
+        let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|e| XErr::Tls(e.to_string()))?;
+        Ok(DotX { addr, name, stream: None, setup_ns: None, buf: Vec::with_capacity(4096) })
+    }
+
+    fn ensure(&mut self, timeout: Duration) -> Result<(), XErr> {
+        if self.stream.is_some() {
+            return Ok(());
+        }
+        let t = clock::now_ns();
+        let mut sock = connect_tcp(self.addr, timeout)?;
+        sock.set_read_timeout(Some(timeout)).map_err(io_err)?;
+        sock.set_write_timeout(Some(timeout)).map_err(io_err)?;
+        let mut conn = rustls::ClientConnection::new(tls_config(false), self.name.clone()).map_err(|e| XErr::Tls(e.to_string()))?;
+        while conn.is_handshaking() {
+            conn.complete_io(&mut sock).map_err(|e| match e.kind() {
+                io::ErrorKind::InvalidData => XErr::Tls(e.to_string()),
+                _ => io_err(e),
+            })?;
+        }
+        self.setup_ns = Some(clock::now_ns() - t);
+        self.stream = Some(rustls::StreamOwned::new(conn, sock));
+        Ok(())
+    }
+
+    fn once(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
+        let s = self.stream.as_mut().expect("connected");
+        s.sock.set_read_timeout(Some(timeout)).map_err(io_err)?;
+        let t0 = clock::now_ns();
+        write_frame(s, query, &mut self.buf).map_err(io_err)?;
+        loop {
+            let body = read_frame(s).map_err(io_err)?;
+            let t1 = clock::now_ns();
+            if dns::is_response_to(&body, query) {
+                return Ok(Reply { bytes: body, rtt_ns: t1 - t0, user_rtt_ns: t1 - t0, kernel_stamp: false, ttl: None });
+            }
+            if t1 - t0 > timeout.as_nanos() as u64 {
+                return Err(XErr::Timeout);
+            }
+        }
+    }
+}
+
+impl Exchanger for DotX {
+    fn exchange(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
+        self.ensure(timeout)?;
+        match self.once(query, timeout) {
+            Ok(r) => Ok(r),
+            Err(XErr::Timeout) => {
+                self.stream = None;
+                Err(XErr::Timeout)
+            }
+            Err(_) => {
+                self.stream = None;
+                self.ensure(timeout)?;
+                let r = self.once(query, timeout);
+                if r.is_err() {
+                    self.stream = None;
+                }
+                r
+            }
+        }
+    }
+    fn setup_ns(&self) -> Option<u64> {
+        self.setup_ns
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// DoH (RFC 8484) over HTTP/2, driven by a private single-threaded runtime
+// ---------------------------------------------------------------------------------------
+
+pub struct DohX {
+    addr: SocketAddr,
+    uri: http::Uri,
+    name: rustls::pki_types::ServerName<'static>,
+    rt: tokio::runtime::Runtime,
+    sender: Option<h2::client::SendRequest<Bytes>>,
+    /// The task driving the HTTP/2 connection behind `sender`.
+    conn: Option<tokio::task::JoinHandle<()>>,
+    setup_ns: Option<u64>,
+}
+
+impl DohX {
+    fn new(addr: SocketAddr, url: &str) -> Result<Self, XErr> {
+        let uri: http::Uri = url.parse().map_err(|e: http::uri::InvalidUri| XErr::Http(e.to_string()))?;
+        let host = uri.host().ok_or_else(|| XErr::Http("DoH URL has no host".into()))?.to_string();
+        let name = rustls::pki_types::ServerName::try_from(host).map_err(|e| XErr::Tls(e.to_string()))?;
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(io_err)?;
+        Ok(DohX { addr, uri, name, rt, sender: None, conn: None, setup_ns: None })
+    }
+
+    /// Forget the connection, so the next query opens a fresh one. Its task is stopped too:
+    /// on a dead socket it would otherwise wait forever.
+    fn disconnect(&mut self) {
+        self.sender = None;
+        if let Some(task) = self.conn.take() {
+            task.abort();
+        }
+    }
+
+    fn ensure(&mut self, timeout: Duration) -> Result<(), XErr> {
+        if self.sender.is_some() {
+            return Ok(());
+        }
+        let addr = self.addr;
+        let name = self.name.clone();
+        let t = clock::now_ns();
+        let (sender, conn) = self.rt.block_on(async move {
+            tokio::time::timeout(timeout, async move {
+                let tcp = tokio::net::TcpStream::connect(addr).await.map_err(io_err)?;
+                tcp.set_nodelay(true).map_err(io_err)?;
+                let tls =
+                    tokio_rustls::TlsConnector::from(tls_config(true)).connect(name, tcp).await.map_err(|e| XErr::Tls(e.to_string()))?;
+                if tls.get_ref().1.alpn_protocol() != Some(b"h2") {
+                    return Err(XErr::Http("server did not negotiate HTTP/2".into()));
+                }
+                let (send, conn) = h2::client::handshake(tls).await.map_err(|e| XErr::Http(e.to_string()))?;
+                let task = tokio::spawn(async move {
+                    let _ = conn.await;
+                });
+                let send = send.ready().await.map_err(|e| XErr::Http(e.to_string()))?;
+                Ok((send, task))
+            })
+            .await
+            .map_err(|_| XErr::Timeout)?
+        })?;
+        self.setup_ns = Some(clock::now_ns() - t);
+        self.sender = Some(sender);
+        self.conn = Some(conn);
+        Ok(())
+    }
+
+    fn once(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
+        let sender = self.sender.clone().expect("connected");
+        let uri = self.uri.clone();
+        let body = Bytes::copy_from_slice(query);
+        self.rt.block_on(async move {
+            tokio::time::timeout(timeout, async move {
+                let mut send = sender.ready().await.map_err(|e| XErr::Http(e.to_string()))?;
+                let req = http::Request::post(uri)
+                    .header("content-type", "application/dns-message")
+                    .header("accept", "application/dns-message")
+                    .header("content-length", body.len())
+                    .body(())
+                    .map_err(|e| XErr::Http(e.to_string()))?;
+                let t0 = clock::now_ns();
+                let (resp, mut stream) = send.send_request(req, false).map_err(|e| XErr::Http(e.to_string()))?;
+                stream.send_data(body, true).map_err(|e| XErr::Http(e.to_string()))?;
+                let resp = resp.await.map_err(|e| XErr::Http(e.to_string()))?;
+                if !resp.status().is_success() {
+                    return Err(XErr::Status(resp.status().as_u16()));
+                }
+                // A captive portal or proxy can answer 200 with a web page.
+                let ct = resp.headers().get(http::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
+                if !ct.trim_start().to_ascii_lowercase().starts_with("application/dns-message") {
+                    return Err(XErr::Http(format!("not a DNS reply (content-type {:?})", ct)));
+                }
+                let mut rx = resp.into_body();
+                let mut out = Vec::with_capacity(512);
+                while let Some(chunk) = rx.data().await {
+                    let chunk = chunk.map_err(|e| XErr::Http(e.to_string()))?;
+                    let _ = rx.flow_control().release_capacity(chunk.len());
+                    if out.len() + chunk.len() > MAX_MSG {
+                        return Err(XErr::Http("response larger than a DNS message".into()));
+                    }
+                    out.extend_from_slice(&chunk);
+                }
+                let t1 = clock::now_ns();
+                if !dns::is_response_to(&out, query) {
+                    return Err(XErr::Http("reply doesn't match the query".into()));
+                }
+                Ok(Reply { bytes: out, rtt_ns: t1 - t0, user_rtt_ns: t1 - t0, kernel_stamp: false, ttl: None })
+            })
+            .await
+            .map_err(|_| XErr::Timeout)?
+        })
+    }
+}
+
+impl Exchanger for DohX {
+    fn exchange(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
+        self.ensure(timeout)?;
+        match self.once(query, timeout) {
+            Ok(r) => Ok(r),
+            // The server answered; retrying the same query would only get the same status.
+            Err(e @ XErr::Status(_)) => Err(e),
+            // As with TCP and DoT, a timeout drops the connection: a silently dead one would
+            // otherwise time out every later query too, and nothing on it would notice.
+            Err(XErr::Timeout) => {
+                self.disconnect();
+                Err(XErr::Timeout)
+            }
+            Err(_) => {
+                // GOAWAY or a reset connection: reconnect once.
+                self.disconnect();
+                self.ensure(timeout)?;
+                let r = self.once(query, timeout);
+                if matches!(r, Err(ref e) if !matches!(e, XErr::Status(_))) {
+                    self.disconnect();
+                }
+                r
+            }
+        }
+    }
+    fn setup_ns(&self) -> Option<u64> {
+        self.setup_ns
+    }
+}
