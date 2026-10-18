@@ -26,26 +26,26 @@
 		0F1E601F9255DE6B0759A889 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		10EDF704FE19938D7E0C4A95 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		146F2A5B4DA4A0D73D7AEAFC /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
-		317FB7BE9D0CE1401F2F18CF /* mobile.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mobile.rs; sourceTree = "<group>"; };
-		3208594C3D8342AD85699D1A /* lib.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = lib.rs; sourceTree = "<group>"; };
-		478522603C81D6F697FB75B7 /* main.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = main.rs; sourceTree = "<group>"; };
+		317FB7BE9D0CE1401F2F18CF /* mobile.rs */ = {isa = PBXFileReference; path = mobile.rs; sourceTree = "<group>"; };
+		3208594C3D8342AD85699D1A /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+		478522603C81D6F697FB75B7 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
 		4CCA019586EBCA989B538A74 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
-		4E6F46993AB58153851A08DC /* ipc.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = ipc.rs; sourceTree = "<group>"; };
+		4E6F46993AB58153851A08DC /* ipc.rs */ = {isa = PBXFileReference; path = ipc.rs; sourceTree = "<group>"; };
 		539AA1BE2748A105DB0D5D24 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		599EC077C8A57AE83FE40F88 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		66CDAD7FC4D11E311A785C70 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
-		6724B4165932FFC4DD95E294 /* chrome.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = chrome.rs; sourceTree = "<group>"; };
+		6724B4165932FFC4DD95E294 /* chrome.rs */ = {isa = PBXFileReference; path = chrome.rs; sourceTree = "<group>"; };
 		8086F494C8D821E87E5B5F55 /* recursa-desktop_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "recursa-desktop_iOS.entitlements"; sourceTree = "<group>"; };
 		842335EEA8E73EA96277D718 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
-		98938542090F96D91FFE4713 /* shell.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = shell.rs; sourceTree = "<group>"; };
+		98938542090F96D91FFE4713 /* shell.rs */ = {isa = PBXFileReference; path = shell.rs; sourceTree = "<group>"; };
 		99A9A5DA0AC260A193C418A9 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
-		99D282C5BAA4CAD3435DA1DE /* smoke.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = smoke.rs; sourceTree = "<group>"; };
+		99D282C5BAA4CAD3435DA1DE /* smoke.rs */ = {isa = PBXFileReference; path = smoke.rs; sourceTree = "<group>"; };
 		9A292D589834BE4FD7E9B083 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		B3CC49232A1CF7F2DBF8F35D /* libresolv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libresolv.tbd; path = usr/lib/libresolv.tbd; sourceTree = SDKROOT; };
 		BF9B3DE14A5E7F5FBEE0AFE4 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		CB69C74C5092C49F71C8375E /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		E9D4D29A704E9800CA62E061 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		F7437218567924A7B1481F34 /* Recursa.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Recursa.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F7437218567924A7B1481F34 /* recursa-desktop_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "recursa-desktop_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F7D281A2FFD8B4B923022640 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -144,7 +144,7 @@
 		EF46E8F66C4FB41963626EF2 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				F7437218567924A7B1481F34 /* Recursa.app */,
+				F7437218567924A7B1481F34 /* recursa-desktop_iOS.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -162,6 +162,20 @@
 			);
 			name = src;
 			path = ../../src;
+			sourceTree = "<group>";
+		};
+		"TEMP_97731043-4593-4F0A-8F10-6BDF442D7862" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
+			sourceTree = "<group>";
+		};
+		"TEMP_F62E8638-59E8-4F9D-8168-2AEB14A3260E" /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = arm64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -184,7 +198,7 @@
 			packageProductDependencies = (
 			);
 			productName = "recursa-desktop_iOS";
-			productReference = F7437218567924A7B1481F34 /* Recursa.app */;
+			productReference = F7437218567924A7B1481F34 /* recursa-desktop_iOS.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -194,7 +208,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2710;
+				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					B01DC3E4D73542EBEEAEF1FD = {
 						DevelopmentTeam = 4KWGLJMXKW;
@@ -305,10 +319,8 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = 4KWGLJMXKW;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -329,7 +341,6 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
@@ -339,10 +350,15 @@
 		0A45AD0F70B065188F987857 /* release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "recursa-desktop_iOS/recursa-desktop_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "4KWGLJMXKW";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -350,27 +366,14 @@
 					"\".\"",
 				);
 				INFOPLIST_FILE = "recursa-desktop_iOS/Info.plist";
-				IPHONEOS_DEPLOYMENT_TARGET = "$(RECOMMENDED_IPHONEOS_DEPLOYMENT_TARGET)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				"LIBRARY_SEARCH_PATHS[arch=arm64]" = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION)",
-					"$(SDKROOT)/usr/lib/swift",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)",
-				);
-				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION)",
-					"$(SDKROOT)/usr/lib/swift",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)",
-				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = net.morisette.recursa;
-				PRODUCT_NAME = Recursa;
+				PRODUCT_NAME = "Recursa";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -380,10 +383,15 @@
 		4CB8F265D1C51DD7119AB1B4 /* debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "recursa-desktop_iOS/recursa-desktop_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "4KWGLJMXKW";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -391,27 +399,14 @@
 					"\".\"",
 				);
 				INFOPLIST_FILE = "recursa-desktop_iOS/Info.plist";
-				IPHONEOS_DEPLOYMENT_TARGET = "$(RECOMMENDED_IPHONEOS_DEPLOYMENT_TARGET)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				"LIBRARY_SEARCH_PATHS[arch=arm64]" = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION)",
-					"$(SDKROOT)/usr/lib/swift",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)",
-				);
-				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION)",
-					"$(SDKROOT)/usr/lib/swift",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)",
-				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = net.morisette.recursa;
-				PRODUCT_NAME = Recursa;
+				PRODUCT_NAME = "Recursa";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -453,10 +448,8 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = 4KWGLJMXKW;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -470,7 +463,6 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
