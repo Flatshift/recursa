@@ -351,6 +351,7 @@
           <Mark size={36} />
           <span><b>Recursa</b>{app.env ? ` ${app.env.version}` : ''} <span class="by">by Brian Morisette</span></span>
         </p>
+        <p>Find the fastest, best-placed DNS resolver for your network.</p>
         {#if app.env?.build}<p class="note">Build {app.env.build}</p>{/if}
         <p class="note">
           Copyright © 2026 Brian Morisette. Free software under the GNU General Public License, version 3 or later, with

@@ -19,7 +19,7 @@ const LONG_VERSION: &str = concat!(
 );
 
 #[derive(Parser)]
-#[command(name = "recursa", version, long_version = LONG_VERSION, about = "Benchmark recursive DNS resolvers from this computer.")]
+#[command(name = "recursa", version, long_version = LONG_VERSION, about = "Find the fastest, best-placed DNS resolver for your network.")]
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,

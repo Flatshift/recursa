@@ -77,10 +77,10 @@ fn app_menu(app: &AppHandle, login: &CheckMenuItem<Wry>) -> tauri::Result<Menu<W
     let about = AboutMetadata {
         name: Some("Recursa".into()),
         version: Some(format!("{} (build {})", env!("CARGO_PKG_VERSION"), recursa_engine::BUILD)),
-        comments: Some("Benchmark recursive DNS resolvers from this computer.".into()),
+        comments: Some("Find the fastest, best-placed DNS resolver for your network.".into()),
         copyright: Some("Copyright © 2026 Brian Morisette".into()),
-        // macOS shows credits under the copyright line.
-        credits: Some("Free software under the GNU General Public License, version 3 or later, with no warranty. License and third-party notices: Settings › About.".into()),
+        // macOS shows credits under the copyright line, and no comments, so the tagline goes here too.
+        credits: Some("Find the fastest, best-placed DNS resolver for your network.\n\nFree software under the GNU General Public License, version 3 or later, with no warranty. License and third-party notices: Settings › About.".into()),
         license: Some("GPL-3.0-or-later".into()),
         ..Default::default()
     };
