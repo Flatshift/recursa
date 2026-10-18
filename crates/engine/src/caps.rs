@@ -69,7 +69,8 @@ mod tests {
         if std::env::var_os("RECURSA_WRITE_PLATFORMS").is_some() {
             std::fs::write(path, &want).unwrap();
         }
-        let have = std::fs::read_to_string(path).unwrap_or_default();
+        // A Windows checkout may turn the line endings into CRLF.
+        let have = std::fs::read_to_string(path).unwrap_or_default().replace("\r\n", "\n");
         assert!(have == want, "docs/PLATFORMS.md is stale: run RECURSA_WRITE_PLATFORMS=1 cargo test -p recursa-engine caps");
     }
 }
