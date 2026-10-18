@@ -80,6 +80,34 @@ jobs:
       - name: Kernel stamps on the network
         run: cargo test -p recursa-engine --release -- --ignored --nocapture stamps_on_the_network
 
+  # The iPhone build shares the engine and the interface; this catches a change that compiles for the Mac but not
+  # for iOS (the cfg(mobile) paths), then builds the simulator app. Simulator builds need no signing.
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ios
+      - name: Interface and Tauri CLI
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - run: cargo clippy -p recursa-desktop -p recursa-engine --target aarch64-apple-ios --release -- -D warnings
+      - name: Simulator app
+        working-directory: crates/desktop
+        run: ../../web/node_modules/.bin/tauri ios build --debug --target aarch64-sim
+
   # Unsigned NSIS installers for testing, on manual runs only; tag pushes build them in release.yml. ARM64 is
   # cross-compiled on the x64 runner with the MSVC ARM64 tools it ships.
   windows-installer:
