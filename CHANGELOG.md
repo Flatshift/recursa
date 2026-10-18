@@ -2,7 +2,7 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.3.6 (2026-10-17)
 
 - **Blocking checks in a run use published test domains**: `malware.testcategory.com` and `isitblocked.org` for
   malware, `phishing.testcategory.com` and `internetbadguys.com` for phishing, `nudity.testcategory.com` and
