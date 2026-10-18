@@ -2,6 +2,11 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.3.7 (2026-10-18)
+
+- The About screens show the same tagline on every platform: "Find the fastest, best-placed DNS resolver for your
+  network." Windows showed older text, macOS none, and the iPhone app now shows it in Settings › About.
+
 ## 0.3.6 (2026-10-17)
 
 - **Blocking checks in a run use published test domains**: `malware.testcategory.com` and `isitblocked.org` for
