@@ -433,7 +433,7 @@
       {:else if running}
         <button class="btn" onclick={stop}><Icon name="stop" size={12} />Stop</button>
       {:else}
-        {#if !mobile && run?.results.length && run.status !== 'running'}
+        {#if app.boot?.caps.export && run?.results.length && run.status !== 'running'}
           <button class="btn" onclick={() => download('csv')} title="One row per server, with a schema_version column and named failure reasons.">Export CSV</button>
           <button class="btn" onclick={() => download('json')} title="The whole result, with a schema_version.">Export JSON</button>
         {/if}

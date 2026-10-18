@@ -507,7 +507,17 @@ export interface MonitorHistory {
   resolvers: MonitorHist[];
 }
 
+/** What this build can do: one row of `crates/engine/src/caps.rs`, also in `docs/PLATFORMS.md`. */
+export interface Caps {
+  export: boolean;
+  settings_window: boolean;
+  native_menus: boolean;
+  app_menu: boolean;
+  login_item: boolean;
+}
+
 export interface Bootstrap {
+  caps: Caps;
   env: Env;
   resolvers: Resolver[];
   defaults: RunConfig;

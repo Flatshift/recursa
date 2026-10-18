@@ -4,14 +4,16 @@
 
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import type { Caps } from './types';
 
 /** Running inside the desktop app rather than a browser tab. */
 export const desktop = '__TAURI_INTERNALS__' in window;
 
-/** The iOS app: one window, touch, no native menus. The shell sets the flag before the page runs. */
+/** The iOS app: a phone layout and touch. The shell sets the flag before the page runs. What a build can
+ *  do is `caps` (crates/engine/src/caps.rs), not this. */
 export const mobile = desktop && '__RECURSA_MOBILE__' in window;
 
-/** The desktop app: native windows, menus and login items. */
+/** The Mac or Windows app, where Settings has a window of its own. */
 export const shell = desktop && !mobile;
 
 /** The macOS app, whose window has traffic lights over its top-left corner. */
@@ -157,10 +159,16 @@ export function notifyDone(title: string, body: string) {
   if (desktop) invoke('notify', { title, body }).catch(() => {});
 }
 
+let caps: Caps | null = null;
+/** The bootstrap's `caps`, for the calls below that only some builds have. */
+export function setCaps(c: Caps) {
+  caps = c;
+}
+
 /** Open the Settings window, on `section` (a Settings pane id) when given. On the phone Settings is
  *  a page, so the caller navigates instead. */
 export function openSettings(section?: string) {
-  if (shell) invoke('open_settings', { section: section ?? null }).catch(() => {});
+  if (caps?.settings_window) invoke('open_settings', { section: section ?? null }).catch(() => {});
 }
 
 export interface MenuItem {
@@ -181,10 +189,10 @@ if (desktop) {
   });
 }
 
-/** Desktop only: pop up a native menu at the pointer. `pick` runs only if an item is chosen.
- *  Returns false in the browser, where the caller falls back to its own menu. */
+/** Pop up a native menu at the pointer where the build has them. `pick` runs only if an item is chosen.
+ *  Returns false elsewhere, where the caller falls back to its own menu. */
 export function nativeMenu(items: MenuItem[], pick: (id: string) => void): boolean {
-  if (!shell) return false;
+  if (!caps?.native_menus) return false;
   menuSeq++;
   pendingMenu = pick;
   invoke('context_menu', { seq: menuSeq, items: items.map((i) => ({ id: i.id, label: i.label, enabled: i.enabled ?? true })) }).catch(
@@ -193,10 +201,10 @@ export function nativeMenu(items: MenuItem[], pick: (id: string) => void): boole
   return true;
 }
 
-/** Desktop only: Open at Login. */
+/** Open at Login, where the build has it. */
 export const loginItem = {
-  get: () => (shell ? invoke<boolean>('get_login') : Promise.resolve(false)),
-  set: (on: boolean) => (shell ? invoke<boolean>('set_login', { enabled: on }) : Promise.resolve(false)),
+  get: () => (caps?.login_item ? invoke<boolean>('get_login') : Promise.resolve(false)),
+  set: (on: boolean) => (caps?.login_item ? invoke<boolean>('set_login', { enabled: on }) : Promise.resolve(false)),
 };
 
 /** Put text on the clipboard: through the app in the desktop build, where a menu pick isn't

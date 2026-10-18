@@ -1,4 +1,4 @@
-import { api, confirmAction, desktop, mac, mobile, notifyDone, onDesktop, saveExport, streamRun, type RunStream } from './api';
+import { api, confirmAction, desktop, mac, mobile, notifyDone, onDesktop, saveExport, setCaps, streamRun, type RunStream } from './api';
 import type { Mix } from './verdict';
 import type { Bootstrap, Env, Outcome, Resolver, RunConfig, RunRow, RunState, Sample } from './types';
 
@@ -157,6 +157,7 @@ class AppState {
   async init() {
     try {
       this.boot = await api.get<Bootstrap>('/api/bootstrap');
+      setCaps(this.boot.caps);
       this.bootError = null;
       const saved = readLocal<RunConfig | null>('recursa.draft', null);
       const ids = new Set(this.boot.resolvers.map((r) => r.id));

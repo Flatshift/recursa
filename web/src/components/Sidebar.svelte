@@ -1,7 +1,7 @@
 <script lang="ts">
   // Source list: the app's places, then its runs, newest first.
   import { app } from '../lib/store.svelte';
-  import { desktop, mac, mobile, openSettings, shell } from '../lib/api';
+  import { desktop, mac, mobile, openSettings } from '../lib/api';
   import { shortcut } from '../lib/keys';
   import { menu, SEPARATOR } from '../lib/menu.svelte';
   import { ms, shortWhen } from '../lib/format';
@@ -38,9 +38,9 @@
       [
         { id: 'open', label: 'Open' },
         SEPARATOR,
-        ...(mobile
-          ? []
-          : [{ id: 'csv', label: 'Export Samples as CSV…', enabled: ok }, { id: 'json', label: 'Export Run as JSON…', enabled: ok }, SEPARATOR]),
+        ...(app.boot?.caps.export
+          ? [{ id: 'csv', label: 'Export Samples as CSV…', enabled: ok }, { id: 'json', label: 'Export Run as JSON…', enabled: ok }, SEPARATOR]
+          : []),
         { id: 'save', label: r.saved ? 'Unsave Run' : 'Save Run', enabled: ok },
         { id: 'delete', label: 'Delete Run…', enabled: ok },
       ],
@@ -81,7 +81,7 @@
   }
 
   function settings(e: MouseEvent, section?: string) {
-    if (shell) return openSettings(section);
+    if (app.boot?.caps.settings_window) return openSettings(section);
     go(e, section ? `/settings#${section}` : '/settings');
   }
 </script>

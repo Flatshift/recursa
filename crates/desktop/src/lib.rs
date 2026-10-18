@@ -12,12 +12,20 @@ mod shell;
 mod smoke;
 
 use recursa_engine::app::AppState;
+use recursa_engine::caps::Caps;
 #[cfg(desktop)]
 use tauri::RunEvent;
 #[cfg(desktop)]
 use tauri::{Manager, WindowEvent};
 #[cfg(desktop)]
 use tauri_plugin_window_state::StateFlags;
+
+#[cfg(target_os = "macos")]
+const CAPS: Caps = Caps::MAC;
+#[cfg(windows)]
+const CAPS: Caps = Caps::WINDOWS;
+#[cfg(mobile)]
+const CAPS: Caps = Caps::IOS;
 
 /// The database `--db <path>` or `--db=<path>` names, if either is given. A bare `--db` is an error
 /// rather than a silent fall-through to the shared database.
@@ -49,7 +57,7 @@ pub fn run() {
     // Calibration runs in the background (start_background), so the window needn't wait.
     let opened = db_arg(&args)
         .map_err(|e| ("Recursa couldn't read its arguments.", e))
-        .and_then(|db| AppState::open(db, false).map_err(|e| ("Recursa couldn't open its database.", e)));
+        .and_then(|db| AppState::open(db, false, CAPS).map_err(|e| ("Recursa couldn't open its database.", e)));
     let state = match opened {
         Ok(s) => s,
         // iOS has no alert before an event loop runs, so the page says why instead.
