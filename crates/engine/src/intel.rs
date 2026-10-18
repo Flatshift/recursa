@@ -24,7 +24,7 @@ use tokio::sync::Semaphore;
 
 const HOUR: i64 = 3_600_000;
 /// Largest response body we accept from any source.
-const MAX_BODY: usize = 8 << 20;
+const MAX_BODY: usize = 16 << 20;
 
 pub struct Intel {
     http: reqwest::Client,
@@ -40,8 +40,36 @@ pub struct Intel {
 
 #[derive(Default)]
 pub struct ThreatFeeds {
-    pub malware: Vec<String>,
-    pub phishing: Vec<String>,
+    pub malware: Feed,
+    pub phishing: Feed,
+}
+
+/// One threat feed's usable hosts, and when it was downloaded (Unix ms; none if it never was).
+#[derive(Default)]
+pub struct Feed {
+    pub hosts: Vec<FeedHost>,
+    pub fetched_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct FeedHost {
+    pub host: String,
+    /// When the feed first listed this host (Unix ms), for feeds that date their entries.
+    pub listed_at: Option<i64>,
+}
+
+/// "YYYY-MM-DD HH:MM:SS" in UTC to Unix milliseconds.
+fn utc_ms(s: &str) -> Option<i64> {
+    let n = |r: std::ops::Range<usize>| -> Option<i64> { s.get(r)?.parse().ok() };
+    let (y, m, d) = (n(0..4)?, n(5..7)?, n(8..10)?);
+    let secs = n(11..13).unwrap_or(0) * 3600 + n(14..16).unwrap_or(0) * 60 + n(17..19).unwrap_or(0);
+    // Days from the civil date (Howard Hinnant's algorithm).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
+    let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
+    Some((days * 86_400 + secs) * 1000)
 }
 
 /// Shared-hosting suffixes: a phishing page on one of these doesn't make the whole
@@ -167,16 +195,32 @@ impl Intel {
 
     pub async fn threat_feeds(&self) -> ThreatFeeds {
         let malware = self
-            .cached("feed:urlhaus", HOUR, async {
-                let text = self.get_text("https://urlhaus.abuse.ch/downloads/hostfile/").await?;
-                let hosts: Vec<String> = text
-                    .lines()
-                    .filter(|l| !l.starts_with('#'))
-                    .filter_map(|l| l.split_whitespace().nth(1))
-                    .map(|h| h.trim_end_matches('.').to_ascii_lowercase())
-                    .filter(|h| valid_host(h))
-                    .collect();
-                Some(json!(hosts))
+            .cached("feed:urlhaus-online", HOUR, async {
+                // The online-URLs CSV: the hostfile's hosts plus when each URL was added.
+                let text = self.get_text("https://urlhaus.abuse.ch/downloads/csv_online/").await?;
+                let mut first: std::collections::BTreeMap<String, Option<i64>> = Default::default();
+                for line in text.lines().filter(|l| !l.starts_with('#')) {
+                    let f: Vec<&str> = line.trim().trim_matches('"').split("\",\"").collect();
+                    let (Some(added), Some(url)) = (f.get(1), f.get(2)) else { continue };
+                    let Some(host) =
+                        url.parse::<http::Uri>().ok().and_then(|u| u.host().map(|h| h.trim_end_matches('.').to_ascii_lowercase()))
+                    else {
+                        continue;
+                    };
+                    if valid_host(&host) {
+                        let t = utc_ms(added);
+                        first
+                            .entry(host)
+                            .and_modify(|e| {
+                                *e = match (*e, t) {
+                                    (Some(a), Some(b)) => Some(a.min(b)),
+                                    (a, b) => a.or(b),
+                                }
+                            })
+                            .or_insert(t);
+                    }
+                }
+                Some(json!(first.into_iter().collect::<Vec<_>>()))
             })
             .await;
         let phishing = self
@@ -193,8 +237,29 @@ impl Intel {
                 Some(json!(hosts))
             })
             .await;
-        let list = |v: Option<(Value, i64)>| -> Vec<String> { v.and_then(|(v, _)| serde_json::from_value(v).ok()).unwrap_or_default() };
-        ThreatFeeds { malware: list(malware), phishing: list(phishing) }
+        let malware = match malware {
+            Some((v, at)) => Feed {
+                hosts: serde_json::from_value::<Vec<(String, Option<i64>)>>(v)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(host, listed_at)| FeedHost { host, listed_at })
+                    .collect(),
+                fetched_at: Some(at),
+            },
+            None => Feed::default(),
+        };
+        let phishing = match phishing {
+            Some((v, at)) => Feed {
+                hosts: serde_json::from_value::<Vec<String>>(v)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|host| FeedHost { host, listed_at: None })
+                    .collect(),
+                fetched_at: Some(at),
+            },
+            None => Feed::default(),
+        };
+        ThreatFeeds { malware, phishing }
     }
 
     async fn rovista(&self, asn: u64) -> Option<Value> {
@@ -633,6 +698,14 @@ pub fn curated_incidents() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn urlhaus_dates_convert_to_unix_ms() {
+        assert_eq!(utc_ms("1970-01-01 00:00:00"), Some(0));
+        assert_eq!(utc_ms("2000-03-01 00:00:00"), Some(951_868_800_000));
+        assert_eq!(utc_ms("2025-07-14 12:34:56"), Some(1_752_496_496_000));
+        assert_eq!(utc_ms("dateadded"), None);
+    }
 
     #[test]
     fn trace_gives_address_and_country() {

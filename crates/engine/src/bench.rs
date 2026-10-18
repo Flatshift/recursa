@@ -109,26 +109,20 @@ pub enum Family {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FilterProbes {
+    /// Malware and phishing blocking, with the test names blocking services publish. Live feed hosts are only
+    /// looked up from a Deep Dive (see [`crate::deepdive::live_blocking`]).
     #[serde(default = "yes")]
     pub threats: bool,
     #[serde(default = "yes")]
     pub ads: bool,
+    /// Adult-content blocking, with published test names. Off by default: the lookups are visible to the network.
     #[serde(default)]
     pub adult: bool,
-    /// Also send live threat names to resolvers that only speak plain DNS. Off by
-    /// default: security appliances can see plain-DNS names and may block this computer.
-    #[serde(default)]
-    pub plain_threats: bool,
-    /// Send them to a system resolver on a private address (a Pi-hole, the router) even when it
-    /// only speaks plain DNS, so its blocking can be checked. On by default: that lookup stays on
-    /// the local network unless the resolver forwards it.
-    #[serde(default = "yes")]
-    pub system_threats: bool,
 }
 
 impl Default for FilterProbes {
     fn default() -> Self {
-        FilterProbes { threats: true, ads: true, adult: false, plain_threats: false, system_threats: true }
+        FilterProbes { threats: true, ads: true, adult: false }
     }
 }
 
@@ -665,64 +659,15 @@ fn expand(
     out
 }
 
-fn prepare_filter_sets(set: Setup, cfg: &RunConfig, deps: &Deps, timeout: Duration, h: &RunHandle) -> probes::FilterSets {
+fn prepare_filter_sets(set: Setup, cfg: &RunConfig, h: &RunHandle) -> probes::FilterSets {
     let mut sets = probes::FilterSets::default();
     if !cfg.probes || set.over(h) {
         return sets;
     }
     if cfg.filters.threats {
-        let feeds = deps.rt.block_on(deps.intel.threat_feeds());
-        // The baseline must be unfiltered *and* unintercepted, so prefer encrypted DNS:
-        // a filtering box on the path would otherwise make live threats look dead.
-        let baseline: Option<Box<dyn Exchanger>> = [("8.8.8.8", "dns.google"), ("1.1.1.1", "one.one.one.one")]
-            .iter()
-            .take_while(|_| !set.over(h))
-            .find_map(|(ip, host)| {
-                let ep = Endpoint {
-                    transport: Transport::Dot,
-                    addr: SocketAddr::new(ip.parse().unwrap(), 853),
-                    host: Some(host.to_string()),
-                    url: None,
-                };
-                net::open(&ep, timeout).ok()
-            })
-            // Live threat names go over plain DNS only if the run opted into it and sends plain DNS at all.
-            .or_else(|| {
-                (cfg.filters.plain_threats && set.plain)
-                    .then(|| UdpX::connect(SocketAddr::new("8.8.8.8".parse().unwrap(), 53)).ok().map(|u| Box::new(u) as Box<dyn Exchanger>))
-                    .flatten()
-            });
-        if baseline.is_none() && !set.over(h) {
-            h.note(
-                "warn",
-                "Live threat baseline unavailable (DoT to 8.8.8.8 and 1.1.1.1 failed), so the malware and phishing filtering tests were skipped. Live threat names are never sent over plain DNS unless you allow it.".into(),
-                None,
-            );
-        }
-        if let Some(mut base) = baseline {
-            for (cat, mut list, source, vendor) in [
-                ("malware", feeds.malware, "URLhaus live malware hosts", probes::MALWARE_VENDOR),
-                ("phishing", feeds.phishing, "OpenPhish live phishing hosts", probes::PHISHING_VENDOR),
-            ] {
-                if set.over(h) {
-                    break;
-                }
-                fastrand::shuffle(&mut list);
-                list.truncate(40);
-                let mut live = probes::validate_live(base.as_mut(), &list, 10, timeout.min(Duration::from_millis(1500)));
-                let n_live = live.len();
-                live.extend(vendor.iter().map(|s| s.to_string()));
-                if n_live < 3 {
-                    let noun = if n_live == 1 { "domain" } else { "domains" };
-                    h.note(
-                        "warn",
-                        format!("Only {n_live} live {cat} {noun} could be confirmed from the feed, so the {cat} filtering result is less certain."),
-                        None,
-                    );
-                }
-                sets.categories.push((cat.into(), live, format!("{source} ({n_live} live) + vendor test domain")));
-            }
-        }
+        let names = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        sets.categories.push(("malware".into(), names(probes::MALWARE), "Vendor blocking-test domains".into()));
+        sets.categories.push(("phishing".into(), names(probes::PHISHING), "Vendor blocking-test domains".into()));
     }
     if cfg.filters.ads {
         sets.categories.push(("ads".into(), probes::ADS.iter().map(|s| s.to_string()).collect(), "Common ad and tracker hosts".into()));
@@ -731,7 +676,7 @@ fn prepare_filter_sets(set: Setup, cfg: &RunConfig, deps: &Deps, timeout: Durati
         sets.categories.push((
             "adult".into(),
             probes::ADULT.iter().map(|s| s.to_string()).collect(),
-            "Well-known adult sites + vendor test domain".into(),
+            "Vendor blocking-test domains".into(),
         ));
     }
     sets
@@ -1436,7 +1381,7 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
     // ---- Setup: everything that touches the network beyond measurement happens here.
     h.phase("setup", 0);
     let set = Setup::new(cfg);
-    let sets = prepare_filter_sets(set, cfg, deps, timeout, h);
+    let sets = prepare_filter_sets(set, cfg, h);
     let plan = expand(set, cfg, selected, deps.client_v6, timeout, h);
     h.publish(|s| {
         s.targets = plan.iter().map(|(t, _)| t.clone()).collect();
@@ -1516,7 +1461,7 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
     // ---- Capability probes.
     if cfg.probes && !h.cancelled() {
         h.phase("probes", selected.len() as u32);
-        run_probes(h, selected, &plan, &sets, timeout, deps.client_v6, &intercepted, &cfg.filters, set.plain);
+        run_probes(h, selected, &plan, &sets, timeout, deps.client_v6, &intercepted, set.plain);
     }
 
     // ---- Health check: if plain DNS stopped answering during the probes (a security
@@ -1816,7 +1761,6 @@ fn run_probes(
     timeout: Duration,
     client_v6: bool,
     intercepted: &[String],
-    filters: &FilterProbes,
     plain: bool,
 ) {
     let targets = h.with(|s| s.targets.clone());
@@ -1830,7 +1774,7 @@ fn run_probes(
                     let Some(r) = selected.get(next.fetch_add(1, Ordering::Relaxed)) else { break };
                     let avoid_udp = intercepted.contains(&r.id);
                     // A probe that panics loses only its own report, as when each had a thread of its own.
-                    let probe = || probe_resolver(r, plan, &targets, sets, timeout, client_v6, avoid_udp, filters, plain);
+                    let probe = || probe_resolver(r, plan, &targets, sets, timeout, client_v6, avoid_udp, plain);
                     let Some(rep) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(probe)).ok().flatten() else {
                         continue;
                     };
@@ -1848,17 +1792,11 @@ fn run_probes(
 
 /// A resolver on this network's own address space: RFC 1918, unique-local or link-local. Not shared (CGNAT,
 /// Tailscale) space or a loopback stub, which forward to somewhere else.
-fn on_local_network(ip: &IpAddr) -> bool {
+pub(crate) fn on_local_network(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v) => v.is_private() || v.is_link_local(),
         IpAddr::V6(v) => (v.segments()[0] & 0xfe00) == 0xfc00 || (v.segments()[0] & 0xffc0) == 0xfe80,
     }
-}
-
-/// Whether live threat names may go to `r` over plain DNS when it has no encrypted endpoint.
-fn threats_over_plain(r: &Resolver, filters: &FilterProbes) -> bool {
-    let local_system = r.group == "system" && r.primary(false).or_else(|| r.primary(true)).is_some_and(|ip| on_local_network(&ip));
-    filters.plain_threats || (filters.system_threats && local_system)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1870,29 +1808,13 @@ fn probe_resolver(
     timeout: Duration,
     client_v6: bool,
     avoid_udp: bool,
-    filters: &FilterProbes,
     plain: bool,
 ) -> Option<probes::ProbeReport> {
     use probes::Status::{Fail, Info, Pass, Unknown};
     let planned = planned_for(plan, &r.id);
     let (mut ex, via) = open_for_run(r, &planned, timeout, avoid_udp, plain)?;
-    // Live threat names travel only inside an encrypted connection, where nothing on the
-    // path can read them; plain DNS only when the user allowed it, or to the system resolver
-    // on the local network, whose blocking is what the user most needs checked. Never in a
-    // run that sends no plain DNS.
-    let plain_threats = plain && threats_over_plain(r, filters);
-    let mut threat_ex: Option<Box<dyn Exchanger>> = sets
-        .has_threats()
-        .then(|| {
-            endpoints::open_encrypted(r, &planned, timeout, plain)
-                .or_else(|| plain_threats.then(|| endpoints::open_best(r, &planned, timeout, avoid_udp)).flatten())
-                .map(|(x, _)| x)
-        })
-        .flatten();
-    // The cast shortens the trait object's lifetime so the borrow ends with this call.
-    let threat = threat_ex.as_mut().map(|x| &mut **x as &mut dyn Exchanger);
-    let mut rep = probes::probe(&r.id, via, ex.as_mut(), threat, timeout, sets);
-    drop((ex, threat_ex));
+    let mut rep = probes::probe(&r.id, via, ex.as_mut(), timeout, sets);
+    drop(ex);
 
     // Transports already measured in this run need no extra connection.
     let measured = |t: Transport| {
@@ -2507,25 +2429,6 @@ mod tests {
         assert_eq!(ecs_contains("223.165.96.0/24", Some(me)), Some(false));
         assert_eq!(ecs_contains("203.0.113.0/0", Some(me)), None);
         assert_eq!(ecs_contains("203.0.113.0/24", None), None);
-    }
-
-    #[test]
-    fn threat_names_reach_only_a_local_system_resolver_over_plain_dns() {
-        let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
-        let pihole = crate::catalog::system_entries(&[ip("192.168.1.53")]).remove(0);
-        let isp = crate::catalog::system_entries(&[ip("68.94.156.1")]).remove(0);
-        let custom = Resolver::custom(ip("10.0.0.53"), None, None, None);
-        let on = FilterProbes::default();
-        let off = FilterProbes { system_threats: false, ..on.clone() };
-        let all = FilterProbes { plain_threats: true, ..off.clone() };
-        assert!(threats_over_plain(&pihole, &on));
-        assert!(!threats_over_plain(&isp, &on) && !threats_over_plain(&custom, &on));
-        assert!(!threats_over_plain(&pihole, &off));
-        assert!(threats_over_plain(&isp, &all) && threats_over_plain(&custom, &all));
-        for stub in ["100.100.100.100", "100.64.0.1", "127.0.0.53"] {
-            let sys = crate::catalog::system_entries(&[ip(stub)]).remove(0);
-            assert!(!threats_over_plain(&sys, &on), "{stub}");
-        }
     }
 
     #[test]

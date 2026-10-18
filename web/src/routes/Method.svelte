@@ -284,7 +284,7 @@
         <li><b>ECS and egress:</b> <code>o-o.myaddr.l.google.com</code> returns the address that Google's servers saw, and any client subnet that the resolver sent. <code>whoami.ds.akahelp.net</code> returns the same for Akamai. A resolver can send different data to each: Cloudflare, for example, sends Akamai a /29 and Google nothing.</li>
         <li><b>QNAME minimisation:</b> internet.nl's <code>qnamemintest</code> zone.</li>
         <li><b>Identity:</b> NSID and the <code>id.server</code> CHAOS TXT record name the instance that answered.</li>
-        <li><b>Blocking:</b> 10 live malware hosts (URLhaus) and 10 live phishing hosts (OpenPhish), plus vendor test names. Recursa first makes sure that each live host resolves through an unfiltered, encrypted baseline. A block is NXDOMAIN, REFUSED, an empty answer, a sinkhole address, a known block page or an EDE code 15–18. Recursa sends live threat names only over DoT or DoH. Security appliances can see plain-DNS lookups of malicious names, and can block the computer that sends them. Your system resolver on the local network (a Pi-hole, your router) also gets the test over plain DNS, so you can make sure that its blocking works. You can turn this off. Other resolvers that use only plain DNS get the test only if you allow it.</li>
+        <li><b>Blocking:</b> six common ad and tracker hosts, and the test domains that blocking services publish for checking their own blocking: malware.testcategory.com and isitblocked.org for malware (Cloudflare, Quad9), phishing.testcategory.com and internetbadguys.com for phishing (Cloudflare, Cisco OpenDNS), nudity.testcategory.com and exampleadultsite.com for adult content (Cloudflare, Cisco OpenDNS). The adult-content check is off until you turn it on, since the network can see its lookups. They host nothing harmful and resolve normally through an unfiltered resolver, so a block is NXDOMAIN, REFUSED, an empty answer, a sinkhole address, a known block page or an EDE code 15–18. A resolver passes malware or phishing when it blocks at least half the names, since each service usually knows only its own. A check the run left off shows as Not tested. To go further, a Deep Dive can check one resolver against live hosts from the URLhaus malware and OpenPhish phishing feeds: up to 20 of each that still resolve through Google or Cloudflare over DoT. It shows the share blocked, each host, and how long URLhaus had listed each malware host, and every resolver checked within 30 minutes gets the same hosts so their results compare side by side. It is off until you start it, because security tools on the network (a UniFi gateway, Azure, a corporate firewall) may flag those lookups or block the device. The live names go only over DoT or DoH, except to your own resolver on this network (a Pi-hole, your router) or when you allow plain DNS for that check.</li>
         <li><b>Integrity:</b> NXDOMAIN rewriting, private-address rebinding, Extended DNS Errors and DNS Cookies.</li>
         <li><b>Transports:</b> TCP, DoT, DoH and IPv6 reachability.</li>
       </ul>
@@ -503,7 +503,12 @@
         It also requires a token that Recursa makes at each launch. Outbound, Recursa connects only to the resolvers you select, the
         CDN edges that they return, the time servers you choose on the Time page (UDP 123, and TCP 4460 for the NTS check), and the
         public sources above. During a run it also pings your default gateway. A Deep Dive, which you start from a resolver's
-        inspector, sends about 18 normal queries to that one resolver, one time. Results stay in a local database:
+        inspector, sends about 18 normal queries to that one resolver, one time; its live-feed blocking check, only when you start it,
+        downloads the URLhaus and OpenPhish feeds, looks up to 120 of their hosts through Google or Cloudflare to find live ones
+        (once per 30 minutes, since checks in that window share one sample), and asks the resolver for up to 40. Its deeper checks,
+        also only when you start them, send about 90 queries for test names (the root zone's key set, localtest.me, akahelp.net,
+        extended-dns-errors.com, cloudflare.com) to the resolver over UDP, TCP, DoT and DoH where it offers them, plus three UDP queries to the
+        name servers of localtest.me and akahelp.net, to read the TTLs those zones publish. Results stay in a local database:
       </p>
       <p class="mono path">{env?.db ?? '—'}</p>
     </section>

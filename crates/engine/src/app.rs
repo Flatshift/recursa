@@ -46,6 +46,8 @@ pub struct AppState {
     pub ntp_monitor: watch::Sender<NtpMonitorConfig>,
     /// Bumped when NTP monitoring is switched off or its record cleared, so a cycle in flight knows to record nothing.
     pub ntp_epoch: AtomicU64,
+    /// The live threat-feed hosts the Deep Dive's blocking check last used (see [`crate::deepdive::LiveSample`]).
+    pub live_sample: Mutex<Option<crate::deepdive::LiveSample>>,
 }
 
 /// A flag set for as long as this lives. Dropping it clears the flag, so a handler dropped mid-await (a closed
@@ -177,6 +179,7 @@ impl AppState {
             monitor: watch::Sender::new(monitor_cfg),
             ntp_monitor: watch::Sender::new(ntp_monitor_cfg),
             ntp_epoch: AtomicU64::new(0),
+            live_sample: Mutex::new(None),
         }))
     }
 
@@ -641,6 +644,8 @@ impl AppState {
             ("POST", ["resolvers"]) => ok(self.add_resolver(parse(body)?)?),
             ("DELETE", ["resolvers", id]) => ok(json!({ "deleted": self.store.custom_delete(id) })),
             ("POST", ["resolvers", id, "deep-dive"]) => ok(json!(self.deep_dive(id).await?)),
+            ("POST", ["resolvers", id, "live-blocking"]) => ok(json!(self.live_blocking(id, parse(body)?).await?)),
+            ("POST", ["resolvers", id, "deep-checks"]) => ok(json!(self.deep_checks(id).await?)),
             ("GET", ["monitor"]) => {
                 let hours = param("hours").and_then(|h| h.parse::<i64>().ok()).unwrap_or(72).clamp(1, 24 * 90);
                 let (since, cell) = monitor::window(hours, bench::now_ms());
@@ -746,6 +751,64 @@ impl AppState {
         .await;
         out.map_err(|e| ApiError::new(500, e.to_string()))?
             .ok_or_else(|| ApiError::new(502, format!("Couldn't open a connection to {label}.")))
+    }
+
+    /// The Deep Dive's opt-in blocking check with live malware and phishing hosts (see
+    /// [`crate::deepdive::live_blocking`]). Holds the run claim like the dive itself.
+    async fn live_blocking(&self, id: &str, opts: LiveBlockingOpts) -> Result<crate::deepdive::LiveBlocking, ApiError> {
+        let r = self
+            .resolvers()
+            .into_iter()
+            .find(|r| r.id == id || r.custom_id.as_deref() == Some(id) || r.aliases.iter().any(|a| a == id))
+            .ok_or_else(|| ApiError::new(404, "No such resolver."))?;
+        // Resolvers checked within a while of each other share one sample of live hosts.
+        let prior =
+            self.live_sample.lock().unwrap().clone().filter(|s| crate::bench::now_ms() - s.taken_at < crate::deepdive::LIVE_SAMPLE_TTL_MS);
+        // Download the feeds first: the intel cache doesn't fetch while measuring.
+        let feeds = if prior.is_none() { self.intel.threat_feeds().await } else { Default::default() };
+        let Some(claim) = FlagGuard::claim(&self.run_active) else {
+            return Err(ApiError::new(409, "Wait for the current run to finish."));
+        };
+        let Some(measure) = lock::wait(&lock::measure_path(), Duration::from_secs(10)).await else {
+            return Err(ApiError::new(409, "Another Recursa window or terminal is measuring right now. Try again when it finishes."));
+        };
+        let held = (FlagGuard::set(&self.measuring), claim, measure);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let _stop = StopOnDrop(cancel.clone());
+        let out = tokio::task::spawn_blocking(move || {
+            let _held = held;
+            crate::deepdive::live_blocking(&r, prior, feeds, opts.plain, Duration::from_millis(2000), &cancel)
+        })
+        .await;
+        let (result, sample) = out.map_err(|e| ApiError::new(500, e.to_string()))?.map_err(|m| ApiError::new(502, m))?;
+        if sample.categories.values().any(|c| !c.hosts.is_empty()) {
+            *self.live_sample.lock().unwrap() = Some(sample);
+        }
+        Ok(result)
+    }
+
+    /// The Deep Dive's further checks (see [`crate::deepdive::deep_checks`]). Holds the run claim like the dive itself.
+    async fn deep_checks(&self, id: &str) -> Result<crate::deepdive::DeepChecks, ApiError> {
+        let r = self
+            .resolvers()
+            .into_iter()
+            .find(|r| r.id == id || r.custom_id.as_deref() == Some(id) || r.aliases.iter().any(|a| a == id))
+            .ok_or_else(|| ApiError::new(404, "No such resolver."))?;
+        let Some(claim) = FlagGuard::claim(&self.run_active) else {
+            return Err(ApiError::new(409, "Wait for the current run to finish."));
+        };
+        let Some(measure) = lock::wait(&lock::measure_path(), Duration::from_secs(10)).await else {
+            return Err(ApiError::new(409, "Another Recursa window or terminal is measuring right now. Try again when it finishes."));
+        };
+        let held = (FlagGuard::set(&self.measuring), claim, measure);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let _stop = StopOnDrop(cancel.clone());
+        let out = tokio::task::spawn_blocking(move || {
+            let _held = held;
+            crate::deepdive::deep_checks(&r, Duration::from_millis(2000), &cancel)
+        })
+        .await;
+        out.map_err(|e| ApiError::new(500, e.to_string()))?.map_err(|m| ApiError::new(502, m))
     }
 
     fn idle(&self) -> Result<(), ApiError> {
@@ -908,6 +971,13 @@ impl AppState {
         }
         Some(Export { filename: format!("recursa-{id}.csv"), mime: "text/csv; charset=utf-8", body: out })
     }
+}
+
+#[derive(Deserialize)]
+struct LiveBlockingOpts {
+    /// Allow plain DNS for a resolver without DoT or DoH.
+    #[serde(default)]
+    plain: bool,
 }
 
 fn parse<T: serde::de::DeserializeOwned>(body: Value) -> Result<T, ApiError> {

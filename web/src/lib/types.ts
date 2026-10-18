@@ -127,7 +127,7 @@ interface FilterSample {
   how: string;
 }
 
-interface FilterCategory {
+export interface FilterCategory {
   tested: number;
   blocked: number;
   source: string;
@@ -306,7 +306,7 @@ export interface RunConfig {
   samples: number;
   mode: 'accurate' | 'quick';
   probes: boolean;
-  filters: { threats: boolean; ads: boolean; adult: boolean; plain_threats: boolean; system_threats: boolean };
+  filters: { threats: boolean; ads: boolean; adult: boolean };
   cdn: boolean;
   /** The names the Cached test asks, in rotation. */
   cached_names: string[];
@@ -760,6 +760,25 @@ export interface NtpMonitorResp {
   history: { since: number; until: number; bucket_ms: number; cycles: number; servers: NtpMonitorServer[]; clock: NtpMonitorClock };
 }
 
+/** The Deep Dive's opt-in blocking check with live malware (URLhaus) and phishing (OpenPhish) hosts. */
+export interface LiveCategory extends FilterCategory {
+  /** When the feed was downloaded (Unix ms). */
+  fetched_at: number | null;
+  /** Feed hosts drawn at random; the samples are the ones of those that still resolve. */
+  sampled: number;
+  /** When the feed first listed each tested host, for feeds that date entries (URLhaus). */
+  listed_at: Record<string, number>;
+}
+
+export interface LiveBlocking {
+  transport: string;
+  /** Checks with the same value tested the same hosts. */
+  sample_taken_at: number;
+  categories: Record<string, LiveCategory>;
+  notes: string[];
+  duration_ms: number;
+}
+
 /** A Deep Dive: a short, fixed look at one resolver. Only round trips and response fields are measured; the cache findings are inferred. */
 export interface DeepDive {
   transport: string;
@@ -802,3 +821,81 @@ export interface DeepDive {
 }
 
 export type DeepDiveStep = 'popular' | 'random' | 'repeat' | 'last';
+
+/** One ask for the root DNSKEY set (about 1.1 KB signed) in the truncation check. */
+export interface SizeStep {
+  transport: string;
+  /** EDNS buffer offered; null over TCP. */
+  buffer: number | null;
+  answered: boolean;
+  size_bytes: number | null;
+  tc: boolean;
+  answers: number;
+  ad: boolean;
+  ms: number | null;
+}
+
+export interface TtlLimit {
+  kind: 'long' | 'short';
+  name: string;
+  qtype: string;
+  authoritative: number | null;
+  resolver: number | null;
+}
+
+export interface NegativeCache {
+  name: string;
+  rcode: string | null;
+  authoritative: number | null;
+  first: number | null;
+  later: number | null;
+  first_ms: number | null;
+  later_ms: number | null;
+  gap_s: number;
+}
+
+export interface DnssecCase {
+  name: string;
+  label: string;
+  /** Whether a validating resolver should accept it; null when either answer is correct. */
+  expect_valid: boolean | null;
+  rcode: string | null;
+  ad: boolean;
+  ede: { code: number; name: string; text: string }[];
+}
+
+export interface CacheAsk {
+  ttl: number | null;
+  ms: number | null;
+  /** Came back with the full TTL: fetched upstream rather than answered from a cache. */
+  fetched: boolean;
+}
+
+export interface CacheCount {
+  rows: { name: string; asks: CacheAsk[] }[];
+  /** At least this many caches answer for the address; null when TTLs don't count down. */
+  caches: number | null;
+  rounds: number;
+}
+
+export interface TransportCost {
+  transport: string;
+  setup_ms: number | null;
+  first_ms: number | null;
+  reused_ms: number | null;
+  answered: number;
+  asked: number;
+  error: string | null;
+}
+
+export interface DeepChecks {
+  transport: string | null;
+  truncation: SizeStep[];
+  ttl: TtlLimit[];
+  negative: NegativeCache | null;
+  dnssec: DnssecCase[];
+  caches: CacheCount | null;
+  transports: TransportCost[];
+  notes: string[];
+  duration_ms: number;
+}
