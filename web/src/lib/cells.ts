@@ -22,6 +22,10 @@ export function capCell(run: RunState | null, r: Resolver, key: string): Cell {
     }
     return { status: c.status, text: c.value, prov: 'verified', evidence: c.evidence };
   }
+  // A probed resolver whose blocking category this run didn't test: say so, rather than fall back to a claim or a blank.
+  if (key.startsWith('filter_') && run?.probes[r.id] && !run.probes[r.id].filtering?.[key.slice(7)]) {
+    return { status: 'unknown', text: 'Not tested', prov: 'unknown', evidence: c?.evidence || 'Not in this run’s test plan' };
+  }
   const def = CAP[key];
   // Only catalog entries have operator documentation. For the system resolver and custom
   // entries, anything not measured is unknown, never an implied "no".

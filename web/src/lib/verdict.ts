@@ -515,7 +515,7 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
       goal: 'Best protection',
       resolverId: protective[0],
       name: nameOfRow(rowOf(protective[0])),
-      evidence: `${yours(protective[0])}blocked ${mal ? `${mal.blocked} of ${mal.tested}` : 'most'} live malware hosts; validates DNSSEC`,
+      evidence: `${yours(protective[0])}blocked ${mal ? `${mal.blocked} of ${mal.tested}` : 'most'} malware test domains; validates DNSSEC`,
       verified: true,
     });
   }

@@ -60,14 +60,14 @@ export const CAPS: CapDef[] = [
     key: 'filter_malware',
     label: 'Malware blocking',
     group: 'Blocking',
-    explain: 'Share of live malware hosts (sampled from URLhaus, plus a vendor test name) that the resolver refuses to resolve.',
+    explain: 'Whether the resolver refuses the malware test domains that Cloudflare and Quad9 publish. A Deep Dive can also check live URLhaus hosts.',
     published: (p) => (p.filtering.includes('malware') ? true : p.filtering.length === 0 ? false : null),
   },
   {
     key: 'filter_phishing',
     label: 'Phishing blocking',
     group: 'Blocking',
-    explain: 'Share of live phishing hosts (sampled from OpenPhish, plus a vendor test name) that are blocked.',
+    explain: 'Whether the phishing test domains that Cloudflare and Cisco OpenDNS publish are blocked. A Deep Dive can also check live OpenPhish hosts.',
     published: (p) => (p.filtering.includes('phishing') ? true : p.filtering.length === 0 ? false : null),
   },
   {
@@ -81,7 +81,8 @@ export const CAPS: CapDef[] = [
     key: 'filter_adult',
     label: 'Adult content blocking',
     group: 'Blocking',
-    explain: 'Whether well-known adult sites are blocked. Off by default; enable it under Probes.',
+    explain:
+      'Whether the adult-content test domains that Cloudflare and Cisco OpenDNS publish are blocked. Off by default; turn it on under Capability probes when setting up a run.',
     published: (p) => (p.filtering.includes('adult') ? true : p.filtering.length === 0 ? false : null),
   },
   {

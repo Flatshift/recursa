@@ -501,34 +501,7 @@
               >
               <label class="toggle"><input type="checkbox" bind:checked={draft.filters.ads} /><span>Ad &amp; tracker blocking</span></label>
               <label class="toggle"><input type="checkbox" bind:checked={draft.filters.adult} /><span>Adult-content blocking</span></label>
-              {#if draft.filters.threats}
-                <div class="sub">
-                  <label class="toggle"
-                    ><input type="checkbox" bind:checked={draft.filters.system_threats} /><span>Also test your system resolver</span></label
-                  >
-                  <label class="toggle"
-                    ><input type="checkbox" bind:checked={draft.filters.plain_threats} /><span>Also test resolvers without encrypted DNS</span></label
-                  >
-                </div>
-                <p class="hint warnhint">
-                  <Icon name="lock" size={13} />{#if draft.filters.plain_threats}
-                    Live malware and phishing names will also go over plain DNS to resolvers that offer nothing else. Security tools on
-                    your network can see those lookups and may block this computer's DNS.
-                  {:else if draft.filters.system_threats}
-                    Live malware and phishing names go over DoT or DoH, and over plain DNS only to your own resolver on this network (a
-                    Pi-hole or your router), to check its blocking.
-                  {:else}
-                    Live malware and phishing names are looked up only over DoT or DoH, so devices on your network can't see them.
-                    Resolvers that only speak plain DNS show those checks as not tested.
-                  {/if}
-                </p>
-              {/if}
-              {#if draft.filters.adult}
-                <p class="hint warnhint">
-                  <Icon name="info" size={13} />The adult-content check looks up well-known adult sites. No connection is made, but the
-                  lookups are visible to your network.
-                </p>
-              {/if}
+              <p class="hint">Looks up the adult-content test domains Cloudflare and Cisco OpenDNS publish. The network can see these lookups.</p>
             </div>
           {/if}
           <label class="toggle"><input type="checkbox" bind:checked={draft.cdn} /><span>CDN mapping quality</span></label>
@@ -747,15 +720,6 @@
     color: var(--ink-3);
     margin-top: 6px;
     max-width: 62ch;
-  }
-  .warnhint {
-    display: flex;
-    gap: 6px;
-    align-items: flex-start;
-  }
-  .warnhint :global(svg) {
-    flex: none;
-    margin-top: 2px;
   }
   .addbtn {
     margin-top: 6px;

@@ -2,6 +2,29 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- **Blocking checks in a run use published test domains**: `malware.testcategory.com` and `isitblocked.org` for
+  malware, `phishing.testcategory.com` and `internetbadguys.com` for phishing, `nudity.testcategory.com` and
+  `exampleadultsite.com` for adult content. They are what Cloudflare, Quad9 and Cisco OpenDNS publish for testing their
+  own blocking, and replace live malware and phishing hosts and well-known adult sites. Malware, phishing and ad
+  checks are on by default; the adult-content check stays off until you turn it on, since the network can see its
+  lookups.
+- **Deep Dive: blocking against live threat feeds.** An opt-in check asks one resolver for up to 20 live URLhaus
+  malware and 20 OpenPhish phishing hosts that still resolve elsewhere, and shows the share it blocked, each host as
+  blocked or resolved, and the malware hosts grouped by how long URLhaus has listed them. Resolvers checked within 30
+  minutes of each other get the same hosts and line up in a table, so their blocking compares directly. A warning beside it
+  says that security tools on the network may flag the lookups or block the device. The names go over DoT or DoH, or
+  over plain DNS to your own resolver on the local network or when you allow it.
+- **Deep Dive: deeper checks.** About 90 queries for test names, started by hand, check what a run doesn't: whether
+  a large signed answer is truncated cleanly when it's larger than a 512- or 1232-byte buffer and comes whole over
+  TCP; whether the resolver caps long and short TTLs, compared with what the zone's own servers publish; how long it
+  keeps a nonexistent name; how it handles DNSSEC across algorithms 8, 13, 15 and 16 and with expired signatures or a
+  mismatched DS, with the EDE codes it returns; how many separate caches answer behind the address; and what TCP, DoT
+  and DoH connection setup costs against UDP.
+- Results show **Not tested** for a blocking check the run left off, and the Capabilities verdict no longer says no
+  resolver blocks malware when malware blocking wasn't tested.
+
 ## 0.3.5 (2026-10-17)
 
 - **Kernel receive stamps on Windows**: UDP answers are stamped by the network stack as they arrive

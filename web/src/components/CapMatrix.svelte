@@ -135,8 +135,13 @@
     const pick = (goal: string) => v.picks.find((p) => p.goal === goal);
     const protect = pick('Best protection');
     const priv = pick('Most private');
-    const sentence =
-      protect && priv
+    // A run can leave malware blocking off, and then it can't say no resolver blocks.
+    const malwareTested = resolvers.some((r) => run.probes[r.id]?.filtering?.malware);
+    const sentence = !malwareTested
+      ? priv
+        ? `${priv.name} is the most private.`
+        : 'No resolver here passes every privacy check.'
+      : protect && priv
         ? protect.resolverId === priv.resolverId
           ? `${protect.name} protects best and is the most private.`
           : `${protect.name} protects best; ${priv.name} is the most private.`
@@ -171,7 +176,11 @@
       sentence,
       detail,
       picks: [
-        { goal: 'Best protection', name: protect?.name ?? 'None', ev: protect?.evidence ?? 'None both blocks malware and validates DNSSEC' },
+        {
+          goal: 'Best protection',
+          name: protect?.name ?? (malwareTested ? 'None' : 'Not tested'),
+          ev: protect?.evidence ?? (malwareTested ? 'None both blocks malware and validates DNSSEC' : 'Malware blocking was off for this run'),
+        },
         { goal: 'Most private', name: priv?.name ?? 'None', ev: priv?.evidence ?? 'None sends no subnet, minimises names and validates DNSSEC' },
         { goal: 'Encrypted DNS', name: of(both.length), ev: without.length ? `answer over DoT and DoH; not ${few(without)}` : 'All answer over DoT and DoH from here' },
         { goal: 'Sends your subnet', name: ecs.length ? of(ecs.length) : 'None', ev: ecs.length ? `${few(ecs.map(short))} pass part of your address on (ECS)` : 'None passes part of your address on' },
@@ -210,7 +219,7 @@
   <Info label="About the probes">
     <p>What each resolver actually does, probed from this network with fresh, uncacheable names.</p>
     <p>{mobile ? 'Open a resolver from Overview for its evidence.' : 'Hover a cell for its evidence.'} Select a resolver’s name for the full record, with the raw responses.</p>
-    <p>A capability every resolver shares collapses to one line. Blocking shows the share of live malicious hosts blocked.</p>
+    <p>A capability every resolver shares collapses to one line. Blocking shows the share of test names blocked.</p>
   </Info>
 </div>
 

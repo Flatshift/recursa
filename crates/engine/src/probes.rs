@@ -78,12 +78,6 @@ pub struct FilterSets {
     pub categories: Vec<(String, Vec<String>, String)>,
 }
 
-impl FilterSets {
-    pub fn has_threats(&self) -> bool {
-        self.categories.iter().any(|(c, _, _)| c == "malware" || c == "phishing")
-    }
-}
-
 pub const ADS: &[&str] = &[
     "pagead2.googlesyndication.com",
     "ad.doubleclick.net",
@@ -92,9 +86,27 @@ pub const ADS: &[&str] = &[
     "www.google-analytics.com",
     "bat.bing.com",
 ];
-pub const ADULT: &[&str] = &["pornhub.com", "xvideos.com", "nudity.testcategory.com"];
-pub const MALWARE_VENDOR: &[&str] = &["malware.testcategory.com"];
-pub const PHISHING_VENDOR: &[&str] = &["internetbadguys.com"];
+// Names that blocking services publish for testing their own blocking. They resolve normally through an
+// unfiltered resolver and host nothing harmful, so a run can send them anywhere. Live feed hosts are looked up
+// only from a Deep Dive (`deepdive::live_blocking`).
+pub const MALWARE: &[&str] = &[
+    // Cloudflare's test category names, blocked by 1.1.1.2 and 1.1.1.3 and Cloudflare Gateway.
+    "malware.testcategory.com",
+    // Quad9's blocking test name (quad9.net support pages).
+    "isitblocked.org",
+];
+pub const PHISHING: &[&str] = &[
+    // Cloudflare's test category names.
+    "phishing.testcategory.com",
+    // Cisco OpenDNS's phishing test name (also blocked by CleanBrowsing).
+    "internetbadguys.com",
+];
+pub const ADULT: &[&str] = &[
+    // Cloudflare's test category names, blocked by 1.1.1.3.
+    "nudity.testcategory.com",
+    // Cisco OpenDNS's adult-content test name (FamilyShield; also CleanBrowsing and AdGuard family filters).
+    "exampleadultsite.com",
+];
 
 struct Ctx<'a> {
     ex: &'a mut dyn Exchanger,
@@ -201,17 +213,8 @@ fn filter_timeout(timeout: Duration) -> Duration {
     timeout.min(Duration::from_millis(1500))
 }
 
-/// Run every probe over `ex`. Live threat names go over `threat_ex` only (an encrypted
-/// connection to the same resolver, or plain DNS when the user allowed it); without it
-/// those categories are reported as not tested.
-pub fn probe(
-    resolver_id: &str,
-    via: &str,
-    ex: &mut dyn Exchanger,
-    threat_ex: Option<&mut dyn Exchanger>,
-    timeout: Duration,
-    sets: &FilterSets,
-) -> ProbeReport {
+/// Run every probe over `ex`. Blocking categories the run left off are reported as not tested.
+pub fn probe(resolver_id: &str, via: &str, ex: &mut dyn Exchanger, timeout: Duration, sets: &FilterSets) -> ProbeReport {
     let started = std::time::Instant::now();
     let mut c = Ctx { ex, timeout };
     let mut rep = ProbeReport { resolver_id: resolver_id.into(), via: via.into(), ..Default::default() };
@@ -436,11 +439,8 @@ pub fn probe(
         check("ede", Status::Unknown, None, "Couldn't test", "")
     });
 
-    // Filtering categories. Live malware and phishing names go only over the separate
-    // encrypted connection when one is given: in plain DNS, security appliances on the
-    // path can see the names and react, up to quarantining this computer's DNS.
+    // Filtering categories.
     let mut styles: BTreeMap<String, usize> = BTreeMap::new();
-    let mut threat = threat_ex.map(|ex| Ctx { ex, timeout: filter_timeout(timeout) });
     for (cat, domains, source) in &sets.categories {
         let is_threat = matches!(cat.as_str(), "malware" | "phishing");
         let key: &'static str = match cat.as_str() {
@@ -450,50 +450,9 @@ pub fn probe(
             "adult" => "filter_adult",
             _ => "filter_other",
         };
-        if is_threat && threat.is_none() {
-            rep.checks.push(check(
-                key,
-                Status::Unknown,
-                None,
-                "Not tested",
-                "no encrypted endpoint; live threat names go over plain DNS only to your own resolver on the local network, or when you allow it in the test plan",
-            ));
-            continue;
-        }
-        let mut fc = FilterCategory { source: source.clone(), ..Default::default() };
-        let mut timeouts = 0;
-        for d in domains {
-            // Repeated timeouts mean the path stopped answering; don't wait out the rest.
-            if timeouts >= 3 {
-                fc.samples.push(FilterSample { domain: d.clone(), blocked: None, how: "skipped after 3 timeouts in a row".into() });
-                continue;
-            }
-            let q = QuerySpec::new(d.as_str(), dns::TYPE_A);
-            let answer = match threat.as_mut().filter(|_| is_threat) {
-                Some(t) => t.ask(&q),
-                None => c.ask(&q),
-            };
-            let s = match answer {
-                Ok(m) => {
-                    timeouts = 0;
-                    match block_signal(&m) {
-                        Some(how) => {
-                            *styles.entry(how.split(" (").next().unwrap_or(&how).to_string()).or_default() += 1;
-                            FilterSample { domain: d.clone(), blocked: Some(true), how }
-                        }
-                        None => FilterSample { domain: d.clone(), blocked: Some(false), how: summary(&m) },
-                    }
-                }
-                Err(e) => {
-                    timeouts += (e == XErr::Timeout) as u32;
-                    FilterSample { domain: d.clone(), blocked: None, how: e.to_string() }
-                }
-            };
-            if let Some(b) = s.blocked {
-                fc.tested += 1;
-                fc.blocked += b as usize;
-            }
-            fc.samples.push(s);
+        let fc = test_category(c.ex, domains, source, filter_timeout(timeout));
+        for s in fc.samples.iter().filter(|s| s.blocked == Some(true)) {
+            *styles.entry(s.how.split(" (").next().unwrap_or(&s.how).to_string()).or_default() += 1;
         }
         let (status, present, value) = if fc.tested == 0 {
             (Status::Unknown, None, "Couldn't test".to_string())
@@ -512,26 +471,68 @@ pub fn probe(
         rep.checks.push(check(key, status, present, value, format!("{source} · {}", blocked.join("; "))));
         rep.filtering.insert(cat.clone(), fc);
     }
+    for (cat, key) in [("malware", "filter_malware"), ("phishing", "filter_phishing"), ("ads", "filter_ads"), ("adult", "filter_adult")] {
+        if !sets.categories.iter().any(|(c, _, _)| c == cat) {
+            rep.checks.push(check(key, Status::Unknown, None, "Not tested", "not in this run's test plan"));
+        }
+    }
     rep.block_style = styles.into_iter().max_by_key(|(_, n)| *n).map(|(s, _)| s);
 
     rep.duration_ms = started.elapsed().as_secs_f64() * 1000.0;
     rep
 }
 
-/// Keep only names an unfiltered baseline resolves to routable addresses.
+/// Look up each of `domains` over `ex` and classify the answer: blocked, resolved, or no usable answer.
+pub fn test_category(ex: &mut dyn Exchanger, domains: &[String], source: &str, timeout: Duration) -> FilterCategory {
+    let mut c = Ctx { ex, timeout };
+    let mut fc = FilterCategory { source: source.into(), ..Default::default() };
+    let mut timeouts = 0;
+    for d in domains {
+        // Repeated timeouts mean the path stopped answering; don't wait out the rest.
+        if timeouts >= 3 {
+            fc.samples.push(FilterSample { domain: d.clone(), blocked: None, how: "skipped after 3 timeouts in a row".into() });
+            continue;
+        }
+        let s = match c.ask(&QuerySpec::new(d.as_str(), dns::TYPE_A)) {
+            Ok(m) => {
+                timeouts = 0;
+                match block_signal(&m) {
+                    Some(how) => FilterSample { domain: d.clone(), blocked: Some(true), how },
+                    None => FilterSample { domain: d.clone(), blocked: Some(false), how: summary(&m) },
+                }
+            }
+            Err(e) => {
+                timeouts += (e == XErr::Timeout) as u32;
+                FilterSample { domain: d.clone(), blocked: None, how: e.to_string() }
+            }
+        };
+        if let Some(b) = s.blocked {
+            fc.tested += 1;
+            fc.blocked += b as usize;
+        }
+        fc.samples.push(s);
+    }
+    fc
+}
+
+/// Keep only names an unfiltered baseline resolves to routable addresses. Stops after 3 timeouts in a row, which mean
+/// the baseline stopped answering.
 pub fn validate_live(baseline: &mut dyn Exchanger, candidates: &[String], want: usize, timeout: Duration) -> Vec<String> {
     let mut c = Ctx { ex: baseline, timeout };
     let mut live = Vec::new();
+    let mut timeouts = 0;
     for d in candidates {
-        if live.len() >= want {
+        if live.len() >= want || timeouts >= 3 {
             break;
         }
-        if let Ok(m) = c.ask(&QuerySpec::new(d.as_str(), dns::TYPE_A))
-            && m.rcode == dns::RCODE_NOERROR
-            && block_signal(&m).is_none()
-            && !m.ipv4_answers().is_empty()
-        {
-            live.push(d.clone());
+        match c.ask(&QuerySpec::new(d.as_str(), dns::TYPE_A)) {
+            Ok(m) => {
+                timeouts = 0;
+                if m.rcode == dns::RCODE_NOERROR && block_signal(&m).is_none() && !m.ipv4_answers().is_empty() {
+                    live.push(d.clone());
+                }
+            }
+            Err(e) => timeouts += (e == XErr::Timeout) as u32,
         }
     }
     live
