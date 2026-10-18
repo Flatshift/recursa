@@ -110,7 +110,7 @@ enum Cmd {
 }
 
 fn open_state(cli: &Cli, calibrate: bool) -> Arc<AppState> {
-    AppState::open(cli.db.clone(), calibrate).unwrap_or_else(|e| {
+    AppState::open(cli.db.clone(), calibrate, recursa_engine::caps::Caps::BROWSER).unwrap_or_else(|e| {
         eprintln!("Couldn't open the database {e}");
         std::process::exit(1);
     })

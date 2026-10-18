@@ -9,6 +9,7 @@ pub const BUILD: &str = env!("RECURSA_BUILD");
 pub mod app;
 pub mod bench;
 pub mod calibrate;
+pub mod caps;
 pub mod catalog;
 pub mod cdn;
 pub mod clock;

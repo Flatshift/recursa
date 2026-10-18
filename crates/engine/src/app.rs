@@ -24,6 +24,8 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 pub struct AppState {
+    /// What this build can do; sent to the UI in the bootstrap.
+    pub caps: crate::caps::Caps,
     pub store: Arc<Store>,
     pub intel: Arc<Intel>,
     pub measuring: Arc<AtomicBool>,
@@ -149,8 +151,8 @@ fn stored_ntp_monitor(store: &Store) -> Option<NtpMonitorConfig> {
 
 impl AppState {
     /// Open the database and build the state. `calibrate` measures the timing floor first;
-    /// otherwise [`AppState::start_background`] does it.
-    pub fn open(db: Option<PathBuf>, calibrate: bool) -> Result<Arc<Self>, String> {
+    /// otherwise [`AppState::start_background`] does it. `caps` is the host's row of [`crate::caps::BUILDS`].
+    pub fn open(db: Option<PathBuf>, calibrate: bool, caps: crate::caps::Caps) -> Result<Arc<Self>, String> {
         let path = db.unwrap_or_else(store::default_path);
         let store = Arc::new(Store::open(path.clone()).map_err(|e| format!("{}: {e}", path.display()))?);
         let measuring = Arc::new(AtomicBool::new(false));
@@ -159,6 +161,7 @@ impl AppState {
         let monitor_cfg = stored_monitor(&store).unwrap_or_default();
         let ntp_monitor_cfg = stored_ntp_monitor(&store).unwrap_or_default();
         Ok(Arc::new(AppState {
+            caps,
             store,
             intel,
             measuring,
@@ -756,6 +759,7 @@ impl AppState {
         let resolvers = self.resolvers();
         let defaults = RunConfig::with_resolvers(resolvers.iter().filter(|r| r.default).map(|r| r.id.clone()).collect());
         json!({
+            "caps": self.caps,
             "env": self.env(),
             "resolvers": resolvers,
             "defaults": defaults,
@@ -1022,7 +1026,7 @@ mod tests {
     fn app() -> Arc<AppState> {
         crate::install_crypto_provider();
         let db = std::env::temp_dir().join(format!("recursa-test-{:x}.db", fastrand::u64(..)));
-        AppState::open(Some(db), false).unwrap()
+        AppState::open(Some(db), false, crate::caps::Caps::BROWSER).unwrap()
     }
 
     #[tokio::test]

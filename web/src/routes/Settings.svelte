@@ -22,11 +22,10 @@
   let saving = $state(false);
   let error = $state<string | null>(null);
 
-  async function load() {
-    if (shell) login = await loginItem.get().catch(() => null);
-  }
+  // The Settings window can open before the bootstrap arrives.
+  const canLogin = $derived(app.boot?.caps.login_item ?? false);
   $effect(() => {
-    load();
+    if (canLogin) loginItem.get().then((v) => (login = v), () => (login = null));
   });
 
   async function saveMonitor(next: MonitorConfig) {
@@ -228,7 +227,7 @@
             {/each}
           </div>
         </div>
-        {#if shell}
+        {#if canLogin}
           <label class="row check">
             <input type="checkbox" checked={!!login} disabled={login == null} onchange={(e) => setLogin((e.currentTarget as HTMLInputElement).checked)} />
             <span>Open at login, in the menu bar only</span>
@@ -312,7 +311,7 @@
           </p>
           <p class="note">
             Saved runs are never counted or deleted. Save a run with the bookmark on its row in the sidebar, or in the toolbar of its results.
-            To delete every unsaved run now, use the menu by the sidebar's Runs heading{#if shell}, or File › Clear All Runs{/if}.
+            To delete every unsaved run now, use the menu by the sidebar's Runs heading{#if app.boot?.caps.app_menu}, or File › Clear All Runs{/if}.
           </p>
         {:else if !error}
           <p class="note">Loading…</p>

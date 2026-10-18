@@ -209,7 +209,7 @@
 
   // Everything else about this run, under one "…": the same menu a run has in the sidebar.
   // Phone: the bar keeps only back, the title and this menu, so saving, a new run and the run's measurement
-  // conditions move in here. Export isn't available there yet.
+  // conditions move in here.
   function runMenu(e: MouseEvent, id: string) {
     const phone = mobile
       ? [
@@ -218,11 +218,13 @@
           { id: 'conditions', label: 'Measurement Conditions' },
           SEPARATOR,
         ]
-      : [{ id: 'csv', label: 'Export Samples as CSV…' }, { id: 'json', label: 'Export Run as JSON…' }, SEPARATOR];
+      : [];
+    const exports = app.boot?.caps.export ? [{ id: 'csv', label: 'Export Samples as CSV…' }, { id: 'json', label: 'Export Run as JSON…' }, SEPARATOR] : [];
     menu.show(
       e,
       [
         ...phone,
+        ...exports,
         { id: 'delete', label: 'Delete Run…' },
       ],
       (pick) => {
