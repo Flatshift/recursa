@@ -28,6 +28,17 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      # Cargo.toml has the version; the app bundles take it from web/package.json (tauri.conf.json).
+      - name: One version everywhere
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          for f in web/package.json web/package-lock.json; do
+            v=$(node -p "require('./$f').version")
+            if [ "$v" != "$version" ]; then
+              echo "$f says $v, but Cargo.toml says $version"
+              exit 1
+            fi
+          done
       - name: Interface
         working-directory: web
         run: |
@@ -106,7 +117,14 @@ jobs:
       - run: cargo clippy -p recursa-desktop -p recursa-engine --target aarch64-apple-ios --release -- -D warnings
       - name: Simulator app
         working-directory: crates/desktop
-        run: ../../web/node_modules/.bin/tauri ios build --debug --target aarch64-sim
+        run: |
+          ../../web/node_modules/.bin/tauri ios build --debug --target aarch64-sim
+          version=$(grep -m1 '^version' ../../Cargo.toml | cut -d'"' -f2)
+          v=$(plutil -extract CFBundleShortVersionString raw gen/apple/build/arm64-sim/Recursa.app/Info.plist)
+          if [ "$v" != "$version" ]; then
+            echo "The iOS app says $v, but Cargo.toml says $version"
+            exit 1
+          fi
 
   # Unsigned NSIS installers for testing, on manual runs only; tag pushes build them in release.yml. ARM64 is
   # cross-compiled on the x64 runner with the MSVC ARM64 tools it ships.
