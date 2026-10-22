@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Resolver, RunState, TestKind } from '../lib/types';
+  import type { Resolver, RunState, TestKind, Trace } from '../lib/types';
   import type { Row } from '../lib/verdict';
   import { TESTS } from '../lib/verdict';
   import { shortcut } from '../lib/keys';
@@ -12,9 +12,11 @@
   import Glyph from './Glyph.svelte';
   import Icon from './Icon.svelte';
   import Provenance from './Provenance.svelte';
+  import Floor from './Floor.svelte';
+  import Route from './Route.svelte';
   import { logDomain } from '../lib/scale';
   import { app } from '../lib/store.svelte';
-  import { mobile } from '../lib/api';
+  import { api, mobile } from '../lib/api';
   import { cellPenalty, ecsByAuthority, edgeIps, youOf } from '../lib/cdn';
   import type { HostStatus } from '../lib/types';
 
@@ -89,6 +91,28 @@
   const probe = $derived(run?.probes[id] ?? null);
   const intel = $derived(run?.intel[id] ?? null);
   const path = $derived(run?.paths?.[id] ?? null);
+
+  // Trace route: on demand, one IPv4 address, kept only while this resolver is open.
+  const traceCap = $derived(app.env?.trace ?? 'unsupported');
+  let trace = $state<Trace | null>(null);
+  let tracing = $state(false);
+  let traceError = $state<string | null>(null);
+  $effect(() => {
+    id;
+    trace = null;
+    traceError = null;
+  });
+  async function runTrace() {
+    tracing = true;
+    traceError = null;
+    try {
+      trace = await api.post<Trace>(`/api/resolvers/${encodeURIComponent(id)}/trace`);
+    } catch (e) {
+      traceError = e instanceof Error ? e.message : String(e);
+    } finally {
+      tracing = false;
+    }
+  }
   const cdn = $derived(run?.cdn?.resolvers[id] ?? null);
   // The client subnet each authority saw, grouped for the CDN mapping line:
   // "203.0.113.0/24 to Fastly and Google, none to Akamai and PowerDNS". Empty when no authority answered.
@@ -194,6 +218,12 @@
               <dt>Network round trip</dt>
               <dd><span class="num">{ms(path.rtt_ms)}</span> <span class="muted">TCP handshake to port {path.port}, best of {path.samples.length}</span></dd>
             </div>
+            {#if mine.length}
+              <div class="wide">
+                <dt>Where the time goes</dt>
+                <dd><Floor {path} rows={mine} name={resolver.provider} /></dd>
+              </div>
+            {/if}
           {/if}
           {#if intel?.egress}
             <div>
@@ -248,6 +278,23 @@
             </div>
           {/if}
         </dl>
+        {#if resolver.ipv4.length && traceCap !== 'unsupported'}
+          <div class="trace">
+            {#if traceCap === 'needs_admin'}
+              <p class="muted small">Trace route needs administrator rights on {app.env?.platform === 'windows' ? 'Windows' : 'this computer'}.</p>
+            {:else}
+              <p class="dive">
+                <button class="btn sm" onclick={runTrace} disabled={tracing} title="Sends ICMP probes with rising TTL to {resolver.ipv4[0]}, about 2 s"
+                  ><Icon name="pulse" size={13} />{tracing ? 'Tracing…' : trace ? 'Trace again' : 'Trace route'}</button
+                >
+                {#if traceError}<span class="muted small">{traceError}</span>{/if}
+              </p>
+              {#if trace || tracing}
+                <Route {trace} busy={tracing} rtt={path?.rtt_ms ?? null} />
+              {/if}
+            {/if}
+          </div>
+        {/if}
         {#if run.intel[id]?.service?.rpki || run.intel[id]?.service?.rov}
           <p class="why">
             A valid ROA means networks that check RPKI will reject anyone else announcing this resolver's addresses. Operator ROV
@@ -696,6 +743,16 @@
   .facts {
     margin: 0;
     display: grid;
+  }
+  .trace {
+    margin-top: 8px;
+  }
+  .trace .dive {
+    align-items: center;
+  }
+  .facts > div.wide {
+    grid-template-columns: 1fr;
+    gap: 2px;
   }
   .facts > div {
     display: grid;

@@ -12,6 +12,7 @@ use crate::intel::{self, Intel};
 use crate::lock;
 use crate::monitor::{self, MonitorConfig};
 use crate::ntp_monitor::{self, NtpMonitorConfig};
+use crate::resolve::Resolve;
 use crate::store::{self, Store};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -265,6 +266,7 @@ impl AppState {
             "interception": *self.interception.read().unwrap(),
             "system": self.system.read().unwrap().iter().map(|i| i.to_string()).collect::<Vec<_>>(),
             "db": self.store.path.display().to_string(),
+            "trace": crate::trace::available(),
             "rpki_local": cfg!(all(feature = "rpki-local", not(target_os = "ios"))),
         })
     }
@@ -644,6 +646,7 @@ impl AppState {
             ("POST", ["resolvers"]) => ok(self.add_resolver(parse(body)?)?),
             ("DELETE", ["resolvers", id]) => ok(json!({ "deleted": self.store.custom_delete(id) })),
             ("POST", ["resolvers", id, "deep-dive"]) => ok(json!(self.deep_dive(id).await?)),
+            ("POST", ["resolvers", id, "trace"]) => ok(json!(self.trace(id).await?)),
             ("POST", ["resolvers", id, "live-blocking"]) => ok(json!(self.live_blocking(id, parse(body)?).await?)),
             ("POST", ["resolvers", id, "deep-checks"]) => ok(json!(self.deep_checks(id).await?)),
             ("GET", ["monitor"]) => {
@@ -751,6 +754,38 @@ impl AppState {
         .await;
         out.map_err(|e| ApiError::new(500, e.to_string()))?
             .ok_or_else(|| ApiError::new(502, format!("Couldn't open a connection to {label}.")))
+    }
+
+    /// A route trace to the resolver's first IPv4 address (see [`crate::trace`]). Holds the same claim a run does.
+    async fn trace(&self, id: &str) -> Result<crate::trace::Trace, ApiError> {
+        let r = self
+            .resolvers()
+            .into_iter()
+            .find(|r| r.id == id || r.custom_id.as_deref() == Some(id) || r.aliases.iter().any(|a| a == id))
+            .ok_or_else(|| ApiError::new(404, "No such resolver."))?;
+        if crate::trace::available() != crate::trace::TraceCap::Ok {
+            return Err(ApiError::new(501, "Trace route is not available here."));
+        }
+        let ip: IpAddr =
+            r.ipv4.first().and_then(|a| a.parse().ok()).ok_or_else(|| ApiError::new(422, "This resolver has no IPv4 address."))?;
+        let Some(claim) = FlagGuard::claim(&self.run_active) else {
+            return Err(ApiError::new(409, "Wait for the current run to finish."));
+        };
+        let Some(measure) = lock::wait(&lock::measure_path(), Duration::from_secs(10)).await else {
+            return Err(ApiError::new(409, "Another Recursa window or terminal is measuring right now. Try again when it finishes."));
+        };
+        let held = (FlagGuard::set(&self.measuring), claim, measure);
+        let res = Resolve::new(self.system.read().unwrap().clone());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let _stop = StopOnDrop(cancel.clone());
+        let out = tokio::task::spawn_blocking(move || {
+            let _held = held;
+            let mut t = crate::trace::run(ip, &cancel)?;
+            crate::trace::enrich(&mut t.hops, &res);
+            Ok::<_, String>(t)
+        })
+        .await;
+        out.map_err(|e| ApiError::new(500, e.to_string()))?.map_err(|e| ApiError::new(502, e))
     }
 
     /// The Deep Dive's opt-in blocking check with live malware and phishing hosts (see

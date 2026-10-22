@@ -28,6 +28,7 @@
     waiting = '',
     placeholders = 0,
     starting = false,
+    floors = {},
     onopen,
   }: {
     rows: Row[];
@@ -46,6 +47,8 @@
     placeholders?: number;
     /** The run is still setting up: the mark tunes itself in over the empty rows until warm-up begins. */
     starting?: boolean;
+    /** Each resolver's wire floor (best TCP handshake to its address, ms), drawn as a line behind its lanes. */
+    floors?: Record<string, number>;
     onopen: (resolverId: string) => void;
   } = $props();
 
@@ -94,6 +97,8 @@
         if (d.min != null) lo = Math.min(lo, d.min);
         if (d.max != null) hi = Math.max(hi, d.max);
       }
+      const f = floors[r.target.resolver_id];
+      if (f != null) lo = Math.min(lo, f);
     }
     if (live) {
       for (const w of warm) {
@@ -383,6 +388,9 @@
             {#each ticks as t (t)}
               <line class="grid" x1={x(t)} x2={x(t)} y1="0" y2={rowH} in:fade={tickFade()} out:fade={tickFade()} />
             {/each}
+            {#if m && floors[r.target.resolver_id] != null}
+              <line class="floor" x1={x(floors[r.target.resolver_id])} x2={x(floors[r.target.resolver_id])} y1="3" y2={rowH - 3} />
+            {/if}
             {#each lanes as k}
               {@const d = r.dist[k]}
               {@const y = laneY(k)}
@@ -652,6 +660,12 @@
   .grid {
     stroke: var(--rule);
     stroke-width: 1;
+  }
+  /* The wire floor: no genuine answer lands left of it. */
+  .floor {
+    stroke: var(--ink-3);
+    stroke-width: 1;
+    stroke-linecap: round;
   }
   /* Global: a finished run's dots are inserted as markup, which carries no scoping class. */
   .pcol :global(.dot) {

@@ -73,6 +73,12 @@
   // Each transport is its own row, so a resolver measured over several appears several times.
   const transports = $derived([...new Set(rows.map((r) => r.target.transport))] as Transport[]);
   const multi = $derived(transports.length > 1);
+  // Wire floors by resolver, for the ladder; null until the path phase has measured one.
+  const floors = $derived.by(() => {
+    const out: Record<string, number> = {};
+    for (const [id, p] of Object.entries(run?.paths ?? {})) if (p.rtt_ms != null) out[id] = p.rtt_ms;
+    return Object.keys(out).length ? out : null;
+  });
   let transport = $state<Transport | 'all'>('all');
   const shown = $derived(transport === 'all' ? rows : rows.filter((r) => r.target.transport === transport));
 
@@ -433,6 +439,9 @@
                 {#if running}
                   <p>Hollow rings are the warm-up queries, which prime caches and network paths and never count.</p>
                 {/if}
+                {#if floors}
+                  <p>The thin line behind a row is the wire floor: the best TCP handshake to that resolver's address. No genuine answer lands left of it.</p>
+                {/if}
                 <p>Select a row to inspect it. Keys 1–{tabs.length} switch tests.</p>
               </Info>
             </div>
@@ -448,6 +457,7 @@
                 {placeholders}
                 starting={running && run.phase === 'setup'}
                 multi={multi && transport === 'all'}
+                floors={floors ?? {}}
                 onopen={open}
               />
             </div>

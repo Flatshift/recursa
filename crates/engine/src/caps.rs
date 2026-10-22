@@ -17,6 +17,8 @@ pub struct Caps {
     pub app_menu: bool,
     /// Open at login, into the menu bar or tray, monitoring with no window open.
     pub login_item: bool,
+    /// Trace the route to a resolver with ICMP probes (Trippy).
+    pub trace_route: bool,
 }
 
 /// One row per build, in the order `docs/PLATFORMS.md` shows them.
@@ -25,19 +27,23 @@ pub const BUILDS: [(&str, Caps); 4] =
 
 /// What each field means, for `docs/PLATFORMS.md`.
 type Feature = (&'static str, fn(&Caps) -> bool);
-const FEATURES: [Feature; 5] = [
+const FEATURES: [Feature; 6] = [
     ("Export runs as CSV or JSON", |c| c.export),
     ("Settings in its own window", |c| c.settings_window),
     ("Native menus", |c| c.native_menus),
     ("App menu bar", |c| c.app_menu),
     ("Open at login, monitor from the menu bar or tray", |c| c.login_item),
+    ("Trace the route to a resolver", |c| c.trace_route),
 ];
 
 impl Caps {
-    pub const MAC: Caps = Caps { export: true, settings_window: true, native_menus: true, app_menu: true, login_item: true };
+    pub const MAC: Caps =
+        Caps { export: true, settings_window: true, native_menus: true, app_menu: true, login_item: true, trace_route: true };
     pub const WINDOWS: Caps = Caps::MAC;
-    pub const IOS: Caps = Caps { export: false, settings_window: false, native_menus: false, app_menu: false, login_item: false };
-    pub const BROWSER: Caps = Caps { export: true, settings_window: false, native_menus: false, app_menu: false, login_item: false };
+    pub const IOS: Caps =
+        Caps { export: false, settings_window: false, native_menus: false, app_menu: false, login_item: false, trace_route: false };
+    pub const BROWSER: Caps =
+        Caps { export: true, settings_window: false, native_menus: false, app_menu: false, login_item: false, trace_route: true };
 
     /// `docs/PLATFORMS.md`: every feature against every build.
     pub fn table() -> String {
@@ -55,7 +61,7 @@ impl Caps {
                 s += if has(&c) { " yes |" } else { " no |" };
             }
         }
-        s + "\n"
+        s + "\n\nTrace route needs Administrator on Windows and CAP_NET_RAW or root on Linux; macOS runs it as the user.\n"
     }
 }
 

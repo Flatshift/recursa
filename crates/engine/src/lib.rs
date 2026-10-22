@@ -36,6 +36,7 @@ pub mod rpki;
 pub mod stats;
 pub mod store;
 pub mod sysdns;
+pub mod trace;
 
 /// Install the process-wide TLS crypto provider. Call once at startup, before any DoT,
 /// DoH or HTTPS traffic.

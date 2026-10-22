@@ -1891,7 +1891,7 @@ fn plain_dns_stopped() -> bool {
 }
 
 /// Time TCP handshakes to each public resolver's address (DoT port first, then HTTPS,
-/// then 53), interleaved over three rounds. Then flag plain-DNS targets whose answers
+/// then 53), interleaved over five rounds. Then flag plain-DNS targets whose answers
 /// beat that floor: a device on this network answered them.
 fn check_paths(set: Setup, h: &RunHandle, selected: &[Resolver]) -> Vec<String> {
     let jobs: Vec<(String, IpAddr, Vec<u16>)> = selected
@@ -1910,7 +1910,7 @@ fn check_paths(set: Setup, h: &RunHandle, selected: &[Resolver]) -> Vec<String> 
     h.phase("path", jobs.len() as u32);
     let mut paths: BTreeMap<String, PathInfo> = BTreeMap::new();
     let mut order: Vec<usize> = (0..jobs.len()).collect();
-    for _ in 0..3 {
+    for _ in 0..5 {
         fastrand::shuffle(&mut order);
         for &j in &order {
             if set.over(h) {
