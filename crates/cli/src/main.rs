@@ -107,6 +107,11 @@ enum Cmd {
     Check,
     /// List known resolvers.
     List,
+    /// Trace the route to a resolver with ICMP probes (about 2 s).
+    Trace {
+        /// A resolver id (see `recursa list`) or an IP address.
+        target: String,
+    },
 }
 
 fn open_state(cli: &Cli, calibrate: bool) -> Arc<AppState> {
@@ -114,6 +119,68 @@ fn open_state(cli: &Cli, calibrate: bool) -> Arc<AppState> {
         eprintln!("Couldn't open the database {e}");
         std::process::exit(1);
     })
+}
+
+async fn trace(cli: &Cli, target: &str) {
+    use recursa_engine::trace::{self, TraceCap};
+    let fail = |msg: &str| -> ! {
+        eprintln!("{msg}");
+        std::process::exit(1);
+    };
+    match trace::available() {
+        TraceCap::Ok => {}
+        TraceCap::NeedsAdmin => fail("Trace route needs Administrator on Windows and CAP_NET_RAW or root on Linux."),
+        TraceCap::Unsupported => fail("Trace route is not available on this platform."),
+    }
+    let ip: std::net::IpAddr = match target.parse() {
+        Ok(ip) => ip,
+        Err(_) => {
+            let found = open_state(cli, false)
+                .resolvers()
+                .into_iter()
+                .find(|r| r.id == target || r.custom_id.as_deref() == Some(target) || r.aliases.iter().any(|a| a == target));
+            match found {
+                None => fail(&format!("No resolver or address called {target}.")),
+                Some(r) => r.ipv4.first().and_then(|a| a.parse().ok()).unwrap_or_else(|| fail("This resolver has no IPv4 address.")),
+            }
+        }
+    };
+    let t = tokio::task::spawn_blocking(move || {
+        let mut t = trace::run(ip, &std::sync::atomic::AtomicBool::new(false))?;
+        trace::enrich(&mut t.hops, &recursa_engine::resolve::Resolve::new(recursa_engine::sysdns::discover()));
+        Ok::<_, String>(t)
+    })
+    .await
+    .unwrap()
+    .unwrap_or_else(|e| fail(&e));
+    let ms = |v: Option<f64>| v.map_or("—".to_string(), |v| format!("{v:.1}"));
+    println!(
+        "trace to {} · {} · {} rounds · {} in {:.1} s",
+        t.target,
+        t.protocol,
+        t.rounds,
+        if t.reached { "reached" } else { "not reached, stopped" },
+        t.elapsed_ms / 1000.0
+    );
+    for h in &t.hops {
+        let addr = h.addrs.first().map_or("*".to_string(), |a| a.to_string());
+        let who = match (h.private, h.asn) {
+            (true, _) => "your network".to_string(),
+            (_, Some(asn)) => format!("AS{asn} {}", h.holder.as_deref().unwrap_or("")),
+            _ => String::new(),
+        };
+        println!(
+            "{:>2}  {:<39}  {:>7} {:>7} {:>7}  {}/{}  {}",
+            h.ttl,
+            addr,
+            ms(h.best_ms),
+            ms(h.avg_ms),
+            ms(h.last_ms),
+            h.recv,
+            h.sent,
+            who
+        );
+    }
 }
 
 #[tokio::main]
@@ -247,6 +314,7 @@ async fn main() {
                 NtpFormat::Table => print_ntp(&results, consensus.as_ref()),
             }
         }
+        Some(Cmd::Trace { ref target }) => trace(&cli, target).await,
         Some(Cmd::List) => {
             for r in open_state(&cli, false).resolvers() {
                 println!("{:<24} {:<18} {:<26} {}", r.id, r.provider, r.variant, r.ipv4.first().cloned().unwrap_or_default());

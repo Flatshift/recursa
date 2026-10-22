@@ -29,6 +29,8 @@ webpki-roots.workspace = true
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 log = { workspace = true, optional = true }
 routinator = { workspace = true, optional = true }
+trippy-core.workspace = true
+trippy-privilege.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # Adapters, their DNS servers and gateways (IP Helper), ICMP echoes for the link check, measurement-thread priority,

@@ -2,6 +2,14 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.3.8 (2026-10-21)
+
+- **Trace route.** A button in the Inspector traces the path to the resolver over ICMP and draws every hop, its
+  network, and each round's round trip. Also `recursa trace <resolver|ip>`. Windows needs Administrator. By Trippy
+  (trippy.rs).
+- **Where the time goes.** The ladder marks each resolver's wire floor (best TCP handshake), and the Inspector splits
+  cached and uncached medians into wire, resolver and recursion. The floor is now the best of five handshakes.
+
 ## 0.3.7 (2026-10-18)
 
 - The About screens show the same tagline on every platform: "Find the fastest, best-placed DNS resolver for your

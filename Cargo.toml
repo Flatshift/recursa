@@ -4,7 +4,7 @@ members = ["crates/engine", "crates/cli", "crates/desktop"]
 default-members = ["crates/engine", "crates/cli"]
 
 [workspace.package]
-version = "0.3.7"
+version = "0.3.8"
 edition = "2024"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/flatshift/recursa"
@@ -31,6 +31,8 @@ rustls = { version = "0.23.45", default-features = false, features = ["ring", "s
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 socket2 = "0.6.5"
+trippy-core = "=0.13.0"
+trippy-privilege = "=0.13.0"
 tokio = { version = "1.53.2", features = ["rt", "rt-multi-thread", "macros", "net", "time", "sync", "io-util", "signal"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }

@@ -286,7 +286,7 @@ export interface CdnReport {
   resolvers: Record<string, ResolverCdn>;
 }
 
-interface PathInfo {
+export interface PathInfo {
   rtt_ms: number | null;
   port: number;
   samples: number[];
@@ -370,6 +370,37 @@ export interface Env {
   db: string;
   /** Whether this build can check route origins on this computer. */
   rpki_local?: boolean;
+  /** Whether a trace route can run here: as the user on macOS, with Administrator elsewhere. */
+  trace?: 'ok' | 'needs_admin' | 'unsupported';
+}
+
+/** One hop of a trace route (`POST /api/resolvers/:id/trace`). */
+export interface TraceHop {
+  ttl: number;
+  /** Every address that answered at this TTL; empty when none did. */
+  addrs: string[];
+  /** A private or link-local address: the user's own network. */
+  private: boolean;
+  asn: number | null;
+  holder: string | null;
+  /** One entry per round: the round trip in ms, or null when that round got no reply. */
+  samples_ms: (number | null)[];
+  best_ms: number | null;
+  avg_ms: number | null;
+  last_ms: number | null;
+  sent: number;
+  recv: number;
+}
+
+export interface Trace {
+  target: string;
+  protocol: string;
+  rounds: number;
+  /** The target itself answered. */
+  reached: boolean;
+  elapsed_ms: number;
+  /** Dense: one hop per TTL from 1 to the last that answered (or the target). */
+  hops: TraceHop[];
 }
 
 /** The local route-origin (RPKI) check, as `GET /api/rpki` reports it. */

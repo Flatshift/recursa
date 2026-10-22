@@ -343,6 +343,10 @@
           <b>Networks and holders:</b> IP-to-ASN mapping by <a href="https://team-cymru.com/community-services/ip-asn-mapping/" target="_blank" rel="noreferrer">Team Cymru</a>,
           over DNS: the origin AS and prefix of an address, and the AS name.
         </li>
+        <li>
+          <b>Trace route:</b> ICMP probes with rising TTL, four rounds, sent by <a href="https://trippy.rs" target="_blank" rel="noreferrer">Trippy</a>, a Rust tracer
+          that runs as the user on macOS. Each hop's network comes from the same Team Cymru lookup. Nothing is stored.
+        </li>
         <li><b>Status:</b> the Statuspage feeds of Cloudflare, AdGuard and Cisco Umbrella, and the Better Stack feed of Quad9. The page shows which operators have no feed.</li>
       </ul>
     </section>

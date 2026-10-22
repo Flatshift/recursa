@@ -56,8 +56,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.3.7
-        CFBundleVersion: "0.3.7"
+        CFBundleShortVersionString: 0.3.8
+        CFBundleVersion: "0.3.8"
     entitlements:
       path: recursa-desktop_iOS/recursa-desktop_iOS.entitlements
     scheme:
