@@ -17,6 +17,12 @@ export const TAIL_WEIGHT = 0.5;
  *  percentile yet differ in how far their stragglers go. */
 export const JITTER_WEIGHT = 0.25;
 export const RELIABLE = 0.98;
+
+/** Whether a resolver is expected to block a category: one it claims, or one on this network (or added by hand) that
+ *  the user is checking. */
+export function expectsBlock(r: Resolver, cat: string): boolean {
+  return r.group === 'system' || r.group === 'custom' || r.published.filtering.includes(cat);
+}
 /** A new connection waits at least this many round trips on the CDN edge the resolver chose (the TCP handshake, the
  *  TLS handshake, then the first request) before anything arrives, while the lookup itself is paid once. */
 export const CDN_ROUND_TRIPS = 3;

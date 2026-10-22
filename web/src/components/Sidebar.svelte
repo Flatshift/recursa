@@ -101,7 +101,7 @@
 
   <ul class="places">
     {#each places as p}
-      {@const on = app.route.name === p.match || (p.match === 'resolvers' && app.route.name === 'deepdive')}
+      {@const on = app.route.name === p.match || (p.match === 'resolvers' && app.route.name === 'resolver')}
       <li>
         <a href={p.href} class="item" class:on aria-current={on ? 'page' : undefined} onclick={(e) => go(e, p.href)} title={mobile ? undefined : `${p.label} (${shortcut(`cmd+${p.key}`)})`}>
           <Icon name={p.icon} size={mobile ? 20 : 15} />

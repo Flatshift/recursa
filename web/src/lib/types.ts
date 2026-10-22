@@ -791,7 +791,7 @@ export interface NtpMonitorResp {
   history: { since: number; until: number; bucket_ms: number; cycles: number; servers: NtpMonitorServer[]; clock: NtpMonitorClock };
 }
 
-/** The Deep Dive's opt-in blocking check with live malware (URLhaus) and phishing (OpenPhish) hosts. */
+/** The opt-in Check live feeds: blocking of live malware (URLhaus) and phishing (OpenPhish) hosts. */
 export interface LiveCategory extends FilterCategory {
   /** When the feed was downloaded (Unix ms). */
   fetched_at: number | null;
@@ -810,7 +810,7 @@ export interface LiveBlocking {
   duration_ms: number;
 }
 
-/** A Deep Dive: a short, fixed look at one resolver. Only round trips and response fields are measured; the cache findings are inferred. */
+/** The query sample: 18 fixed queries to one resolver. Only round trips and response fields are measured; the cache findings are inferred. */
 export interface DeepDive {
   transport: string;
   name: string;

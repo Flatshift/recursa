@@ -2,6 +2,17 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.3.9 (2026-10-22)
+
+- **Resolver page and Inspector redesign.** The Inspector and the new `/resolver/:id` page share one layout: a verdict
+  line, then sections for where it answers from, latency, behaviour, blocking, reliability, usage limits and policy.
+  Sections with a problem come first and open; the rest fold to a one-line summary.
+- **Checks where their evidence is.** Trace path, Sample 18 queries, Check behaviour and Check live feeds are buttons on
+  their sections, with a status line while they run and their result kept for the session. **Run all checks** runs the
+  first three in turn. One check runs at a time; the others say why they wait. The Deep Dive page is gone;
+  `/deep-dive/:id` opens the resolver page.
+- **Keyboard.** ↑↓ move the selection through the resolvers on screen, ⌘↵ opens the selected resolver's page.
+
 ## 0.3.8 (2026-10-21)
 
 - **Trace route.** A button in the Inspector traces the path to the resolver over ICMP and draws every hop, its

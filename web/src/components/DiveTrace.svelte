@@ -63,7 +63,7 @@
   }
 </script>
 
-<figure class="trace" class:measured={!!dive} class:busy aria-label={dive ? 'Each query in the order sent, by round trip' : 'The queries a deep dive sends'}>
+<figure class="trace" class:measured={!!dive} class:busy aria-label={dive ? 'Each query in the order sent, by round trip' : 'The 18 queries the sample sends'}>
   <div class="row">
     {#each groups as g (g.kind)}
       {#if g.kind === 'last'}

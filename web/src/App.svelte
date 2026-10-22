@@ -11,7 +11,7 @@
   import Setup from './components/Setup.svelte';
   import RunView from './routes/RunView.svelte';
   import Resolvers from './routes/Resolvers.svelte';
-  import DeepDive from './routes/DeepDive.svelte';
+  import Resolver from './routes/Resolver.svelte';
   import Reliability from './routes/Reliability.svelte';
   import Time from './routes/Time.svelte';
   import Method from './routes/Method.svelte';
@@ -24,7 +24,7 @@
     bench: 'Benchmark',
     run: 'Results',
     resolvers: 'Resolvers',
-    deepdive: 'Deep Dive',
+    resolver: 'Resolver',
     reliability: 'Reliability',
     time: 'Time',
     method: 'Method',
@@ -169,8 +169,8 @@
           {#key app.route.id}<RunView />{/key}
         {:else if app.route.name === 'resolvers'}
           <Resolvers />
-        {:else if app.route.name === 'deepdive'}
-          {#key app.route.id}<DeepDive id={app.route.id} />{/key}
+        {:else if app.route.name === 'resolver'}
+          {#key app.route.id}<Resolver id={app.route.id} />{/key}
         {:else if app.route.name === 'reliability'}
           <Reliability />
         {:else if app.route.name === 'time'}
