@@ -60,14 +60,14 @@ export const CAPS: CapDef[] = [
     key: 'filter_malware',
     label: 'Malware blocking',
     group: 'Blocking',
-    explain: 'Whether the resolver refuses the malware test domains that Cloudflare and Quad9 publish. A Deep Dive can also check live URLhaus hosts.',
+    explain: "Whether the resolver refuses the malware test domains that Cloudflare and Quad9 publish. Check live feeds, on the resolver's page, tests live URLhaus hosts.",
     published: (p) => (p.filtering.includes('malware') ? true : p.filtering.length === 0 ? false : null),
   },
   {
     key: 'filter_phishing',
     label: 'Phishing blocking',
     group: 'Blocking',
-    explain: 'Whether the phishing test domains that Cloudflare and Cisco OpenDNS publish are blocked. A Deep Dive can also check live OpenPhish hosts.',
+    explain: "Whether the phishing test domains that Cloudflare and Cisco OpenDNS publish are blocked. Check live feeds, on the resolver's page, tests live OpenPhish hosts.",
     published: (p) => (p.filtering.includes('phishing') ? true : p.filtering.length === 0 ? false : null),
   },
   {

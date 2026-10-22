@@ -14,9 +14,9 @@
     actions,
   }: { title: string; subtitle?: string; center?: Snippet; actions?: Snippet } = $props();
 
-  // On the phone a pushed page (a run, a deep dive, settings) gets a Back chevron instead of
+  // On the phone a pushed page (a run, a resolver, settings) gets a Back chevron instead of
   // the drawer button; the drawer is still a swipe away.
-  const parent: Record<string, string> = { run: '/', deepdive: '/resolvers', settings: '/' };
+  const parent: Record<string, string> = { run: '/', resolver: '/resolvers', settings: '/' };
   const back = $derived(mobile ? parent[app.route.name] : undefined);
   function goBack() {
     if (history.length > 1) history.back();

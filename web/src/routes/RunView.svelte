@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { app, RUN_VIEWS, type RunView } from '../lib/store.svelte';
+  import { selectKey } from '../lib/select';
   import { shortcut } from '../lib/keys';
   import { HIT_SHARE, blendRows, buildRows, rank, verdict, type Row, type SortKey } from '../lib/verdict';
   import type { RunState, TestKind, Transport } from '../lib/types';
@@ -204,6 +205,7 @@
       app.inspect = null;
       return;
     }
+    if (selectKey(e)) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const n = Number(e.key);
     if (app.runView === 'latency' && n >= 1 && n <= tabs.length) test = tabs[n - 1];

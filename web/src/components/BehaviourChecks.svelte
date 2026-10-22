@@ -1,29 +1,27 @@
+<script lang="ts" module>
+  import type { DeepChecks } from '../lib/types';
+
+  /** Short phrases for the real problems in a set of behaviour checks; empty when it found none. */
+  export function faults(res: DeepChecks): string[] {
+    const out: string[] = [];
+    for (const s of res.truncation) {
+      if (!s.answered) out.push(s.transport === 'TCP' ? 'No answer over TCP' : 'Dropped a large answer');
+      else if (s.buffer != null && s.size_bytes != null && s.size_bytes > s.buffer) out.push('Ignored the EDNS buffer');
+    }
+    if (res.ttl.some((t) => t.kind !== 'long' && t.resolver != null && t.authoritative != null && t.resolver > t.authoritative)) out.push('Raises short TTLs');
+    if (res.dnssec.some((c) => c.expect_valid === true && c.ad)) {
+      if (res.dnssec.some((c) => c.expect_valid === false && c.rcode != null && (c.ad || c.rcode !== 'SERVFAIL'))) out.push('Served a bad DNSSEC answer');
+    }
+    return [...new Set(out)];
+  }
+</script>
+
 <script lang="ts">
-  import { api } from '../lib/api';
-  import type { CacheAsk, DeepChecks, DnssecCase, SizeStep } from '../lib/types';
+  import type { CacheAsk, DnssecCase, SizeStep } from '../lib/types';
   import { ms } from '../lib/format';
-  import { deeper, deeperChecks } from '../lib/live.svelte';
   import Icon from './Icon.svelte';
 
-  let { rid, title, disabled }: { rid: string; title: string; disabled: boolean } = $props();
-
-  // Kept for the session, by resolver, like the live-feed check.
-  const res = $derived<DeepChecks | null>(deeperChecks[rid] ?? null);
-  let error = $state<string | null>(null);
-
-  async function start() {
-    const key = rid;
-    deeper.busy = true;
-    deeper.rid = key;
-    error = null;
-    try {
-      deeperChecks[key] = await api.post<DeepChecks>(`/api/resolvers/${encodeURIComponent(key)}/deep-checks`);
-    } catch (e) {
-      error = (e as Error).message;
-    } finally {
-      deeper.busy = false;
-    }
-  }
+  let { rid, res }: { rid: string; res: DeepChecks | null } = $props();
 
   /** A TTL in seconds, in the largest unit that keeps it readable. */
   function ttl(s: number | null | undefined): string {
@@ -94,25 +92,12 @@
   const costScale = $derived(Math.max(1, ...(res?.transports.map((t) => (t.setup_ms ?? 0) + (t.first_ms ?? 0)) ?? [])));
 </script>
 
-<section class="deeper">
-  <h2>Deeper checks</h2>
-  <p>
-    About 90 more queries, all for test names: a large signed answer over UDP and TCP, records with known TTLs, signed names with
-    known faults, made-up names asked in rounds, and ten asks over each of UDP, TCP, DoT and DoH the resolver offers. Takes about 15 seconds.
-  </p>
-  <button class="btn" disabled={deeper.busy || disabled} onclick={start}><Icon name="play" size={13} />{res ? 'Check again' : 'Run deeper checks'}</button>
-  <p class="status" role="status">
-    {#if deeper.busy && deeper.rid === rid}Asking {title}… this takes about 15 seconds.
-    {:else if res}{(res.duration_ms / 1000).toFixed(1)} s{#if res.transport}; TTL, DNSSEC and cache checks over {res.transport}{/if}.
-    {/if}
-  </p>
-  {#if error}<p class="note bad" role="alert">{error}</p>{/if}
-
-  {#if res}
+{#if res}
+  <div class="checks">
     {#each res.notes as n}<p class="note">{n}</p>{/each}
 
     {#if res.truncation.length}
-      <h3>Large answers and TCP fallback</h3>
+      <h4>Large answers and TCP fallback</h4>
       <div class="sizes">
         {#each res.truncation as s}
           {@const v = sizeVerdict(s)}
@@ -138,7 +123,7 @@
     {/if}
 
     {#if res.ttl.length}
-      <h3>TTL limits</h3>
+      <h4>TTL limits</h4>
       <table class="grid">
         <thead><tr><th>Record</th><th>Zone's TTL</th><th>Resolver's</th><th></th></tr></thead>
         <tbody>
@@ -166,7 +151,7 @@
 
     {#if res.negative}
       {@const n = res.negative}
-      <h3>Negative caching <span class="tag">Inferred</span></h3>
+      <h4>Negative caching <span class="tag">Inferred</span></h4>
       <dl class="stats">
         <div><dt>Zone's negative TTL</dt><dd class="num">{ttl(n.authoritative)}</dd></div>
         <div><dt>Resolver's</dt><dd class="num">{ttl(n.first)}</dd></div>
@@ -190,7 +175,7 @@
     {/if}
 
     {#if res.dnssec.length}
-      <h3>DNSSEC cases</h3>
+      <h4>DNSSEC cases</h4>
       {#if !validates}<p class="note">This resolver didn't validate the correctly signed names, so it doesn't check DNSSEC. The results below are for reference.</p>{/if}
       <table class="grid">
         <thead><tr><th>Case</th><th>Answer</th><th></th></tr></thead>
@@ -217,7 +202,7 @@
 
     {#if res.caches}
       {@const c = res.caches}
-      <h3>Caches behind the address <span class="tag">Inferred</span></h3>
+      <h4>Caches behind the address <span class="tag">Inferred</span></h4>
       <p>
         {#if c.caches == null}The TTLs didn't count down, so a fresh fetch can't be told from a cached answer.
         {:else if c.caches >= c.rounds}Every ask of the same name was fetched again: at least {c.caches} separate caches answer here,
@@ -270,7 +255,7 @@
     {/if}
 
     {#if res.transports.length}
-      <h3>What each transport costs</h3>
+      <h4>What each transport costs</h4>
       <table class="grid cost">
         <thead><tr><th>Transport</th><th>New connection</th><th>Setup</th><th>First query</th><th>Later queries</th></tr></thead>
         <tbody>
@@ -303,33 +288,25 @@
         popular name per transport.
       </p>
     {/if}
-  {/if}
-</section>
+  </div>
+{/if}
 
 <style>
-  .deeper {
-    margin-top: 30px;
+  .checks {
     display: grid;
     justify-items: start;
     gap: 10px;
-    padding-top: 20px;
-    border-top: 1px solid var(--rule);
   }
-  .deeper > p:first-of-type {
-    color: var(--ink-2);
-  }
-  h2 {
-    margin-bottom: 0;
-    font-size: var(--t-lg);
-    font-weight: 650;
-  }
-  h3 {
+  h4 {
     display: flex;
     gap: 8px;
     align-items: center;
     margin: 14px 0 0;
-    font-size: var(--t-base);
+    font-size: var(--t-sm);
     font-weight: 640;
+  }
+  .checks > h4:first-child {
+    margin-top: 0;
   }
   .tag {
     padding: 1px 7px;
@@ -340,21 +317,12 @@
     font-size: var(--t-xs);
     font-weight: 560;
   }
-  .status {
-    min-height: 1.5em;
-    font-size: var(--t-xs);
-    color: var(--ink-3);
-  }
   .note {
     padding: 10px 12px;
     font-size: var(--t-sm);
     color: var(--ink-2);
     background: var(--surface-2);
     border-radius: var(--r-md);
-  }
-  .note.bad {
-    color: var(--ink);
-    border: 1px solid var(--rule);
   }
   .why {
     font-size: var(--t-xs);

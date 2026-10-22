@@ -1,5 +1,7 @@
 <script lang="ts">
   import { app } from '../lib/store.svelte';
+  import { selectKey } from '../lib/select';
+  import { menu } from '../lib/menu.svelte';
   import { api, mobile } from '../lib/api';
   import { shortcut } from '../lib/keys';
   import type { Resolver, RunState } from '../lib/types';
@@ -75,7 +77,9 @@
   let bodyW = $state(1200);
   const overlay = $derived(bodyW - app.inspectorWidth < 700);
   function onKey(e: KeyboardEvent) {
-    if (e.key === 'Escape' && app.inspect && (e.target as HTMLElement)?.tagName !== 'INPUT') app.inspect = null;
+    if ((e.target as HTMLElement)?.tagName === 'INPUT' || menu.open) return;
+    if (e.key === 'Escape' && app.inspect) app.inspect = null;
+    else selectKey(e);
   }
 </script>
 
