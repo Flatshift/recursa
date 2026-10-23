@@ -184,8 +184,10 @@ pub fn system_entries(addrs: &[IpAddr]) -> Vec<Resolver> {
         .collect()
 }
 
-/// An address that is no single host: unspecified, multicast or the IPv4 broadcast address.
+/// An address that is no single host: unspecified, multicast or the IPv4 broadcast address. Like the checks below, it
+/// reads an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`) as the IPv4 address it carries.
 pub fn is_special(ip: &IpAddr) -> bool {
+    let ip = &ip.to_canonical();
     ip.is_unspecified() || ip.is_multicast() || matches!(ip, IpAddr::V4(v) if v.is_broadcast())
 }
 
@@ -195,8 +197,18 @@ pub fn is_local_or_special(ip: &IpAddr) -> bool {
     is_special(ip) || is_private(ip)
 }
 
+/// [`is_local_or_special`] with CGNAT let through, for answers that can really live there: Tailscale's resolver
+/// (100.100.100.100), a carrier's CDN edge. On IPv6, only loopback and [`is_special`].
+pub fn is_local_or_special_but_cgnat(ip: &IpAddr) -> bool {
+    is_special(ip)
+        || match ip.to_canonical() {
+            IpAddr::V4(v) => v.is_loopback() || v.is_private() || v.is_link_local(),
+            IpAddr::V6(v) => v.is_loopback(),
+        }
+}
+
 pub fn is_private(ip: &IpAddr) -> bool {
-    match ip {
+    match ip.to_canonical() {
         IpAddr::V4(v) => v.is_private() || v.is_loopback() || v.is_link_local() || v.octets()[0] == 100 && (v.octets()[1] & 0xC0) == 64,
         IpAddr::V6(v) => v.is_loopback() || (v.segments()[0] & 0xfe00) == 0xfc00 || (v.segments()[0] & 0xffc0) == 0xfe80,
     }
@@ -205,6 +217,17 @@ pub fn is_private(ip: &IpAddr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mapped_ipv6_address_is_judged_as_the_ipv4_it_carries() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        for local in ["::ffff:127.0.0.1", "::ffff:192.168.1.1", "::ffff:255.255.255.255", "::ffff:224.0.0.1"] {
+            assert!(is_local_or_special(&ip(local)), "{local}");
+            assert!(is_local_or_special_but_cgnat(&ip(local)), "{local}");
+        }
+        assert!(!is_local_or_special(&ip("::ffff:1.1.1.1")));
+        assert!(is_local_or_special(&ip("100.100.100.100")) && !is_local_or_special_but_cgnat(&ip("100.100.100.100")));
+    }
 
     fn find(id: &str) -> Resolver {
         builtin().into_iter().find(|r| r.id == id).unwrap()

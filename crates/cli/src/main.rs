@@ -579,11 +579,12 @@ async fn serve(cli: Cli) {
     let app = open_state(&cli, true);
     app.start_background();
     // Two launch links: one to open now (unless told not to), one to print for another browser. Each opens once.
+    // A browser that didn't open leaves the printed link as the only one, so it is labelled that way.
     let mut sessions = server::Sessions::default();
-    let opened = (!cli.no_open).then(|| sessions.link(port));
+    let opened = !cli.no_open && open::that(sessions.link(port)).is_ok();
     let printed = sessions.link(port);
     eprintln!("Recursa is running at http://127.0.0.1:{port}/");
-    eprintln!("{} {printed}", if cli.no_open { "Open (the link works once):" } else { "Another browser (the link works once):" });
+    eprintln!("{} {printed}", if opened { "Another browser (the link works once):" } else { "Open (the link works once):" });
     eprintln!("Data: {}", app.store.path.display());
     if let Some(c) = app.calibration.read().unwrap().as_ref() {
         eprintln!(
@@ -592,9 +593,6 @@ async fn serve(cli: Cli) {
             if c.kernel_rx { "on" } else { "off" },
             c.floor_p50_us
         );
-    }
-    if let Some(opened) = opened {
-        let _ = open::that(opened);
     }
     let srv = Arc::new(server::Server { app, sessions: Mutex::new(sessions), port });
     // Live event streams never end on their own, so Ctrl-C exits directly rather than
