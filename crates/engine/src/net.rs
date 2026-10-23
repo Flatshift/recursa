@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -575,6 +575,53 @@ fn read_frame<R: Read>(r: &mut R) -> io::Result<Vec<u8>> {
     Ok(body)
 }
 
+/// A TCP stream that refuses to read or write once its deadline has passed. The socket's timeout still bounds each
+/// call, so a peer that sends one byte at a time holds an exchange for at most twice the timeout, not once per byte
+/// of a 64 KiB frame. (Setting the socket timeout to the time left before each read, as NTS-KE does, would put a
+/// system call inside the timed window.)
+pub struct Bounded {
+    tcp: TcpStream,
+    deadline: Instant,
+}
+
+impl Bounded {
+    fn new(tcp: TcpStream, timeout: Duration) -> io::Result<Self> {
+        let mut b = Bounded { tcp, deadline: Instant::now() };
+        b.arm(timeout)?;
+        Ok(b)
+    }
+
+    /// Start a new exchange: `timeout` from now, for the stream and for each call on it.
+    fn arm(&mut self, timeout: Duration) -> io::Result<()> {
+        self.tcp.set_read_timeout(Some(timeout))?;
+        self.tcp.set_write_timeout(Some(timeout))?;
+        self.deadline = Instant::now() + timeout;
+        Ok(())
+    }
+
+    fn check(&self) -> io::Result<()> {
+        if Instant::now() >= self.deadline { Err(io::ErrorKind::TimedOut.into()) } else { Ok(()) }
+    }
+}
+
+impl Read for Bounded {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.check()?;
+        self.tcp.read(buf)
+    }
+}
+
+impl Write for Bounded {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.check()?;
+        self.tcp.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.tcp.flush()
+    }
+}
+
 fn connect_tcp(addr: SocketAddr, timeout: Duration) -> Result<TcpStream, XErr> {
     let s = TcpStream::connect_timeout(&addr, timeout).map_err(io_err)?;
     s.set_nodelay(true).map_err(io_err)?;
@@ -583,7 +630,7 @@ fn connect_tcp(addr: SocketAddr, timeout: Duration) -> Result<TcpStream, XErr> {
 
 pub struct TcpX {
     addr: SocketAddr,
-    stream: Option<TcpStream>,
+    stream: Option<Bounded>,
     setup_ns: Option<u64>,
     buf: Vec<u8>,
 }
@@ -592,7 +639,7 @@ impl TcpX {
     fn ensure(&mut self, timeout: Duration) -> Result<(), XErr> {
         if self.stream.is_none() {
             let t = clock::now_ns();
-            self.stream = Some(connect_tcp(self.addr, timeout)?);
+            self.stream = Some(Bounded::new(connect_tcp(self.addr, timeout)?, timeout).map_err(io_err)?);
             self.setup_ns = Some(clock::now_ns() - t);
         }
         Ok(())
@@ -600,8 +647,7 @@ impl TcpX {
 
     fn once(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
         let s = self.stream.as_mut().expect("connected");
-        s.set_read_timeout(Some(timeout)).map_err(io_err)?;
-        s.set_write_timeout(Some(timeout)).map_err(io_err)?;
+        s.arm(timeout).map_err(io_err)?;
         let t0 = clock::now_ns();
         write_frame(s, query, &mut self.buf).map_err(io_err)?;
         loop {
@@ -665,7 +711,7 @@ fn tls_config(alpn_h2: bool) -> Arc<rustls::ClientConfig> {
 pub struct DotX {
     addr: SocketAddr,
     name: rustls::pki_types::ServerName<'static>,
-    stream: Option<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>,
+    stream: Option<rustls::StreamOwned<rustls::ClientConnection, Bounded>>,
     setup_ns: Option<u64>,
     buf: Vec<u8>,
 }
@@ -681,9 +727,8 @@ impl DotX {
             return Ok(());
         }
         let t = clock::now_ns();
-        let mut sock = connect_tcp(self.addr, timeout)?;
-        sock.set_read_timeout(Some(timeout)).map_err(io_err)?;
-        sock.set_write_timeout(Some(timeout)).map_err(io_err)?;
+        // The handshake gets one deadline, however slowly the server sends its flight.
+        let mut sock = Bounded::new(connect_tcp(self.addr, timeout)?, timeout).map_err(io_err)?;
         let mut conn = rustls::ClientConnection::new(tls_config(false), self.name.clone()).map_err(|e| XErr::Tls(e.to_string()))?;
         while conn.is_handshaking() {
             conn.complete_io(&mut sock).map_err(|e| match e.kind() {
@@ -698,7 +743,7 @@ impl DotX {
 
     fn once(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
         let s = self.stream.as_mut().expect("connected");
-        s.sock.set_read_timeout(Some(timeout)).map_err(io_err)?;
+        s.sock.arm(timeout).map_err(io_err)?;
         let t0 = clock::now_ns();
         write_frame(s, query, &mut self.buf).map_err(io_err)?;
         loop {
@@ -878,5 +923,61 @@ impl Exchanger for DohX {
     }
     fn setup_ns(&self) -> Option<u64> {
         self.setup_ns
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dns::QuerySpec;
+    use std::net::TcpListener;
+
+    /// A server that accepts, sends `head`, then one zero byte every 50 ms until the client goes away.
+    fn dripping(head: &'static [u8]) -> SocketAddr {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for mut c in l.incoming().flatten() {
+                std::thread::spawn(move || {
+                    if c.write_all(head).is_err() {
+                        return;
+                    }
+                    while c.write_all(&[0]).is_ok() {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    fn query() -> Vec<u8> {
+        dns::encode_query(1, &QuerySpec::new("example.com", dns::TYPE_A)).unwrap()
+    }
+
+    #[test]
+    fn a_dripping_tcp_server_cannot_hold_a_query() {
+        // A full-size frame, one byte at a time: each read succeeds well inside the socket timeout.
+        let ep = Endpoint { transport: Transport::Tcp, addr: dripping(&[0xff, 0xff]), host: None, url: None };
+        let timeout = Duration::from_millis(300);
+        let mut x = open(&ep, timeout).unwrap();
+        let t = Instant::now();
+        assert!(matches!(x.exchange(&query(), timeout), Err(XErr::Timeout)));
+        assert!(t.elapsed() < 3 * timeout, "took {:?}", t.elapsed());
+    }
+
+    #[test]
+    fn a_dripping_tls_server_cannot_hold_the_handshake() {
+        // A TLS handshake record header announcing 16 KiB, then its body one byte at a time.
+        let ep = Endpoint {
+            transport: Transport::Dot,
+            addr: dripping(&[0x16, 0x03, 0x03, 0x40, 0x00]),
+            host: Some("dns.example".into()),
+            url: None,
+        };
+        let timeout = Duration::from_millis(300);
+        let t = Instant::now();
+        assert!(matches!(open(&ep, timeout), Err(XErr::Timeout)));
+        assert!(t.elapsed() < 3 * timeout, "took {:?}", t.elapsed());
     }
 }
