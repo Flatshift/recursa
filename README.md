@@ -28,7 +28,7 @@ a developer certificate, so each system warns once:
   installs for the current user and needs no administrator rights. When SmartScreen appears, choose **More info**, then
   **Run anyway**.
 
-Or build it yourself (Rust, Node 22):
+Or build it yourself (Rust, Node 22.12+):
 
 ```bash
 ./build.sh            # builds the UI, then the command-line binary
@@ -76,7 +76,7 @@ recursa list                              # resolver ids
 
 ## Build
 
-Requirements: Rust 1.85+ (edition 2024) and Node 22+.
+Requirements: Rust 1.85+ (edition 2024) and Node 22.12+.
 
 ```bash
 cd web && npm install && npm run build && cd ..
