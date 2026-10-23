@@ -1922,7 +1922,7 @@ fn check_paths(set: Setup, h: &RunHandle, selected: &[Resolver]) -> Vec<String> 
             for port in candidates {
                 let start = clock::now_ns();
                 if std::net::TcpStream::connect_timeout(&SocketAddr::new(*ip, port), Duration::from_millis(1500)).is_ok() {
-                    let ms = (clock::now_ns() - start) as f64 / 1e6;
+                    let ms = clock::now_ns().saturating_sub(start) as f64 / 1e6;
                     let p = paths.entry(id.clone()).or_insert(PathInfo { rtt_ms: None, port, samples: vec![] });
                     p.samples.push((ms * 1000.0).round() / 1000.0);
                     p.rtt_ms = Some(p.rtt_ms.map_or(ms, |x| x.min(ms)));

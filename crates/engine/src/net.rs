@@ -372,8 +372,8 @@ impl Exchanger for UdpX {
                     let t_rx = kstamp.filter(|k| *k >= t0).unwrap_or(t_user);
                     return Ok(Reply {
                         bytes: resp.to_vec(),
-                        rtt_ns: t_rx - t0,
-                        user_rtt_ns: t_user - t0,
+                        rtt_ns: t_rx.saturating_sub(t0),
+                        user_rtt_ns: t_user.saturating_sub(t0),
                         kernel_stamp: kstamp.is_some(),
                         ttl,
                     });
@@ -546,8 +546,8 @@ impl Exchanger for UdpX {
             let t_rx = kstamp.filter(|k| *k >= t0).unwrap_or(t_user);
             return Ok(Reply {
                 bytes: resp.to_vec(),
-                rtt_ns: t_rx - t0,
-                user_rtt_ns: t_user - t0,
+                rtt_ns: t_rx.saturating_sub(t0),
+                user_rtt_ns: t_user.saturating_sub(t0),
                 kernel_stamp: kstamp.is_some(),
                 ttl: None,
             });
@@ -640,7 +640,7 @@ impl TcpX {
         if self.stream.is_none() {
             let t = clock::now_ns();
             self.stream = Some(Bounded::new(connect_tcp(self.addr, timeout)?, timeout).map_err(io_err)?);
-            self.setup_ns = Some(clock::now_ns() - t);
+            self.setup_ns = Some(clock::now_ns().saturating_sub(t));
         }
         Ok(())
     }
@@ -654,9 +654,15 @@ impl TcpX {
             let body = read_frame(s).map_err(io_err)?;
             let t1 = clock::now_ns();
             if dns::is_response_to(&body, query) {
-                return Ok(Reply { bytes: body, rtt_ns: t1 - t0, user_rtt_ns: t1 - t0, kernel_stamp: false, ttl: None });
+                return Ok(Reply {
+                    bytes: body,
+                    rtt_ns: t1.saturating_sub(t0),
+                    user_rtt_ns: t1.saturating_sub(t0),
+                    kernel_stamp: false,
+                    ttl: None,
+                });
             }
-            if t1 - t0 > timeout.as_nanos() as u64 {
+            if t1.saturating_sub(t0) > timeout.as_nanos() as u64 {
                 return Err(XErr::Timeout);
             }
         }
@@ -736,7 +742,7 @@ impl DotX {
                 _ => io_err(e),
             })?;
         }
-        self.setup_ns = Some(clock::now_ns() - t);
+        self.setup_ns = Some(clock::now_ns().saturating_sub(t));
         self.stream = Some(rustls::StreamOwned::new(conn, sock));
         Ok(())
     }
@@ -750,9 +756,15 @@ impl DotX {
             let body = read_frame(s).map_err(io_err)?;
             let t1 = clock::now_ns();
             if dns::is_response_to(&body, query) {
-                return Ok(Reply { bytes: body, rtt_ns: t1 - t0, user_rtt_ns: t1 - t0, kernel_stamp: false, ttl: None });
+                return Ok(Reply {
+                    bytes: body,
+                    rtt_ns: t1.saturating_sub(t0),
+                    user_rtt_ns: t1.saturating_sub(t0),
+                    kernel_stamp: false,
+                    ttl: None,
+                });
             }
-            if t1 - t0 > timeout.as_nanos() as u64 {
+            if t1.saturating_sub(t0) > timeout.as_nanos() as u64 {
                 return Err(XErr::Timeout);
             }
         }
@@ -843,7 +855,7 @@ impl DohX {
             .await
             .map_err(|_| XErr::Timeout)?
         })?;
-        self.setup_ns = Some(clock::now_ns() - t);
+        self.setup_ns = Some(clock::now_ns().saturating_sub(t));
         self.sender = Some(sender);
         self.conn = Some(conn);
         Ok(())
@@ -888,7 +900,7 @@ impl DohX {
                 if !dns::is_response_to(&out, query) {
                     return Err(XErr::Http("reply doesn't match the query".into()));
                 }
-                Ok(Reply { bytes: out, rtt_ns: t1 - t0, user_rtt_ns: t1 - t0, kernel_stamp: false, ttl: None })
+                Ok(Reply { bytes: out, rtt_ns: t1.saturating_sub(t0), user_rtt_ns: t1.saturating_sub(t0), kernel_stamp: false, ttl: None })
             })
             .await
             .map_err(|_| XErr::Timeout)?

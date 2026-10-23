@@ -728,8 +728,13 @@ mod imp {
             if event.is_null() {
                 return Err(format!("Could not create an event ({}).", std::io::Error::last_os_error()));
             }
-            // The documented minimum: one reply struct, the echoed data, and room for an ICMP error.
-            p.slots.push(Slot { event, reply: vec![0; std::mem::size_of::<ICMP_ECHO_REPLY>() + PAYLOAD + 8], echo: None });
+            // The documented minimum: one reply struct, the echoed data, room for an ICMP error, and an
+            // IO_STATUS_BLOCK, which an asynchronous call also writes into the buffer.
+            let size = std::mem::size_of::<ICMP_ECHO_REPLY>()
+                + PAYLOAD
+                + 8
+                + std::mem::size_of::<windows_sys::Win32::System::IO::IO_STATUS_BLOCK>();
+            p.slots.push(Slot { event, reply: vec![0; size], echo: None });
         }
         Ok(p)
     }
