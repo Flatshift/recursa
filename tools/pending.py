@@ -47,6 +47,8 @@ def accepts_major(peer, major):
     """Does the npm range `peer` take some `major`.x release? Each `||` alternative is a set of comparators that must
     all hold: ">=5" with no upper bound takes 7, "^5.7.2" and ">=5 <7" don't."""
     for alt in peer.split("||"):
+        # A hyphen range "A - B" is ">=A <=B".
+        alt = re.sub(r"(\S+)\s+-\s+(\S+)", r">=\1 <=\2", alt)
         comparators = re.findall(r"([<>=^~]*)\s*v?(\d+)((?:\.[\dx*]+)*)", alt)
         if not comparators:
             if alt.strip() in ("", "*", "x", "latest"):
@@ -103,6 +105,10 @@ def tauri_crates(lock, plan):
 
 
 def typescript(lock, plan):
+    pkg = json.loads((ROOT / "web/package.json").read_text())
+    have = pkg.get("devDependencies", {}).get("typescript", "")
+    if ver(have) >= (7,):
+        return "resolved", f"the interface is on typescript {have}"
     peer = fetch_json("https://registry.npmjs.org/svelte-check/latest").get("peerDependencies", {}).get("typescript", "")
     if accepts_major(peer, 7):
         return "available", f"svelte-check accepts typescript {peer}: update TypeScript to 7"

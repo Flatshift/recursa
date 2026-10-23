@@ -347,7 +347,7 @@ enum Outcome {
 
 /// An address a CDN edge could really have.
 fn usable(a: &Ipv4Addr) -> bool {
-    !crate::catalog::is_special(&IpAddr::V4(*a)) && !a.is_loopback() && !a.is_private() && !a.is_link_local()
+    !crate::catalog::is_local_or_special_but_cgnat(&IpAddr::V4(*a))
 }
 
 /// One A lookup, tried a second time at once if the first didn't answer. The final try counts.

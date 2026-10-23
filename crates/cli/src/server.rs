@@ -17,7 +17,7 @@ use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use futures_util::StreamExt;
 use recursa_engine::app::{ApiError, AppState};
 use serde::Deserialize;
@@ -111,14 +111,22 @@ pub fn router(srv: Shared) -> Router {
 
 /// The session token, from the `x-recursa-token` header or, for an event stream (EventSource can't send headers),
 /// the `token` query parameter.
-async fn require_token(State(srv): State<Shared>, req: Request, next: Next) -> Response {
-    let header_token = req.headers().get("x-recursa-token").and_then(|v| v.to_str().ok());
-    let query_token = req.uri().query().and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("token=")));
-    if !header_token.or(query_token).is_some_and(|t| srv.sessions.lock().unwrap().valid(t)) {
+async fn require_token(State(srv): State<Shared>, mut req: Request, next: Next) -> Response {
+    let token = {
+        let header_token = req.headers().get("x-recursa-token").and_then(|v| v.to_str().ok());
+        let query_token = req.uri().query().and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("token=")));
+        header_token.or(query_token).filter(|t| srv.sessions.lock().unwrap().valid(t)).map(str::to_owned)
+    };
+    let Some(token) = token else {
         return err(ApiError::new(401, "Missing or invalid session token. Open the link Recursa printed."));
-    }
+    };
+    req.extensions_mut().insert(SessionToken(token));
     next.run(req).await
 }
+
+/// The session token a request was let in with, for handlers that outlive the check (an event stream).
+#[derive(Clone)]
+struct SessionToken(String);
 
 async fn guard(State(srv): State<Shared>, req: Request, next: Next) -> Response {
     let host = req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("");
@@ -220,7 +228,7 @@ async fn static_asset(uri: Uri) -> Response {
     builder.body(Body::from(file.data.into_owned())).unwrap()
 }
 
-async fn events(State(srv): State<Shared>, Path(id): Path<String>) -> Response {
+async fn events(State(srv): State<Shared>, Extension(SessionToken(token)): Extension<SessionToken>, Path(id): Path<String>) -> Response {
     let Some(h) = srv.app.run_handle(&id) else { return err(ApiError::new(404, "Run is not live.")) };
     let (rx, snapshot) = h.subscribe();
     let first = futures_util::stream::once(async move { Event::default().data(snapshot) });
@@ -229,7 +237,9 @@ async fn events(State(srv): State<Shared>, Path(id): Path<String>) -> Response {
         // A lagging client gets told to resync from a fresh snapshot.
         Err(_) => Event::default().data(r#"{"type":"resync"}"#),
     });
-    Sse::new(first.chain(rest).map(Ok::<_, Infallible>)).keep_alive(KeepAlive::default()).into_response()
+    // A session that ends (its launch link came back) loses its open streams too, at their next event.
+    let live = move |_: &Event| std::future::ready(srv.sessions.lock().unwrap().valid(&token));
+    Sse::new(first.chain(rest).take_while(live).map(Ok::<_, Infallible>)).keep_alive(KeepAlive::default()).into_response()
 }
 
 #[derive(Deserialize)]
