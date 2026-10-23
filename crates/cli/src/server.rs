@@ -11,7 +11,7 @@
 //! The API itself lives in the engine ([`AppState::call`]); this is only the transport.
 
 use axum::body::{Body, Bytes};
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::{MatchedPath, Path, Query, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -94,10 +94,13 @@ fn token_eq(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+/// A run's event stream, the one route that takes its token in the URL.
+const EVENTS: &str = "/api/runs/{id}/events";
+
 pub fn router(srv: Shared) -> Router {
     // Every API route needs a session token, except the one that trades a launch code for it.
     let authed = Router::new()
-        .route("/api/runs/{id}/events", get(events))
+        .route(EVENTS, get(events))
         .route("/api/runs/{id}/export", get(export))
         .route("/api/{*rest}", any(api))
         .route_layer(middleware::from_fn_with_state(srv.clone(), require_token));
@@ -109,12 +112,13 @@ pub fn router(srv: Shared) -> Router {
         .with_state(srv)
 }
 
-/// The session token, from the `x-recursa-token` header or, for an event stream (EventSource can't send headers),
-/// the `token` query parameter.
+/// The session token, from the `x-recursa-token` header or, for an event stream only (EventSource can't send
+/// headers), the `token` query parameter. Every other call keeps it out of its URL.
 async fn require_token(State(srv): State<Shared>, mut req: Request, next: Next) -> Response {
     let token = {
         let header_token = req.headers().get("x-recursa-token").and_then(|v| v.to_str().ok());
-        let query_token = req.uri().query().and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("token=")));
+        let stream = req.extensions().get::<MatchedPath>().is_some_and(|p| p.as_str() == EVENTS);
+        let query_token = req.uri().query().filter(|_| stream).and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("token=")));
         header_token.or(query_token).filter(|t| srv.sessions.lock().unwrap().valid(t)).map(str::to_owned)
     };
     let Some(token) = token else {

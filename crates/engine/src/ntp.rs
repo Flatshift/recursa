@@ -720,9 +720,12 @@ fn nts_check(host: &str, port: u16, plan: &Plan, cancel: &AtomicBool) -> NtsKe {
     let target = ke.server.clone().unwrap_or_else(|| host.to_string());
     let ntp_port = ke.ntp_port.unwrap_or(123);
     // No server named means the key exchange's own address (RFC 8915 §4.1.7), not a fresh lookup of its name, which
-    // a DNS pool could answer with another machine that doesn't know these keys.
+    // a DNS pool could answer with another machine that doesn't know these keys. A server that names itself is the
+    // same machine too.
+    let names_itself = |s: &str| s.trim_end_matches('.').eq_ignore_ascii_case(host.trim_end_matches('.'));
     let addr = match (&ke.server, ke.ke_ip) {
         (None, Some(ip)) => Some(SocketAddr::new(ip, ntp_port)),
+        (Some(s), Some(ip)) if names_itself(s) => Some(SocketAddr::new(ip, ntp_port)),
         _ => (target.as_str(), ntp_port).to_socket_addrs().ok().and_then(|mut a| a.find(|a| a.is_ipv4())),
     };
     let Some(addr) = addr else {
