@@ -20,9 +20,9 @@ export const shell = desktop && !mobile;
 export const mac = shell && /Mac/.test(navigator.userAgent);
 
 // A launch link's fragment, which never reaches the server, carries a one-time code (`#code=`) that the server trades
-// for a session token. The token is kept for this port so that other tabs of the same launch work; the next launch
-// replaces it.
-const tokenKey = `recursa-token:${location.port}`;
+// for a session token. The token is kept in this origin's storage, which is this port's alone, so that other tabs of
+// the same launch work; the next launch replaces it.
+const tokenKey = 'recursa-token';
 let token = '';
 /** Why the launch link's code was refused (already used, or not valid), shown instead of a bare 401. */
 let sessionError = '';
@@ -64,6 +64,12 @@ class ApiError extends Error {
   }
 }
 
+/** A failed HTTP reply as an error: why the launch code was refused for a 401, else the server's own words. */
+function httpError(res: Response, data: unknown, what: string): ApiError {
+  const msg = (res.status === 401 && sessionError) || (data as { error?: string } | null)?.error || `${what} failed (${res.status}).`;
+  return new ApiError(msg, res.status);
+}
+
 /** An IPC rejection carries the engine's `{ status, error }`; anything else is a bridge failure. */
 function ipcError(e: unknown): ApiError {
   const x = e as { status?: number; error?: string } | null;
@@ -99,10 +105,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   } catch {
     data = null;
   }
-  if (!res.ok) {
-    const msg = (res.status === 401 && sessionError) || (data as { error?: string } | null)?.error || `Request failed (${res.status}).`;
-    throw new ApiError(msg, res.status);
-  }
+  if (!res.ok) throw httpError(res, data, 'Request');
   return data as T;
 }
 
@@ -142,20 +145,31 @@ export function streamRun(runId: string, onEvent: (ev: any) => void, onEnd: () =
       },
     };
   }
-  const url = `/api/runs/${encodeURIComponent(runId)}/events?token=${encodeURIComponent(token)}`;
-  const es = new EventSource(url);
-  es.onmessage = (m) => {
-    let ev: any;
-    try {
-      ev = JSON.parse(m.data);
-    } catch {
-      return;
-    }
-    onEvent(ev);
+  // The token may still be on its way from the launch code's trade, so the stream waits for it like any call.
+  let es: EventSource | null = null;
+  let closed = false;
+  void ready.then(() => {
+    if (closed) return;
+    const src = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events?token=${encodeURIComponent(token)}`);
+    src.onmessage = (m) => {
+      let ev: any;
+      try {
+        ev = JSON.parse(m.data);
+      } catch {
+        return;
+      }
+      onEvent(ev);
+    };
+    // The server closes the stream when the run is evicted.
+    src.onerror = () => src.readyState === EventSource.CLOSED && onEnd();
+    es = src;
+  });
+  return {
+    close() {
+      closed = true;
+      es?.close();
+    },
   };
-  // The server closes the stream when the run is evicted.
-  es.onerror = () => es.readyState === EventSource.CLOSED && onEnd();
-  return { close: () => es.close() };
 }
 
 /** Save a run as CSV or JSON: a native save panel in the app, a download in the browser.
@@ -176,11 +190,7 @@ export async function saveExport(runId: string, format: 'csv' | 'json'): Promise
   } catch {
     throw new ApiError('Recursa isn’t responding. Is the app still running?', 0);
   }
-  if (!res.ok) {
-    const data = (await res.json().catch(() => null)) as { error?: string } | null;
-    const msg = (res.status === 401 && sessionError) || data?.error || `Export failed (${res.status}).`;
-    throw new ApiError(msg, res.status);
-  }
+  if (!res.ok) throw httpError(res, await res.json().catch(() => null), 'Export');
   const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? `recursa-${runId}.${format}`;
   const url = URL.createObjectURL(await res.blob());
   const a = document.createElement('a');
