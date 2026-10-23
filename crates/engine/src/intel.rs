@@ -150,12 +150,19 @@ impl Intel {
 
     async fn get_bytes(&self, url: &str) -> Option<bytes::Bytes> {
         let _permit = self.permits.acquire().await.ok()?;
-        let r = self.http.get(url).send().await.ok()?;
+        let mut r = self.http.get(url).send().await.ok()?;
         if !r.status().is_success() || r.content_length().is_some_and(|n| n as usize > MAX_BODY) {
             return None;
         }
-        let body = r.bytes().await.ok()?;
-        (body.len() <= MAX_BODY).then_some(body)
+        // Read in pieces: a chunked reply has no length to check up front, and must not fill memory first.
+        let mut body = bytes::BytesMut::new();
+        while let Some(chunk) = r.chunk().await.ok()? {
+            if body.len() + chunk.len() > MAX_BODY {
+                return None;
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Some(body.freeze())
     }
 
     async fn get_json(&self, url: &str) -> Option<Value> {
@@ -570,7 +577,8 @@ fn statuspage(
                 "status": i["status"],
                 "started": i["started_at"].as_str().or(i["created_at"].as_str()),
                 "resolved": i["resolved_at"],
-                "url": i["shortlink"],
+                // Rendered as a link: only an https URL, else the status page itself.
+                "url": i["shortlink"].as_str().filter(|u| u.starts_with("https://")).unwrap_or(page),
                 "update": i["incident_updates"].as_array().and_then(|u| u.first()).map(|u| u["body"].clone()),
             })
         })
