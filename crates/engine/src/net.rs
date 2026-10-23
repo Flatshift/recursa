@@ -666,6 +666,7 @@ impl TcpX {
         s.arm(timeout).map_err(io_err)?;
         let t0 = clock::now_ns();
         write_frame(s, query, &mut self.buf).map_err(io_err)?;
+        // Replies to other queries are skipped; the stream's deadline ends the wait.
         loop {
             let body = read_frame(s).map_err(io_err)?;
             let t1 = clock::now_ns();
@@ -677,9 +678,6 @@ impl TcpX {
                     kernel_stamp: false,
                     ttl: None,
                 });
-            }
-            if t1.saturating_sub(t0) > timeout.as_nanos() as u64 {
-                return Err(XErr::Timeout);
             }
         }
     }
@@ -768,6 +766,7 @@ impl DotX {
         s.sock.arm(timeout).map_err(io_err)?;
         let t0 = clock::now_ns();
         write_frame(s, query, &mut self.buf).map_err(io_err)?;
+        // Replies to other queries are skipped; the stream's deadline ends the wait.
         loop {
             let body = read_frame(s).map_err(io_err)?;
             let t1 = clock::now_ns();
@@ -779,9 +778,6 @@ impl DotX {
                     kernel_stamp: false,
                     ttl: None,
                 });
-            }
-            if t1.saturating_sub(t0) > timeout.as_nanos() as u64 {
-                return Err(XErr::Timeout);
             }
         }
     }
