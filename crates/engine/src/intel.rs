@@ -411,7 +411,7 @@ impl Intel {
             tokio::task::spawn_blocking(move || -> Option<IpAddr> {
                 let addr: SocketAddr = server.parse().ok()?;
                 let mut x = UdpX::connect(addr).ok()?;
-                let q = dns::encode_query(fastrand::u16(..), &QuerySpec::new("myip.opendns.com", qtype)).ok()?;
+                let q = dns::encode_query(dns::new_id(), &QuerySpec::new("myip.opendns.com", qtype)).ok()?;
                 let r = x.exchange(&q, Duration::from_millis(1500)).ok()?;
                 let m = dns::parse(&r.bytes).ok()?;
                 if qtype == dns::TYPE_A {

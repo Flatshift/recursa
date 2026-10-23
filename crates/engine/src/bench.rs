@@ -722,7 +722,7 @@ fn open_targets(set: Setup, h: &RunHandle, plan: &[(TargetInfo, Option<Endpoint>
 
 /// Whether `x` answers `name` with at least one address.
 fn resolves(x: &mut dyn Exchanger, name: &str, timeout: Duration) -> bool {
-    let Ok(q) = dns::encode_query(fastrand::u16(..), &QuerySpec::new(name, dns::TYPE_A)) else { return false };
+    let Ok(q) = dns::encode_query(dns::new_id(), &QuerySpec::new(name, dns::TYPE_A)) else { return false };
     x.exchange(&q, timeout).ok().and_then(|r| dns::parse(&r.bytes).ok()).is_some_and(|m| !m.ipv4_answers().is_empty())
 }
 
@@ -771,7 +771,7 @@ fn effective_cached_names(h: &RunHandle, set: Setup, cfg: &RunConfig, selected: 
 /// One query through `x`, parsed.
 fn ask(x: &mut dyn Exchanger, name: &str, qtype: u16, rd: bool, timeout: Duration) -> Option<dns::Message> {
     let spec = QuerySpec { rd, ..QuerySpec::new(name, qtype) };
-    let q = dns::encode_query(fastrand::u16(..), &spec).ok()?;
+    let q = dns::encode_query(dns::new_id(), &spec).ok()?;
     x.exchange(&q, timeout).ok().and_then(|r| dns::parse(&r.bytes).ok())
 }
 
@@ -910,7 +910,7 @@ fn effective_tlds(h: &RunHandle, set: Setup, cfg: &RunConfig, selected: &[Resolv
             return tlds;
         }
         let spec = QuerySpec::new(format!("ub{}.{t}", rand_label(14)), dns::TYPE_A).with_edns(|e| e.dnssec_ok = true);
-        let Ok(q) = dns::encode_query(fastrand::u16(..), &spec) else { continue };
+        let Ok(q) = dns::encode_query(dns::new_id(), &spec) else { continue };
         let seen = asks.iter_mut().find_map(|x| {
             let m = x.exchange(&q, timeout).ok().and_then(|r| dns::parse(&r.bytes).ok())?;
             denial(&m, t)
@@ -1306,7 +1306,7 @@ fn warm_up(set: Setup, h: &RunHandle, xs: &mut [Option<Box<dyn Exchanger>>], tim
                             break;
                         }
                         consumed += 1;
-                        let Ok(q) = dns::encode_query(fastrand::u16(..), &QuerySpec::new(n, dns::TYPE_A)) else {
+                        let Ok(q) = dns::encode_query(dns::new_id(), &QuerySpec::new(n, dns::TYPE_A)) else {
                             h.publish(|s| {
                                 s.done += 1;
                                 json!({"type": "warm", "samples": [], "done": s.done, "total": s.total})
@@ -1622,7 +1622,7 @@ fn query_once(
     streak: &mut u32,
 ) -> bool {
     // Encoding happens before the send stamp, outside the measured interval.
-    let Ok(q) = dns::encode_query(fastrand::u16(..), &QuerySpec::new(query_name_in(test, round, cached, fresh), dns::TYPE_A)) else {
+    let Ok(q) = dns::encode_query(dns::new_id(), &QuerySpec::new(query_name_in(test, round, cached, fresh), dns::TYPE_A)) else {
         return false;
     };
     let res = x.exchange(&q, timeout);
@@ -1826,7 +1826,7 @@ fn probe_resolver(
     let quick = timeout.min(Duration::from_millis(2500));
     let try_ep = |ep: &Endpoint| -> Result<f64, XErr> {
         let mut x = net::open(ep, quick)?;
-        let q = dns::encode_query(fastrand::u16(..), &QuerySpec::new("example.com", dns::TYPE_A)).map_err(|e| XErr::Io(e.to_string()))?;
+        let q = dns::encode_query(dns::new_id(), &QuerySpec::new("example.com", dns::TYPE_A)).map_err(|e| XErr::Io(e.to_string()))?;
         Ok(x.exchange(&q, quick)?.rtt_ns as f64 / 1e6)
     };
 
@@ -1883,7 +1883,7 @@ fn probe_resolver(
 fn plain_dns_stopped() -> bool {
     let ask = |t: Transport, ip: &str| {
         let ep = Endpoint { transport: t, addr: SocketAddr::new(ip.parse().unwrap(), 53), host: None, url: None };
-        let q = dns::encode_query(fastrand::u16(..), &QuerySpec::new("www.google.com", dns::TYPE_A)).ok()?;
+        let q = dns::encode_query(dns::new_id(), &QuerySpec::new("www.google.com", dns::TYPE_A)).ok()?;
         net::open(&ep, Duration::from_millis(1500)).ok()?.exchange(&q, Duration::from_millis(1500)).ok()
     };
     let udp_dead = ["1.1.1.1", "8.8.8.8"].iter().all(|ip| ask(Transport::Udp, ip).is_none());

@@ -112,7 +112,7 @@ fn probe_server(r: &Resolver, mut ex: Option<Box<dyn Exchanger>>, ts: i64, round
         .into_iter()
         .map(|test| {
             let result = ex.as_mut().and_then(|x| {
-                let q = dns::encode_query(fastrand::u16(..), &QuerySpec::new(bench::query_name(test, round), dns::TYPE_A)).ok()?;
+                let q = dns::encode_query(dns::new_id(), &QuerySpec::new(bench::query_name(test, round), dns::TYPE_A)).ok()?;
                 Some(bench::classify(test, &x.exchange(&q, timeout)))
             });
             // A resolver that answers with a filter's block page or from its cache is up; only silence and errors are outages.

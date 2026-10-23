@@ -197,9 +197,8 @@ impl Session<'_> {
             e.dnssec_ok = true;
             e.nsid = true;
         });
-        let res = dns::encode_query(fastrand::u16(..), &spec)
-            .map_err(|e| XErr::Io(e.to_string()))
-            .and_then(|q| self.ex.exchange(&q, self.timeout));
+        let res =
+            dns::encode_query(dns::new_id(), &spec).map_err(|e| XErr::Io(e.to_string())).and_then(|q| self.ex.exchange(&q, self.timeout));
         let out = match res {
             Ok(r) => match dns::parse(&r.bytes) {
                 Ok(msg) => {
@@ -629,7 +628,7 @@ pub struct TransportCost {
 
 /// One query over `ex`, with its round trip in milliseconds and its size.
 fn ask_once(ex: &mut dyn Exchanger, spec: &QuerySpec, timeout: Duration) -> Option<(f64, usize, dns::Message)> {
-    let q = dns::encode_query(fastrand::u16(..), spec).ok()?;
+    let q = dns::encode_query(dns::new_id(), spec).ok()?;
     let r = ex.exchange(&q, timeout).ok()?;
     let m = dns::parse(&r.bytes).ok()?;
     Some((r.rtt_ns as f64 / 1e6, r.bytes.len(), m))
