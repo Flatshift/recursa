@@ -1,0 +1,7 @@
+# Advisories with no fix available yet. Each is tracked in docs/PENDING.md and checked on every CI run by
+# tools/pending.py; remove it here once the fix is in.
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0194", # quick-xml 0.39 through rpki and routinator
+    "RUSTSEC-2026-0195", # quick-xml 0.39 through rpki and routinator
+]
