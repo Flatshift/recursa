@@ -249,6 +249,8 @@ fn exchange(sock: &UdpSocket, timeout: Duration, make: &dyn Fn(u64) -> Vec<u8>, 
                     // Not an answer to this request: keep waiting for the real one.
                     Err(NtpError::Bad(_)) if left > Duration::from_millis(5) => continue,
                     Err(e @ NtpError::Nts(..)) if left > Duration::from_millis(5) => rejected = Some(e),
+                    // A stray at the very end says less than a reply that didn't verify.
+                    Err(NtpError::Bad(_)) if rejected.is_some() => return Err(rejected.unwrap()),
                     r => return r,
                 }
             }
@@ -716,7 +718,14 @@ fn nts_check(host: &str, port: u16, plan: &Plan, cancel: &AtomicBool) -> NtsKe {
     let (mut ke, keys) = ke_session(host, port, Duration::from_millis(4000));
     let Some(keys) = keys.filter(|_| ke.ok && plan.samples > 0) else { return ke };
     let target = ke.server.clone().unwrap_or_else(|| host.to_string());
-    let Some(addr) = (target.as_str(), ke.ntp_port.unwrap_or(123)).to_socket_addrs().ok().and_then(|mut a| a.find(|a| a.is_ipv4())) else {
+    let ntp_port = ke.ntp_port.unwrap_or(123);
+    // No server named means the key exchange's own address (RFC 8915 §4.1.7), not a fresh lookup of its name, which
+    // a DNS pool could answer with another machine that doesn't know these keys.
+    let addr = match (&ke.server, ke.ke_ip) {
+        (None, Some(ip)) => Some(SocketAddr::new(ip, ntp_port)),
+        _ => (target.as_str(), ntp_port).to_socket_addrs().ok().and_then(|mut a| a.find(|a| a.is_ipv4())),
+    };
+    let Some(addr) = addr else {
         ke.timed = Some(AddrStats {
             ip: target,
             error: Some("the server NTS-KE named didn't resolve".into()),
