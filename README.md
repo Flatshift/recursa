@@ -139,7 +139,7 @@ data/
   catalog.json   curated resolvers and their published claims
   incidents.json sourced incident history
   ntp.json       curated NTP servers and what their operators publish
-tools/           notices.py (third-party notices), icons.mjs (app icons); dev helper: gen-monitor.py (synthetic monitoring history)
+tools/           notices.py (third-party notices), icons.mjs (app icons), pending.py (checks docs/PENDING.md, the fixes we wait on upstream); dev helper: gen-monitor.py (synthetic monitoring history)
 web/             Svelte 5 + Vite + TypeScript interface; lib/api.ts picks HTTP or IPC at runtime
 ```
 
