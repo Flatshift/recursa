@@ -2,7 +2,7 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.3.12 (2026-10-23)
 
 Security fixes from an audit, and dependency updates.
 
@@ -21,6 +21,8 @@ Security fixes from an audit, and dependency updates.
 - **Dependencies.** rustls 0.23.46, rustls-webpki 0.103.16 and webpki-roots 1.0.11 fix eight RustSec advisories. Tauri
   2.12.5, tokio 1.54.1, Vite 8, TypeScript 6 and Vitest 5. CI builds on Node 26 with its actions pinned by commit.
   quick-xml 0.39 (RUSTSEC-2026-0194, -0195), used by Routinator's RRDP client, waits for a new `rpki` release.
+- **Pending fixes.** `docs/PENDING.md` lists what waits on upstream. CI runs `cargo audit`, which fails on any new
+  advisory, and `tools/pending.py`, which reports each pending item in the run summary and warns once its fix is out.
 
 ## 0.3.10 (2026-10-22)
 
