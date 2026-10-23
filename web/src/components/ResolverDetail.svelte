@@ -49,6 +49,10 @@
   const intel = $derived(runState?.intel[id] ?? null);
   const path = $derived(runState?.paths?.[id] ?? null);
   const cdn = $derived(runState?.cdn?.resolvers[id] ?? null);
+  // The registry facts (egress, service network, RPKI, CDN mapping) get their own group under the wire facts and path.
+  const routing = $derived(
+    !!(intel?.egress || probe?.egress.length || (intel?.service && !intel.service.private) || intel?.service?.rpki || intel?.service?.rov || cdn),
+  );
   const feed = $derived(status.feedFor(resolver.status_feed));
   const incidents = $derived(status.incidentsFor(id));
 
@@ -236,66 +240,7 @@
                 </div>
               {/if}
             {/if}
-            {#if intel?.egress}
-              <div>
-                <dt title="The address Google's authoritative servers saw this resolver's lookups come from">Queries authoritative servers from</dt>
-                <dd>
-                  <span class="mono">{intel.egress.ip}</span>
-                  <span class="muted">· AS{intel.egress.asn ?? '?'} {holder(intel.egress.holder)}</span>
-                </dd>
-              </div>
-            {:else if probe?.egress.length}
-              <div><dt>Queries authoritative servers from</dt><dd class="mono">{probe.egress.join(', ')}</dd></div>
-            {/if}
-            {#if intel?.service && !intel.service.private}
-              <div>
-                <dt>Service network</dt>
-                <dd>
-                  <span class="mono">{intel.service.prefix ?? intel.service.ip}</span>
-                  <span class="muted">· AS{intel.service.asn ?? '?'} {holder(intel.service.holder)}</span>
-                </dd>
-              </div>
-              <div>
-                <dt>RPKI route origin</dt>
-                <dd>
-                  <Cell c={roaCell(runState, id)} />
-                  {#if intel.service.rpki?.status === 'not_checked'}
-                    <span class="muted">{intel.service.rpki.reason}</span>
-                  {:else if intel.service.rpki && intel.service.prefix}
-                    <!-- Show the object itself, so the verdict can be checked rather than trusted. -->
-                    <span class="roa">
-                      {#each intel.service.rpki.roas ?? [] as roa}
-                        <span class="mono">ROA AS{roa.origin} · {roa.prefix} · max /{roa.max_length}</span>
-                      {:else}
-                        <span>No ROA covers {intel.service.prefix} from AS{intel.service.asn ?? '?'}</span>
-                      {/each}
-                      <span class="muted"
-                        >{intel.service.prefix} as announced by AS{intel.service.asn ?? '?'}{#if intel.service.rpki.vrp_time != null}, checked on this computer ({intel.service.rpki
-                            .validator ?? 'RPKI validator'}), data from {when(intel.service.rpki.vrp_time)}{:else}; route-origin result from an earlier version{/if}</span
-                      >
-                    </span>
-                  {/if}
-                </dd>
-              </div>
-              <div><dt>Operator drops invalid routes</dt><dd><Cell c={rovCell(runState, id)} /></dd></div>
-            {/if}
-            {#if cdn}
-              <div>
-                <dt>CDN mapping</dt>
-                <dd>
-                  <Cell c={cdnCell(runState, id)} />
-                  <span class="muted">· ECS {ecsSeen || 'not tested'}</span>
-                </dd>
-              </div>
-            {/if}
           </dl>
-          {#if intel?.service?.rpki || intel?.service?.rov}
-            <p class="why">
-              A valid ROA means networks that check RPKI will reject anyone else announcing this resolver's addresses. Operator ROV
-              protects the resolver's own outbound routes. Both limit hijacks like the one that cut off 1.1.1.1 for 300 networks in
-              June 2024.
-            </p>
-          {/if}
         {:else}
           <p class="muted small">No benchmark has probed this resolver yet.</p>
         {/if}
@@ -307,6 +252,72 @@
               <Route {trace} busy={isRunning('trace', id)} rtt={path?.rtt_ms ?? null} />
             {:else if !errorOf('trace', id)}
               <p class="muted small">Trace path shows each router between this computer and {ip}, with its round trip.</p>
+            {/if}
+          </div>
+        {/if}
+        {#if runState && routing}
+          <div class="result">
+            <h4>Addresses and routing</h4>
+            <dl class="facts">
+              {#if intel?.egress}
+                <div>
+                  <dt title="The address Google's authoritative servers saw this resolver's lookups come from">Queries authoritative servers from</dt>
+                  <dd>
+                    <span class="mono">{intel.egress.ip}</span>
+                    <span class="muted">· AS{intel.egress.asn ?? '?'} {holder(intel.egress.holder)}</span>
+                  </dd>
+                </div>
+              {:else if probe?.egress.length}
+                <div><dt>Queries authoritative servers from</dt><dd class="mono">{probe.egress.join(', ')}</dd></div>
+              {/if}
+              {#if intel?.service && !intel.service.private}
+                <div>
+                  <dt>Service network</dt>
+                  <dd>
+                    <span class="mono">{intel.service.prefix ?? intel.service.ip}</span>
+                    <span class="muted">· AS{intel.service.asn ?? '?'} {holder(intel.service.holder)}</span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>RPKI route origin</dt>
+                  <dd>
+                    <Cell c={roaCell(runState, id)} />
+                    {#if intel.service.rpki?.status === 'not_checked'}
+                      <span class="muted">{intel.service.rpki.reason}</span>
+                    {:else if intel.service.rpki && intel.service.prefix}
+                      <!-- Show the object itself, so the verdict can be checked rather than trusted. -->
+                      <span class="roa">
+                        {#each intel.service.rpki.roas ?? [] as roa}
+                          <span class="mono">ROA AS{roa.origin} · {roa.prefix} · max /{roa.max_length}</span>
+                        {:else}
+                          <span>No ROA covers {intel.service.prefix} from AS{intel.service.asn ?? '?'}</span>
+                        {/each}
+                        <span class="muted"
+                          >{intel.service.prefix} as announced by AS{intel.service.asn ?? '?'}{#if intel.service.rpki.vrp_time != null}, checked on this computer ({intel.service.rpki
+                              .validator ?? 'RPKI validator'}), data from {when(intel.service.rpki.vrp_time)}{:else}; route-origin result from an earlier version{/if}</span
+                        >
+                      </span>
+                    {/if}
+                  </dd>
+                </div>
+                <div><dt>Operator drops invalid routes</dt><dd><Cell c={rovCell(runState, id)} /></dd></div>
+              {/if}
+              {#if cdn}
+                <div>
+                  <dt>CDN mapping</dt>
+                  <dd>
+                    <Cell c={cdnCell(runState, id)} />
+                    <span class="muted">· ECS {ecsSeen || 'not tested'}</span>
+                  </dd>
+                </div>
+              {/if}
+            </dl>
+            {#if intel?.service?.rpki || intel?.service?.rov}
+              <p class="why">
+                A valid ROA means networks that check RPKI will reject anyone else announcing this resolver's addresses. Operator ROV
+                protects the resolver's own outbound routes. Both limit hijacks like the one that cut off 1.1.1.1 for 300 networks in
+                June 2024.
+              </p>
             {/if}
           </div>
         {/if}

@@ -13,16 +13,14 @@
     resolver,
     run = null,
     rows = [],
-    overlay = false,
     onclose,
-  }: { resolver: Resolver; run?: RunState | null; rows?: Row[]; overlay?: boolean; onclose: () => void } = $props();
+  }: { resolver: Resolver; run?: RunState | null; rows?: Row[]; onclose: () => void } = $props();
 
   // The inspector follows the selection; it loads the status feed it shows.
   $effect(() => {
     status.load();
   });
 
-  // Drag the left edge to resize; the width is remembered.
   // Phone: a sheet over the run. A downward drag on its header follows the finger and closes it past a third of
   // its height or on a quick flick; anything less springs back.
   let sheet = $state<HTMLElement>();
@@ -47,25 +45,6 @@
     if (fast || dy > (sheet?.offsetHeight ?? 600) / 3) onclose();
   }
 
-  function startResize(e: PointerEvent) {
-    e.preventDefault();
-    const x0 = e.clientX;
-    const w0 = app.inspectorWidth;
-    const el = e.currentTarget as HTMLElement;
-    el.setPointerCapture(e.pointerId);
-    const move = (ev: PointerEvent) => app.setInspectorWidth(w0 + (x0 - ev.clientX));
-    // Capture ends on pointer up and also when the system cancels the drag.
-    const done = () => {
-      el.removeEventListener('pointermove', move);
-      el.removeEventListener('lostpointercapture', done);
-    };
-    el.addEventListener('pointermove', move);
-    el.addEventListener('lostpointercapture', done);
-  }
-  function resizeKey(e: KeyboardEvent) {
-    if (e.key === 'ArrowLeft') app.setInspectorWidth(app.inspectorWidth + 20);
-    else if (e.key === 'ArrowRight') app.setInspectorWidth(app.inspectorWidth - 20);
-  }
 
   const id = $derived(resolver.id);
   const open = () => app.navigate(`/resolver/${id}`);
@@ -78,25 +57,12 @@
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <aside
   class="inspector"
-  class:overlay
   class:pulling={pull !== null}
-  style:width="{app.inspectorWidth}px"
   style:transform={pull ? `translateY(${pull}px)` : undefined}
   aria-labelledby="sheet-title"
   bind:this={sheet}
   ontouchstart={(e) => e.stopPropagation()}
 >
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions (a separator is focusable to resize with the arrow keys) -->
-  <div
-    class="grip"
-    role="separator"
-    aria-orientation="vertical"
-    aria-label="Resize inspector"
-    aria-valuenow={app.inspectorWidth}
-    tabindex="0"
-    onpointerdown={startResize}
-    onkeydown={resizeKey}
-  ></div>
   <div class="inner scroll">
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <header class="head" ontouchstart={mobile ? pullStart : undefined} ontouchmove={mobile ? pullMove : undefined} ontouchend={mobile ? pullEnd : undefined} ontouchcancel={mobile ? pullEnd : undefined}>
@@ -130,34 +96,23 @@
 </aside>
 
 <style>
+  /* Beside the shortlist it takes the rest of the window; the text stays within a readable measure. */
   .inspector {
     position: relative;
-    flex: none;
-    max-width: 70%;
+    flex: 1;
+    min-width: 0;
     min-height: 0;
     height: 100%;
     background: var(--surface);
-    border-left: 1px solid var(--rule);
     color: var(--ink);
     display: grid;
   }
-  /* A narrow window floats the inspector over the content instead of squeezing it. */
-  .inspector.overlay {
-    position: absolute;
-    inset: 0 0 0 auto;
-    z-index: var(--z-sheet);
-    max-width: calc(100% - 24px);
-    box-shadow: var(--shadow-sheet);
-    animation: slide var(--dur) var(--ease-out);
-  }
   /* Phone: a sheet that rises over the run and leaves its top edge in view, with its latency first; the operator's
      notes and the deep dive follow the measurements. */
-  :global(html.mobile) .inspector,
-  :global(html.mobile) .inspector.overlay {
+  :global(html.mobile) .inspector {
     position: fixed;
     inset: calc(env(safe-area-inset-top) + 10px) 0 0 0;
     z-index: var(--z-sheet);
-    width: auto !important;
     max-width: none;
     height: auto;
     border-left: 0;
@@ -187,14 +142,10 @@
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    :global(html.mobile) .inspector,
-    :global(html.mobile) .inspector.overlay {
+    :global(html.mobile) .inspector {
       animation: fadein 160ms linear;
       transition: none;
     }
-  }
-  :global(html.mobile) .grip {
-    display: none;
   }
   :global(html.mobile) .inner {
     display: flex;
@@ -233,27 +184,10 @@
     font-size: var(--t-base);
     font-weight: 620;
   }
-  @keyframes slide {
-    from {
-      transform: translateX(16px);
-      opacity: 0;
-    }
-  }
-  .grip {
-    position: absolute;
-    inset: 0 auto 0 -3px;
-    width: 6px;
-    cursor: col-resize;
-    z-index: 2;
-  }
-  .grip:hover,
-  .grip:focus-visible {
-    background: color-mix(in oklch, var(--accent) 35%, transparent);
-    outline: none;
-  }
   .inner {
-    padding: 0 22px 40px;
+    padding: 0 28px 40px;
     height: 100%;
+    max-width: 816px;
   }
   .head {
     display: flex;

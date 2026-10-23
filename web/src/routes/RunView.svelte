@@ -20,6 +20,7 @@
   import LatencyTable from '../components/LatencyTable.svelte';
   import CdnPanel from '../components/CdnPanel.svelte';
   import Inspector from '../components/Inspector.svelte';
+  import Shortlist, { type Pick } from '../components/Shortlist.svelte';
   import Info from '../components/Info.svelte';
   import Icon from '../components/Icon.svelte';
   import { mobile } from '../lib/api';
@@ -253,9 +254,22 @@
     untrack(() => scroller?.scrollTo({ top: 0 }));
   });
 
-  // Float the inspector over the content when there isn't room for both.
+  // Inspecting a resolver splits the view: the shortlist on the left, its detail on the right. Phones use a sheet.
+  const split = $derived(!!inspected && !mobile);
   let bodyW = $state(1200);
-  const overlay = $derived(bodyW - app.inspectorWidth < 620);
+  const narrow = $derived(bodyW < 720);
+  // One line per resolver in ranking order, scored as the ladder sorts; a resolver on several transports lists once.
+  const picks = $derived.by<Pick[]>(() => {
+    const seen = new Set<string>();
+    const out: Pick[] = [];
+    for (const r of ordered) {
+      const rid = r.target.resolver_id;
+      if (seen.has(rid)) continue;
+      seen.add(rid);
+      out.push({ id: rid, name: label(r.target.provider, r.target.variant), score: r.composite });
+    }
+    return out;
+  });
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -327,185 +341,194 @@
         {/if}
         <RunProgress {run} />
         <p class="visually-hidden" aria-live="polite">{announce}</p>
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <div
-          class="content scroll"
-          id="run-panel"
-          role="tabpanel"
-          tabindex="0"
-          aria-label={VIEW_LABEL[app.runView]}
-          bind:this={scroller}
-          oncontextmenu={onResolverContext}
-        >
-          {#if app.runView === 'overview'}
-            <div class="overview">
-              {#each warns as n}
-                <div class="notice warn" role="status">
-                  <Icon name="warn" size={16} />
-                  <p>{n.text}</p>
-                </div>
-              {/each}
-
-              {#if v}
-                <Verdict {v} cdn={!!run.cdn} {caution} onopen={open}>
-                  {#if rows.some((r) => r.measured)}
-                    <RankList
-                      rows={rank(rows)}
-                      samples={run.samples}
-                      tests={run.config.tests}
-                      multi={transports.length > 1}
-                      onopen={open}
-                      onmore={() => app.setRunView('latency')}
-                    />
-                  {/if}
-                </Verdict>
-                {#if mobile && v.caveats.length}
-                  <details class="notes">
-                    <summary>{v.caveats.length === 1 ? 'One caveat' : `${v.caveats.length} caveats`}</summary>
-                    {#each v.caveats as c}<p class="caveat">{c}</p>{/each}
-                  </details>
-                {:else}
-                  {#each v.caveats as c}<p class="caveat">{c}</p>{/each}
-                {/if}
-                {#if mobile && rows.some((r) => r.measured)}
-                  <!-- The phone has no Numbers tab: the same table sits under the answer. -->
-                  <details class="notes numbers">
-                    <summary>Medians and p95 for every test</summary>
-                    <LatencyTable rows={ordered} tests={run.config.tests} onopen={open} />
-                  </details>
-                {/if}
-              {:else if running}
-                <div>
-                  <Verdict v={null} live={liveVerdict} cdn={run.config.cdn} onopen={open}>
-                    {#snippet status()}<Working {run} />{/snippet}
-                    <RankList
-                      rows={rank(rows)}
-                      samples={run.samples}
-                      tests={run.config.tests}
-                      multi={transports.length > 1}
-                      live
-                      warm={run.warm ?? []}
-                      {placeholders}
-                      onopen={open}
-                      onmore={() => app.setRunView('latency')}
-                    />
-                  </Verdict>
-                </div>
-              {/if}
-
-              {#if infos.length}
-                <ul class="infos">
-                  {#each infos as n}<li><Icon name="info" size={14} />{n.text}</li>{/each}
-                </ul>
-              {/if}
-            </div>
-          {:else if app.runView === 'latency'}
-            <div class="bar chrome">
-              <div class="segmented" role="group" aria-label="Test shown">
-                {#each tabs as t, i}
-                  <button aria-pressed={test === t} onclick={() => (test = t)} title="Shortcut: {i + 1}">
-                    {#if t !== 'all'}<i class="key {t}"></i>{/if}{t === 'all' ? 'All tests' : TEST_LABEL[t]}
-                  </button>
+        {#if split && inspected}
+          <div class="split">
+            <Shortlist groups={[['', picks]]} selected={app.inspect} back="All results" collapsed={narrow} onselect={open} onback={() => (app.inspect = null)} />
+            {#key inspected.id}
+              <Inspector resolver={inspected} {run} {rows} onclose={() => (app.inspect = null)} />
+            {/key}
+          </div>
+        {:else}
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <div
+            class="content scroll"
+            id="run-panel"
+            role="tabpanel"
+            tabindex="0"
+            aria-label={VIEW_LABEL[app.runView]}
+            bind:this={scroller}
+            oncontextmenu={onResolverContext}
+          >
+            {#if app.runView === 'overview'}
+              <div class="overview">
+                {#each warns as n}
+                  <div class="notice warn" role="status">
+                    <Icon name="warn" size={16} />
+                    <p>{n.text}</p>
+                  </div>
                 {/each}
+
+                {#if v}
+                  <Verdict {v} cdn={!!run.cdn} {caution} onopen={open}>
+                    {#if rows.some((r) => r.measured)}
+                      <RankList
+                        rows={rank(rows)}
+                        samples={run.samples}
+                        tests={run.config.tests}
+                        multi={transports.length > 1}
+                        onopen={open}
+                        onmore={() => app.setRunView('latency')}
+                      />
+                    {/if}
+                  </Verdict>
+                  {#if mobile && v.caveats.length}
+                    <details class="notes">
+                      <summary>{v.caveats.length === 1 ? 'One caveat' : `${v.caveats.length} caveats`}</summary>
+                      {#each v.caveats as c}<p class="caveat">{c}</p>{/each}
+                    </details>
+                  {:else}
+                    {#each v.caveats as c}<p class="caveat">{c}</p>{/each}
+                  {/if}
+                  {#if mobile && rows.some((r) => r.measured)}
+                    <!-- The phone has no Numbers tab: the same table sits under the answer. -->
+                    <details class="notes numbers">
+                      <summary>Medians and p95 for every test</summary>
+                      <LatencyTable rows={ordered} tests={run.config.tests} onopen={open} />
+                    </details>
+                  {/if}
+                {:else if running}
+                  <div>
+                    <Verdict v={null} live={liveVerdict} cdn={run.config.cdn} onopen={open}>
+                      {#snippet status()}<Working {run} />{/snippet}
+                      <RankList
+                        rows={rank(rows)}
+                        samples={run.samples}
+                        tests={run.config.tests}
+                        multi={transports.length > 1}
+                        live
+                        warm={run.warm ?? []}
+                        {placeholders}
+                        onopen={open}
+                        onmore={() => app.setRunView('latency')}
+                      />
+                    </Verdict>
+                  </div>
+                {/if}
+
+                {#if infos.length}
+                  <ul class="infos">
+                    {#each infos as n}<li><Icon name="info" size={14} />{n.text}</li>{/each}
+                  </ul>
+                {/if}
               </div>
-              {#if multi}
+            {:else if app.runView === 'latency'}
+              <div class="bar chrome">
+                <div class="segmented" role="group" aria-label="Test shown">
+                  {#each tabs as t, i}
+                    <button aria-pressed={test === t} onclick={() => (test = t)} title="Shortcut: {i + 1}">
+                      {#if t !== 'all'}<i class="key {t}"></i>{/if}{t === 'all' ? 'All tests' : TEST_LABEL[t]}
+                    </button>
+                  {/each}
+                </div>
+                {#if multi}
+                  <label>
+                    <span class="visually-hidden">Transport shown</span>
+                    <select bind:value={transport}>
+                      <option value="all">All transports</option>
+                      {#each transports as t}<option value={t}>{TRANSPORT_LABEL[t]} only</option>{/each}
+                    </select>
+                  </label>
+                {/if}
                 <label>
-                  <span class="visually-hidden">Transport shown</span>
-                  <select bind:value={transport}>
-                    <option value="all">All transports</option>
-                    {#each transports as t}<option value={t}>{TRANSPORT_LABEL[t]} only</option>{/each}
+                  <span class="visually-hidden">Sort by</span>
+                  <select bind:value={sortKey}>
+                    <option value="rank">Ranked</option>
+                    {#if multi}<option value="resolver">By resolver</option>{/if}
+                    <option value="success">Answered</option>
+                    <option value="p95">Slowest 5%</option>
+                    <option value="name">Name</option>
                   </select>
                 </label>
-              {/if}
-              <label>
-                <span class="visually-hidden">Sort by</span>
-                <select bind:value={sortKey}>
-                  <option value="rank">Ranked</option>
-                  {#if multi}<option value="resolver">By resolver</option>{/if}
-                  <option value="success">Answered</option>
-                  <option value="p95">Slowest 5%</option>
-                  <option value="name">Name</option>
-                </select>
-              </label>
-              <Info label="How to read the latency chart">
-                <p>
-                  {test === 'all'
-                    ? 'Every answered query, by test. Bars span the middle 50%, the tick marks the median, the whisker reaches the 95th percentile.'
-                    : TEST_HINT[test]}
-                </p>
-                {#if run.config.tests.includes('cached') && run.config.cached_names?.length}
+                <Info label="How to read the latency chart">
                   <p>
-                    The Cached test asked {run.config.cached_names.length} names, in turn: <span class="mono">{run.config.cached_names.join(', ')}</span>.
+                    {test === 'all'
+                      ? 'Every answered query, by test. Bars span the middle 50%, the tick marks the median, the whisker reaches the 95th percentile.'
+                      : TEST_HINT[test]}
                   </p>
-                {/if}
-                {#if running}
-                  <p>Hollow rings are the warm-up queries, which prime caches and network paths and never count.</p>
-                {/if}
-                {#if floors}
-                  <p>The thin line behind a row is the wire floor: the best TCP handshake to that resolver's address. No genuine answer lands left of it.</p>
-                {/if}
-                <p>Select a row to inspect it. Keys 1–{tabs.length} switch tests.</p>
-              </Info>
-            </div>
-            <div class="panel ladder">
-              <Ladder
-                rows={ordered}
-                samples={run.samples}
-                {test}
-                tests={run.config.tests}
-                live={running}
-                warm={run.warm ?? []}
-                {waiting}
-                {placeholders}
-                starting={running && run.phase === 'setup'}
-                multi={multi && transport === 'all'}
-                floors={floors ?? {}}
-                onopen={open}
-              />
-            </div>
-            {#if running}<div class="under"><Working {run} /></div>{/if}
-          {:else if app.runView === 'cdn'}
-            {#if run.cdn?.version === 2 && Object.keys(run.cdn.resolvers).length}
-              <CdnPanel {run} cdn={run.cdn} onopen={open} />
-            {:else}
-              <div class="empty">
-                <p>
-                  {#if !run.config.cdn}
-                    This run skipped CDN mapping. Turn on <b>CDN mapping quality</b> in the test plan to see which edges each resolver
-                    sends you to.
-                  {:else if running}
-                    CDN mapping runs after the latency tests, so it never disturbs them.
-                  {:else}
-                    No CDN results: none of the resolvers answered the CDN lookups.
+                  {#if run.config.tests.includes('cached') && run.config.cached_names?.length}
+                    <p>
+                      The Cached test asked {run.config.cached_names.length} names, in turn: <span class="mono">{run.config.cached_names.join(', ')}</span>.
+                    </p>
                   {/if}
-                </p>
-                {#if running}<Working {run} />{/if}
+                  {#if running}
+                    <p>Hollow rings are the warm-up queries, which prime caches and network paths and never count.</p>
+                  {/if}
+                  {#if floors}
+                    <p>The thin line behind a row is the wire floor: the best TCP handshake to that resolver's address. No genuine answer lands left of it.</p>
+                  {/if}
+                  <p>Select a row to inspect it. Keys 1–{tabs.length} switch tests.</p>
+                </Info>
+              </div>
+              <div class="panel ladder">
+                <Ladder
+                  rows={ordered}
+                  samples={run.samples}
+                  {test}
+                  tests={run.config.tests}
+                  live={running}
+                  warm={run.warm ?? []}
+                  {waiting}
+                  {placeholders}
+                  starting={running && run.phase === 'setup'}
+                  multi={multi && transport === 'all'}
+                  floors={floors ?? {}}
+                  onopen={open}
+                />
+              </div>
+              {#if running}<div class="under"><Working {run} /></div>{/if}
+            {:else if app.runView === 'cdn'}
+              {#if run.cdn?.version === 2 && Object.keys(run.cdn.resolvers).length}
+                <CdnPanel {run} cdn={run.cdn} onopen={open} />
+              {:else}
+                <div class="empty">
+                  <p>
+                    {#if !run.config.cdn}
+                      This run skipped CDN mapping. Turn on <b>CDN mapping quality</b> in the test plan to see which edges each resolver
+                      sends you to.
+                    {:else if running}
+                      CDN mapping runs after the latency tests, so it never disturbs them.
+                    {:else}
+                      No CDN results: none of the resolvers answered the CDN lookups.
+                    {/if}
+                  </p>
+                  {#if running}<Working {run} />{/if}
+                </div>
+              {/if}
+            {:else if app.runView === 'caps'}
+              {#if !running || Object.keys(run.probes).length}
+                <CapMatrix {run} rows={ordered} {v} bind:view={capView} onopen={open} />
+              {:else}
+                <div class="empty">
+                  <p>Capability probes run after the latency tests.</p>
+                  <Working {run} />
+                </div>
+              {/if}
+            {:else if app.runView === 'numbers'}
+              <div class="fill">
+                <div class="bar chrome">
+                  <p class="lead">Every target’s median and p95 for each test, in milliseconds.</p>
+                  <Info label="About the table"><p>Select a column heading to sort. Select a resolver to inspect it. For every sample, export the run as CSV: Control-click it in the sidebar.</p></Info>
+                </div>
+                <LatencyTable rows={ordered} tests={run.config.tests} onopen={open} />
               </div>
             {/if}
-          {:else if app.runView === 'caps'}
-            {#if !running || Object.keys(run.probes).length}
-              <CapMatrix {run} rows={ordered} {v} bind:view={capView} onopen={open} />
-            {:else}
-              <div class="empty">
-                <p>Capability probes run after the latency tests.</p>
-                <Working {run} />
-              </div>
-            {/if}
-          {:else if app.runView === 'numbers'}
-            <div class="fill">
-              <div class="bar chrome">
-                <p class="lead">Every target’s median and p95 for each test, in milliseconds.</p>
-                <Info label="About the table"><p>Select a column heading to sort. Select a resolver to inspect it. For every sample, export the run as CSV: Control-click it in the sidebar.</p></Info>
-              </div>
-              <LatencyTable rows={ordered} tests={run.config.tests} onopen={open} />
-            </div>
-          {/if}
-        </div>
+          </div>
+        {/if}
       </div>
 
-      {#if inspected}
+      {#if inspected && mobile}
         {#key inspected.id}
-          <Inspector resolver={inspected} {run} {rows} {overlay} onclose={() => (app.inspect = null)} />
+          <Inspector resolver={inspected} {run} {rows} onclose={() => (app.inspect = null)} />
         {/key}
       {/if}
     </div>
@@ -533,8 +556,13 @@
     display: flex;
     flex-direction: column;
   }
-  .col > .content {
+  .col > .content,
+  .split {
     flex: 1;
+  }
+  .split {
+    display: flex;
+    min-height: 0;
   }
   .views button {
     min-width: 76px;
