@@ -581,7 +581,7 @@ async fn serve(cli: Cli) {
     // Two launch links: one to open now (unless told not to), one to print for another browser. Each opens once.
     // A browser that didn't open leaves the printed link as the only one, so it is labelled that way.
     let mut sessions = server::Sessions::default();
-    let opened = !cli.no_open && open::that(sessions.link(port)).is_ok();
+    let opened = !cli.no_open && open::that_detached(sessions.link(port)).is_ok();
     let printed = sessions.link(port);
     eprintln!("Recursa is running at http://127.0.0.1:{port}/");
     eprintln!("{} {printed}", if opened { "Another browser (the link works once):" } else { "Open (the link works once):" });

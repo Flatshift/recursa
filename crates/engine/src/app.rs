@@ -879,8 +879,7 @@ impl AppState {
         let ip: IpAddr = n.ip.trim().parse().map_err(|_| ApiError::new(400, "That isn't an IPv4 or IPv6 address."))?;
         // ::ffff:192.0.2.1 is an IPv4 resolver.
         let ip = ip.to_canonical();
-        let broadcast = matches!(ip, IpAddr::V4(v) if v.is_broadcast());
-        if ip.is_unspecified() || ip.is_multicast() || broadcast {
+        if catalog::is_special(&ip) {
             return Err(ApiError::new(400, "That's not a server address (it's unspecified, broadcast or multicast)."));
         }
         // A second copy of a catalog entry would be measured twice under two names.
