@@ -7,7 +7,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, Transaction, param
 use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 const PUT_HOUR: &str = "INSERT OR REPLACE INTO monitor_hour(hour, resolver_id, n, ok, cycles, up, first_ts, last_ts, lat)
@@ -64,14 +64,34 @@ pub struct MonitorRow {
 pub fn default_path() -> PathBuf {
     // Local, not roaming, on Windows: the RPKI cache beside the db runs to gigabytes.
     // The same directory as data_dir() on macOS and Linux.
-    let base = dirs::data_local_dir().unwrap_or_else(std::env::temp_dir);
+    // Never the shared temp directory, where another user could create the folder first. Without a home, the
+    // current directory, which the user chose.
+    let base = dirs::data_local_dir().unwrap_or_default();
     base.join("Recursa").join("recursa.db")
+}
+
+/// Create `dir` and its missing parents, private to this user on Unix: it holds run history and settings. The
+/// default data directory is made private even if an older version created it open to others.
+pub(crate) fn make_dir(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        let _ = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir);
+        if default_path().parent() == Some(dir)
+            && let Ok(m) = std::fs::metadata(dir)
+            && m.permissions().mode() & 0o077 != 0
+        {
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = std::fs::create_dir_all(dir);
 }
 
 impl Store {
     pub fn open(path: PathBuf) -> rusqlite::Result<Self> {
         if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
+            make_dir(dir);
         }
         let conn = Connection::open(&path)?;
         conn.execute_batch(
@@ -600,6 +620,19 @@ mod tests {
 
     fn ids(store: &Store) -> Vec<String> {
         store.list_runs(100).into_iter().map(|r| r.id).collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_database_directory_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let top = std::env::temp_dir().join(format!("recursa-dir-{:x}", fastrand::u64(..)));
+        let path = top.join("Recursa").join("recursa.db");
+        drop(Store::open(path.clone()).unwrap());
+        for dir in [&top, &top.join("Recursa")] {
+            assert_eq!(std::fs::metadata(dir).unwrap().permissions().mode() & 0o777, 0o700, "{}", dir.display());
+        }
+        let _ = std::fs::remove_dir_all(&top);
     }
 
     #[test]

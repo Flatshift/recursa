@@ -34,7 +34,7 @@ impl Drop for Guard {
 /// The lock file if taken, `Some(None)` if it can't be used (unguarded), `None` if someone else holds it.
 fn take(path: &Path) -> Option<Option<File>> {
     if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
+        crate::store::make_dir(dir);
     }
     let Ok(file) = OpenOptions::new().create(true).truncate(false).write(true).open(path) else {
         return Some(None);
