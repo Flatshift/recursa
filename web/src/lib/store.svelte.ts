@@ -62,7 +62,6 @@ class AppState {
   live = $state(false);
   /** Resolver shown in the inspector pane (null: the inspector is closed). */
   inspect = $state<string | null>(null);
-  inspectorWidth = $state(readLocal<number>('recursa.inspector', 380));
   /** Which part of a run's results is on screen. */
   runView = $state<RunView>('overview');
   /** The sidebar is shown (narrow windows hide it until asked). */
@@ -133,11 +132,6 @@ class AppState {
   /** Back to the user's own choice (after a narrow window hid the sidebar). */
   restoreSidebar() {
     this.sidebar = readLocal<boolean>('recursa.sidebar', true);
-  }
-
-  setInspectorWidth(w: number) {
-    this.inspectorWidth = Math.round(Math.min(560, Math.max(300, w)));
-    writeLocal('recursa.inspector', this.inspectorWidth);
   }
 
   /** Show the inspector for the selected (or first) resolver, or hide it. */

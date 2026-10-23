@@ -14,6 +14,7 @@
   import Glyph from '../components/Glyph.svelte';
   import Provenance from '../components/Provenance.svelte';
   import Inspector from '../components/Inspector.svelte';
+  import Shortlist, { type Pick } from '../components/Shortlist.svelte';
   import Toolbar from '../components/Toolbar.svelte';
   import Icon from '../components/Icon.svelte';
   import { onResolverContext } from '../lib/resolverMenu';
@@ -74,8 +75,12 @@
   $effect(() => {
     if (app.findRev) filterEl?.focus();
   });
+  // Inspecting a resolver splits the view: the shortlist on the left, its detail on the right. Phones use a sheet.
+  const split = $derived(!!open && !mobile);
   let bodyW = $state(1200);
-  const overlay = $derived(bodyW - app.inspectorWidth < 700);
+  const narrow = $derived(bodyW < 720);
+  const name = (r: Resolver) => (r.group === 'public' || r.group === 'legacy' ? r.variant || r.provider : `${r.provider} ${r.variant}`);
+  const picks = $derived<[string, Pick[]][]>(groups.map(([g, rs]) => [g, rs.map((r) => ({ id: r.id, name: name(r), sub: r.ipv4[0] ?? r.ipv6[0] ?? r.name }))]));
   function onKey(e: KeyboardEvent) {
     if ((e.target as HTMLElement)?.tagName === 'INPUT' || menu.open) return;
     if (e.key === 'Escape' && app.inspect) app.inspect = null;
@@ -106,108 +111,111 @@
   </Toolbar>
 
   <div class="view-body" bind:clientWidth={bodyW}>
-    <!-- svelte-ignore a11y_no_static_element_interactions (right-click menu for the rows inside) -->
-    <div class="content scroll" oncontextmenu={onResolverContext}>
-      {#if mobile}
-        <!-- Phone: the filter spans the page, and each resolver is one row that opens the inspector. -->
-        <label class="search msearch">
-          <Icon name="search" size={15} />
-          <span class="visually-hidden">Filter</span>
-          <input bind:this={filterEl} type="search" bind:value={filter} placeholder="Filter by name, address or blocking" />
-        </label>
-        <div class="mres">
-          {#each groups as [g, rs]}
-            <h3 class="mgrp">{g}</h3>
-            {#each rs as r (r.id)}
-              {@const feed = status.feedFor(r.status_feed)}
-              {@const enc = encrypted(r)}
-              <button class="mrow" class:sel={app.inspect === r.id} data-resolver={r.id} onclick={() => (app.inspect = r.id)}>
-                <span class="mtop">
-                  <span class="nm">
-                    <b>{r.group === 'public' || r.group === 'legacy' ? r.variant || r.provider : `${r.provider} ${r.variant}`}</b>
-                    {#if inLast(r)}<span class="v"><Provenance kind="verified" /></span>{/if}
-                  </span>
-                  {#if feed}<span class="pub"><Glyph status={stateGlyph(feed.state)} size={12} />{stateLabel(feed)}</span>{/if}
-                </span>
-                <span class="mono addr">{r.ipv4[0] ?? r.ipv6[0] ?? r.name}{#if !r.udp}<span class="enc"> · encrypted only</span>{/if}</span>
-                <span class="mcaps">
-                  {#each caps as c}<span class="mc"><span class="mk">{capLabels[c]}</span><Cell c={capCell(last && inLast(r) ? last : null, r, c)} compact /></span>{/each}
-                  {#if enc.length}<span class="mc"><span class="mk">Encrypted</span><span class="t">{enc.map((t) => t.label).join(' · ')}</span></span>{/if}
-                </span>
-              </button>
-            {/each}
-          {/each}
-        </div>
-      {:else}
-      <div class="tablewrap panel">
-        <table class="sticky-head">
-          <thead>
-            <tr>
-              <th class="first">Resolver</th>
-              {#each caps as c}<th>{capLabels[c]}</th>{/each}
-              <th title="Encrypted transports: DoT and DoH are checked by probes; DoQ, DNSCrypt and ODoH are as published">Encrypted</th>
-              <th title="The operator's status page, where one is published">Status</th>
-            </tr>
-          </thead>
-          {#each groups as [g, rs]}
-            <tbody>
-              <tr class="grp"><th colspan={3 + caps.length} class="first">{g}</th></tr>
+    {#if split && open}
+      <div class="split">
+        <Shortlist groups={picks} selected={app.inspect} back="All resolvers" collapsed={narrow} onselect={(id) => (app.inspect = id)} onback={() => (app.inspect = null)} />
+        {#key open.id}
+          <Inspector resolver={open} run={last && inLast(open) ? last : null} rows={last && inLast(open) ? lastRows : []} onclose={() => (app.inspect = null)} />
+        {/key}
+      </div>
+    {:else}
+      <!-- svelte-ignore a11y_no_static_element_interactions (right-click menu for the rows inside) -->
+      <div class="content scroll" oncontextmenu={onResolverContext}>
+        {#if mobile}
+          <!-- Phone: the filter spans the page, and each resolver is one row that opens the inspector. -->
+          <label class="search msearch">
+            <Icon name="search" size={15} />
+            <span class="visually-hidden">Filter</span>
+            <input bind:this={filterEl} type="search" bind:value={filter} placeholder="Filter by name, address or blocking" />
+          </label>
+          <div class="mres">
+            {#each groups as [g, rs]}
+              <h3 class="mgrp">{g}</h3>
               {#each rs as r (r.id)}
                 {@const feed = status.feedFor(r.status_feed)}
-                <tr data-resolver={r.id} class:sel={app.inspect === r.id}>
-                  <th class="first" scope="row">
-                    <button onclick={() => (app.inspect = r.id)}>
-                      <span class="nm">
-                        <b>{r.group === 'public' || r.group === 'legacy' ? r.variant || r.provider : `${r.provider} ${r.variant}`}</b>
-                        {#if inLast(r)}<span class="v" title="Verified in your latest run"><Provenance kind="verified" /></span>{/if}
-                      </span>
-                      <span class="mono addr">{r.ipv4[0] ?? r.ipv6[0] ?? r.name}{#if !r.udp}<span class="enc"> · encrypted only</span>{/if}</span>
-                    </button>
-                  </th>
-                  {#each caps as c}<td><Cell c={capCell(last && inLast(r) ? last : null, r, c)} compact /></td>{/each}
-                  <td>
-                    <span class="tx">
-                      {#each encrypted(r) as t}<span class="t">{t.label}{#if t.verified}<Provenance kind="verified" />{/if}</span>{:else}<span
-                          class="muted">—</span
-                        >{/each}
+                {@const enc = encrypted(r)}
+                <button class="mrow" class:sel={app.inspect === r.id} data-resolver={r.id} onclick={() => (app.inspect = r.id)}>
+                  <span class="mtop">
+                    <span class="nm">
+                      <b>{name(r)}</b>
+                      {#if inLast(r)}<span class="v"><Provenance kind="verified" /></span>{/if}
                     </span>
-                  </td>
-                  <td>
-                    {#if feed}
-                      <span class="pub" title={localNote(feed) ?? undefined}><Glyph status={stateGlyph(feed.state)} size={12} />{stateLabel(feed)}</span
-                      >{#if elsewhereNote(feed)}<span class="away">{elsewhereNote(feed)}</span>{/if}
-                    {:else if r.status_feed && !status.data}
-                      <span class="muted">{status.error ? 'unavailable' : 'checking…'}</span>
-                    {:else if r.group === 'public' || r.group === 'legacy'}
-                      <span class="muted" title="This operator publishes no status page">none</span>
-                    {:else}
-                      <span class="muted">—</span>
-                    {/if}
-                  </td>
-                </tr>
+                    {#if feed}<span class="pub"><Glyph status={stateGlyph(feed.state)} size={12} />{stateLabel(feed)}</span>{/if}
+                  </span>
+                  <span class="mono addr">{r.ipv4[0] ?? r.ipv6[0] ?? r.name}{#if !r.udp}<span class="enc"> · encrypted only</span>{/if}</span>
+                  <span class="mcaps">
+                    {#each caps as c}<span class="mc"><span class="mk">{capLabels[c]}</span><Cell c={capCell(last && inLast(r) ? last : null, r, c)} compact /></span>{/each}
+                    {#if enc.length}<span class="mc"><span class="mk">Encrypted</span><span class="t">{enc.map((t) => t.label).join(' · ')}</span></span>{/if}
+                  </span>
+                </button>
               {/each}
-            </tbody>
-          {/each}
-        </table>
+            {/each}
+          </div>
+        {:else}
+        <div class="tablewrap panel">
+          <table class="sticky-head">
+            <thead>
+              <tr>
+                <th class="first">Resolver</th>
+                {#each caps as c}<th>{capLabels[c]}</th>{/each}
+                <th title="Encrypted transports: DoT and DoH are checked by probes; DoQ, DNSCrypt and ODoH are as published">Encrypted</th>
+                <th title="The operator's status page, where one is published">Status</th>
+              </tr>
+            </thead>
+            {#each groups as [g, rs]}
+              <tbody>
+                <tr class="grp"><th colspan={3 + caps.length} class="first">{g}</th></tr>
+                {#each rs as r (r.id)}
+                  {@const feed = status.feedFor(r.status_feed)}
+                  <tr data-resolver={r.id} class:sel={app.inspect === r.id}>
+                    <th class="first" scope="row">
+                      <button onclick={() => (app.inspect = r.id)}>
+                        <span class="nm">
+                          <b>{name(r)}</b>
+                          {#if inLast(r)}<span class="v" title="Verified in your latest run"><Provenance kind="verified" /></span>{/if}
+                        </span>
+                        <span class="mono addr">{r.ipv4[0] ?? r.ipv6[0] ?? r.name}{#if !r.udp}<span class="enc"> · encrypted only</span>{/if}</span>
+                      </button>
+                    </th>
+                    {#each caps as c}<td><Cell c={capCell(last && inLast(r) ? last : null, r, c)} compact /></td>{/each}
+                    <td>
+                      <span class="tx">
+                        {#each encrypted(r) as t}<span class="t">{t.label}{#if t.verified}<Provenance kind="verified" />{/if}</span>{:else}<span
+                            class="muted">—</span
+                          >{/each}
+                      </span>
+                    </td>
+                    <td>
+                      {#if feed}
+                        <span class="pub" title={localNote(feed) ?? undefined}><Glyph status={stateGlyph(feed.state)} size={12} />{stateLabel(feed)}</span
+                        >{#if elsewhereNote(feed)}<span class="away">{elsewhereNote(feed)}</span>{/if}
+                      {:else if r.status_feed && !status.data}
+                        <span class="muted">{status.error ? 'unavailable' : 'checking…'}</span>
+                      {:else if r.group === 'public' || r.group === 'legacy'}
+                        <span class="muted" title="This operator publishes no status page">none</span>
+                      {:else}
+                        <span class="muted">—</span>
+                      {/if}
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            {/each}
+          </table>
+        </div>
+        {/if}
+        <p class="legend">
+          <span><Provenance kind="verified" /> measured from your network</span>
+          <span><Provenance kind="published" /> operator's documentation</span>
+          <span><Provenance kind="unknown" /> not documented, not yet measured</span>
+          <span>Add an ISP or custom resolver under Benchmark → Custom.</span>
+        </p>
       </div>
-      {/if}
-      <p class="legend">
-        <span><Provenance kind="verified" /> measured from your network</span>
-        <span><Provenance kind="published" /> operator's documentation</span>
-        <span><Provenance kind="unknown" /> not documented, not yet measured</span>
-        <span>Add an ISP or custom resolver under Benchmark → Custom.</span>
-      </p>
-    </div>
 
-    {#if open}
+    {/if}
+    {#if open && mobile}
       {#key open.id}
-        <Inspector
-          resolver={open}
-          run={last && inLast(open) ? last : null}
-          rows={last && inLast(open) ? lastRows : []}
-          {overlay}
-          onclose={() => (app.inspect = null)}
-        />
+        <Inspector resolver={open} run={last && inLast(open) ? last : null} rows={last && inLast(open) ? lastRows : []} onclose={() => (app.inspect = null)} />
       {/key}
     {/if}
   </div>
@@ -230,6 +238,11 @@
     height: 28px;
     padding-left: 26px;
     font-size: var(--t-xs);
+  }
+  .split {
+    flex: 1;
+    display: flex;
+    min-height: 0;
   }
   .tablewrap {
     overflow-x: auto;

@@ -1,10 +1,10 @@
 <script lang="ts">
-  // Where a resolver's time goes, on one log-ms axis: the wire floor (best TCP handshake), the cached median and
-  // the uncached median, with the resolver's and recursion's shares bracketed between them. One strip per transport.
+  // Where a resolver's time goes, in milliseconds beyond the wire: zero is the wire floor (best TCP handshake), the
+  // cached median and the uncached median sit at what they add to it, with the resolver's and recursion's shares
+  // bracketed between them. Linear, so a 3 ms share reads as a third of a 9 ms one. One strip per transport.
   import type { PathInfo } from '../lib/types';
   import type { Row } from '../lib/verdict';
   import { TRANSPORT_LABEL, ms } from '../lib/format';
-  import { logScale, logTicks, tickLabel } from '../lib/scale';
   import { sentence, split, type Split } from '../lib/floor';
 
   let { path, rows, name }: { path: PathInfo; rows: Row[]; name: string } = $props();
@@ -30,31 +30,50 @@
   });
   const height = $derived(TOP + strips.length * STRIP + AXIS);
 
+  // Milliseconds beyond the wire. The axis starts at zero (or just below it when cached answers beat the wire) and
+  // runs past the slowest mark, never shorter than 2 ms so a resolver that adds nothing still reads as a chart.
   const domain = $derived.by<[number, number]>(() => {
-    const wire = path.rtt_ms ?? 1;
-    let hi = wire * 1.5;
-    for (const { s } of strips) hi = Math.max(hi, s.cached ?? 0, s.uncached ?? 0);
-    return [wire / 1.6, hi * 1.12];
+    let lo = 0;
+    let hi = 2;
+    for (const { s } of strips) {
+      for (const v of [s.cached, s.uncached]) {
+        if (v == null) continue;
+        lo = Math.min(lo, v - s.wire);
+        hi = Math.max(hi, v - s.wire);
+      }
+    }
+    const span = hi - lo;
+    return [lo < 0 ? lo - span * 0.05 : 0, hi + span * 0.1];
   });
-  const x = $derived(logScale(domain, x0, x1));
-  const ticks = $derived(logTicks(domain, x1 - x0));
+  const x = $derived.by(() => {
+    const [a, b] = domain;
+    const k = (x1 - x0) / (b - a);
+    return (v: number) => x0 + (v - a) * k;
+  });
+  // Round tick steps (1, 2, 5 × 10ⁿ) about 70 px apart.
+  const ticks = $derived.by(() => {
+    const [a, b] = domain;
+    const raw = (b - a) / Math.max(1, (x1 - x0) / 70);
+    const mag = 10 ** Math.floor(Math.log10(raw));
+    const step = [1, 2, 5, 10].map((m) => m * mag).find((t) => t >= raw) ?? 10 * mag;
+    const out: number[] = [];
+    for (let t = Math.ceil(a / step) * step; t <= b; t += step) out.push(Math.abs(t) < step / 2 ? 0 : +t.toFixed(6));
+    return out;
+  });
+  const tickText = (t: number) => (t === 0 ? 'wire' : `${t > 0 ? '+' : '−'}${ms(Math.abs(t), false)}`);
+  // Labels at either end hang inward so they aren't clipped.
+  const tickAnchor = (t: number) => (x(t) - x0 < 14 ? 'start' : x1 - x(t) < 14 ? 'end' : 'middle');
 
   // Brackets under a strip: resolver (floor → cached) and recursion (cached → uncached), labelled when they fit.
   function brackets(s: Split): { a: number; b: number; text: string }[] {
     const out: { a: number; b: number; text: string }[] = [];
     const seg = (from: number, to: number, v: number | null) => {
       if (v == null || to <= from) return;
-      out.push({ a: x(from), b: x(to), text: `+${ms(v, false)}` });
+      out.push({ a: x(from - s.wire), b: x(to - s.wire), text: `+${ms(v, false)}` });
     };
     if (s.cached != null) seg(s.wire, s.cached, s.resolver);
     if (s.uncached != null) seg(s.cached ?? s.wire, s.uncached, s.recursion);
     return out;
-  }
-
-  // The floor label sits to the right of its tick unless that runs into the marks or the edge.
-  function wireAnchor(s: Split): 'start' | 'end' {
-    const near = Math.min(s.cached ?? Infinity, s.uncached ?? Infinity);
-    return x(near) - x(s.wire) < 56 || x1 - x(s.wire) < 56 ? 'end' : 'start';
   }
 
   let tip = $state<{ x: number; y: number; s: Split; label: string } | null>(null);
@@ -76,7 +95,7 @@
     <svg width={w} {height} onpointermove={hover} onpointerleave={() => (tip = null)} role="img">
       {#each ticks as t (t)}
         <line class="grid" x1={x(t)} x2={x(t)} y1={TOP} y2={height - AXIS} />
-        <text class="xl" x={x(t)} y={height - 4} text-anchor="middle">{tickLabel(t)}</text>
+        <text class="xl" x={x(t)} y={height - 4} text-anchor={tickAnchor(t)}>{tickText(t)}</text>
       {/each}
       {#each strips as { y, label, s } (label)}
         {#if multi}<text class="lane" x="0" y={y + 3.5}>{label}</text>{/if}
@@ -85,19 +104,18 @@
           <path class="br" d="M{br.a} {y + 7} v4 H{br.b} v-4" />
           {#if br.b - br.a >= 30}<text class="brl" x={(br.a + br.b) / 2} y={y + 20} text-anchor="middle">{br.text}</text>{/if}
         {/each}
-        <rect class="wire" x={x(s.wire) - 0.75} y={y - 8} width="1.5" height="16" rx="0.75" />
-        <text class="wl" x={x(s.wire) + (wireAnchor(s) === 'start' ? 4 : -4)} y={y - 10} text-anchor={wireAnchor(s)}>wire {ms(s.wire, false)}</text>
-        {#if s.uncached != null}<circle class="unc" cx={x(s.uncached)} cy={y} r="3" />{/if}
+        <rect class="wire" x={x(0) - 0.75} y={y - 8} width="1.5" height="16" rx="0.75" />
+        {#if s.uncached != null}<circle class="unc" cx={x(s.uncached - s.wire)} cy={y} r="3" />{/if}
         {#if s.cached != null}
-          <circle class="halo" cx={x(s.cached)} cy={y} r="5.5" />
-          <circle class="answer" cx={x(s.cached)} cy={y} r="3.5" />
+          <circle class="halo" cx={x(s.cached - s.wire)} cy={y} r="5.5" />
+          <circle class="answer" cx={x(s.cached - s.wire)} cy={y} r="3.5" />
         {/if}
       {/each}
     </svg>
     <figcaption>
       <p class="sum">{summary}</p>
       <p class="legend">
-        <span class="mark wire-k"></span>wire · <span class="mark ans-k"></span>cached median{#if strips[0].s.uncached != null} · <span class="mark unc-k"></span>uncached median{/if}
+        <span class="mark wire-k"></span>wire {ms(strips[0].s.wire, false)} ms · <span class="mark ans-k"></span>cached median{#if strips[0].s.uncached != null} · <span class="mark unc-k"></span>uncached median{/if}
       </p>
     </figcaption>
   </figure>
@@ -131,7 +149,6 @@
   }
   .xl,
   .lane,
-  .wl,
   .brl {
     font-size: var(--t-2xs);
     fill: var(--ink-3);
@@ -139,9 +156,6 @@
   }
   .lane {
     font-variation-settings: normal;
-  }
-  .wl {
-    fill: var(--ink-2);
   }
   .br {
     fill: none;
