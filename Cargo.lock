@@ -3776,7 +3776,7 @@ checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
 
 [[package]]
 name = "recursa"
-version = "0.3.10"
+version = "0.3.12"
 dependencies = [
  "axum",
  "clap",
@@ -3793,7 +3793,7 @@ dependencies = [
 
 [[package]]
 name = "recursa-desktop"
-version = "0.3.10"
+version = "0.3.12"
 dependencies = [
  "objc2",
  "objc2-app-kit",
@@ -3816,7 +3816,7 @@ dependencies = [
 
 [[package]]
 name = "recursa-engine"
-version = "0.3.10"
+version = "0.3.12"
 dependencies = [
  "aes-siv",
  "bytes",
