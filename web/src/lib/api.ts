@@ -19,9 +19,9 @@ export const shell = desktop && !mobile;
 /** The macOS app, whose window has traffic lights over its top-left corner. */
 export const mac = shell && /Mac/.test(navigator.userAgent);
 
-// The launch URL's fragment, which never reaches the server, carries the token (`#token=`, the address the CLI
-// prints) or a one-time code that the server trades for it (`#code=`, the address it opens). The token is kept
-// for this port so that other tabs of the same launch work; the next launch replaces it.
+// A launch link's fragment, which never reaches the server, carries a one-time code (`#code=`) that the server trades
+// for a session token. The token is kept for this port so that other tabs of the same launch work; the next launch
+// replaces it.
 const tokenKey = `recursa-token:${location.port}`;
 let token = '';
 
@@ -29,11 +29,9 @@ const ready: Promise<void> = desktop
   ? Promise.resolve()
   : (async () => {
       const h = new URLSearchParams(location.hash.slice(1));
-      const given = h.get('token');
       const code = h.get('code');
-      if (given || code) history.replaceState(history.state, '', location.pathname + location.search);
-      if (given) token = given;
-      else if (code) {
+      if (code) {
+        history.replaceState(history.state, '', location.pathname + location.search);
         try {
           const res = await fetch('/api/session', {
             method: 'POST',
