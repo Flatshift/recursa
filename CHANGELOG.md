@@ -2,6 +2,26 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+Security fixes from an audit, and dependency updates.
+
+- **Browser UI token.** The CLI no longer puts its session token in the page it serves, where another user on the same
+  computer could read it from the port. The address Recursa prints carries the token in its fragment (`#token=`); the
+  one it opens carries a one-time code (`#code=`) that the page trades for it.
+- **TCP and DoT deadlines.** A server that sent a reply one byte at a time could hold a query, and so a whole run, for
+  hours. Each exchange and TLS handshake now has a deadline.
+- **NTS.** A forged or unverifiable reply no longer ends an authenticated check; it is discarded, as RFC 8915 asks. A
+  public NTS-KE server can't name a loopback or LAN address as its time server. DNS query IDs, NTS identifiers and DNS
+  cookies come from the system's secure random source.
+- **Smaller fixes.** Feed downloads stop at 16 MB while they are read. Incident links from status pages must be https.
+  The data directory is private (0700) on macOS and Linux and is never in the shared temp directory. The desktop app
+  opens other `localhost` pages in the browser, not in its window. The Deep Dive doesn't query private addresses a
+  resolver gives it. A backward clock step can't wrap a round trip.
+- **Dependencies.** rustls 0.23.46, rustls-webpki 0.103.16 and webpki-roots 1.0.11 fix eight RustSec advisories. Tauri
+  2.12.5, tokio 1.54.1, Vite 8, TypeScript 6 and Vitest 5. CI builds on Node 26 with its actions pinned by commit.
+  quick-xml 0.39 (RUSTSEC-2026-0194, -0195), used by Routinator's RRDP client, waits for a new `rpki` release.
+
 ## 0.3.10 (2026-10-22)
 
 Refinements to the resolver detail introduced in 0.3.9.
