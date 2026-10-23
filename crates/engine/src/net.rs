@@ -575,20 +575,29 @@ fn read_frame<R: Read>(r: &mut R) -> io::Result<Vec<u8>> {
     Ok(body)
 }
 
-/// A TCP stream that refuses to read or write once its deadline has passed. The socket's timeout still bounds each
-/// call, so a peer that sends one byte at a time holds an exchange for at most twice the timeout, not once per byte
-/// of a 64 KiB frame. (Setting the socket timeout to the time left before each read, as NTS-KE does, would put a
-/// system call inside the timed window.)
+/// A TCP stream that refuses to read or write once its deadline has passed, however slowly the peer sends.
+///
+/// Two ways to hold the deadline. A measuring stream ([`Bounded::new`], [`Bounded::arm`]) keeps one socket timeout
+/// for the exchange and checks the clock before each call, so a peer that sends one byte at a time holds it for at
+/// most twice the timeout, not once per byte of a 64 KiB frame, and no system call lands inside the timed window. A
+/// strict stream ([`Bounded::until`], for NTS-KE, which isn't timed that finely) sets the socket timeout to the time
+/// left before every call, so nothing runs past the deadline at all.
 pub struct Bounded {
     tcp: TcpStream,
     deadline: Instant,
+    strict: bool,
 }
 
 impl Bounded {
     fn new(tcp: TcpStream, timeout: Duration) -> io::Result<Self> {
-        let mut b = Bounded { tcp, deadline: Instant::now() };
+        let mut b = Bounded { tcp, deadline: Instant::now(), strict: false };
         b.arm(timeout)?;
         Ok(b)
+    }
+
+    /// A strict stream whose every read and write must finish before `deadline`.
+    pub(crate) fn until(tcp: TcpStream, deadline: Instant) -> Self {
+        Bounded { tcp, deadline, strict: true }
     }
 
     /// Start a new exchange: `timeout` from now, for the stream and for each call on it.
@@ -599,21 +608,28 @@ impl Bounded {
         Ok(())
     }
 
-    fn check(&self) -> io::Result<()> {
-        if Instant::now() >= self.deadline { Err(io::ErrorKind::TimedOut.into()) } else { Ok(()) }
+    /// Time left before the deadline, or a timeout error once there is none.
+    fn left(&self) -> io::Result<Duration> {
+        Some(self.deadline.saturating_duration_since(Instant::now())).filter(|d| !d.is_zero()).ok_or_else(|| io::ErrorKind::TimedOut.into())
     }
 }
 
 impl Read for Bounded {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.check()?;
+        let left = self.left()?;
+        if self.strict {
+            self.tcp.set_read_timeout(Some(left))?;
+        }
         self.tcp.read(buf)
     }
 }
 
 impl Write for Bounded {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.check()?;
+        let left = self.left()?;
+        if self.strict {
+            self.tcp.set_write_timeout(Some(left))?;
+        }
         self.tcp.write(buf)
     }
 

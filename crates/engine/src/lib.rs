@@ -47,7 +47,10 @@ pub fn install_crypto_provider() {
 /// Bytes from the operating system's secure random source, for values that only work if an attacker can't guess them:
 /// DNS query IDs, the random bits of an NTP origin timestamp, NTS unique identifiers and nonces, DNS client cookies.
 pub(crate) fn unpredictable<const N: usize>() -> [u8; N] {
+    // Kept once: building the whole provider each time allocates its cipher-suite and key-exchange lists.
+    static RANDOM: std::sync::LazyLock<&'static dyn rustls::crypto::SecureRandom> =
+        std::sync::LazyLock::new(|| rustls::crypto::ring::default_provider().secure_random);
     let mut b = [0u8; N];
-    rustls::crypto::ring::default_provider().secure_random.fill(&mut b).expect("the system random source");
+    RANDOM.fill(&mut b).expect("the system random source");
     b
 }
