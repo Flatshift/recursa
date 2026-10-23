@@ -3,6 +3,9 @@
 //! Bound to loopback only. Every request must carry an exact loopback Host header,
 //! which defeats DNS-rebinding. API calls need the per-launch token, and state-changing
 //! calls must come from our own Origin, which defeats CSRF from other local pages.
+//! The token is never in a page the server sends: the launch URL carries it in its fragment,
+//! or carries a one-time code that `POST /api/session` trades for it, so another local user
+//! who can reach the port still can't read it.
 //! The API itself lives in the engine ([`AppState::call`]); this is only the transport.
 
 use axum::body::{Body, Bytes};
@@ -11,14 +14,14 @@ use axum::http::{HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use futures_util::StreamExt;
 use recursa_engine::app::{ApiError, AppState};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::convert::Infallible;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[derive(rust_embed::Embed)]
 #[folder = "../../web/dist"]
@@ -27,6 +30,8 @@ struct Assets;
 pub struct Server {
     pub app: Arc<AppState>,
     pub token: String,
+    /// The one-time code in the URL Recursa opens, until a page trades it for the token.
+    pub launch: Mutex<Option<String>>,
     pub port: u16,
 }
 
@@ -46,6 +51,7 @@ pub fn router(srv: Shared) -> Router {
     Router::new()
         .route("/api/runs/{id}/events", get(events))
         .route("/api/runs/{id}/export", get(export))
+        .route("/api/session", post(session))
         .route("/api/{*rest}", any(api))
         .fallback(static_asset)
         .layer(middleware::from_fn_with_state(srv.clone(), guard))
@@ -58,24 +64,43 @@ async fn guard(State(srv): State<Shared>, req: Request, next: Next) -> Response 
     if !allowed.iter().any(|a| a == host) {
         return (StatusCode::MISDIRECTED_REQUEST, "Recursa only answers on its loopback address.").into_response();
     }
-    if req.uri().path().starts_with("/api/") {
+    if req.uri().path().starts_with("/api/") && req.uri().path() != "/api/session" {
         let header_token = req.headers().get("x-recursa-token").and_then(|v| v.to_str().ok());
         let query_token = req.uri().query().and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("token=")));
         if !header_token.or(query_token).is_some_and(|t| token_eq(t, &srv.token)) {
-            return err(ApiError::new(401, "Missing or invalid session token. Reload the page."));
+            return err(ApiError::new(401, "Missing or invalid session token. Open the address Recursa printed when it started."));
         }
-        if req.method() != Method::GET
-            && let Some(origin) = req.headers().get(header::ORIGIN).and_then(|o| o.to_str().ok())
-            && !allowed.iter().any(|a| origin == format!("http://{a}"))
-        {
-            return err(ApiError::new(403, "Cross-origin request refused."));
-        }
+    }
+    if req.uri().path().starts_with("/api/")
+        && req.method() != Method::GET
+        && let Some(origin) = req.headers().get(header::ORIGIN).and_then(|o| o.to_str().ok())
+        && !allowed.iter().any(|a| origin == format!("http://{a}"))
+    {
+        return err(ApiError::new(403, "Cross-origin request refused."));
     }
     let mut resp = next.run(req).await;
     let h = resp.headers_mut();
     h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
     h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
     resp
+}
+
+#[derive(Deserialize)]
+struct SessionQ {
+    code: String,
+}
+
+/// Trade the launch URL's one-time code for the session token. A used or wrong code gets nothing.
+async fn session(State(srv): State<Shared>, Json(q): Json<SessionQ>) -> Response {
+    let mut launch = srv.launch.lock().unwrap();
+    if !launch.as_deref().is_some_and(|c| token_eq(c, &q.code)) {
+        return err(ApiError::new(
+            401,
+            "This launch link is not valid or was already used. Open the address Recursa printed when it started.",
+        ));
+    }
+    *launch = None;
+    Json(json!({ "token": srv.token })).into_response()
 }
 
 /// Every REST call: hand the method, path and JSON body to the engine.
@@ -95,7 +120,7 @@ async fn api(State(srv): State<Shared>, method: Method, uri: Uri, body: Bytes) -
     }
 }
 
-async fn static_asset(State(srv): State<Shared>, uri: Uri) -> Response {
+async fn static_asset(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     if path.starts_with("api/") {
         return err(ApiError::new(404, "No such endpoint."));
@@ -112,7 +137,6 @@ async fn static_asset(State(srv): State<Shared>, uri: Uri) -> Response {
     let mime = file.metadata.mimetype().to_string();
     let mut builder = Response::builder().header(header::CONTENT_TYPE, mime);
     if name == "index.html" {
-        let html = String::from_utf8_lossy(&file.data).replace("%RECURSA_TOKEN%", &srv.token);
         builder = builder
             .header(header::CACHE_CONTROL, "no-store")
             .header(
@@ -120,7 +144,7 @@ async fn static_asset(State(srv): State<Shared>, uri: Uri) -> Response {
                 "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
             )
             .header("x-frame-options", "DENY");
-        return builder.body(Body::from(html)).unwrap();
+        return builder.body(Body::from(file.data.into_owned())).unwrap();
     }
     if name.starts_with("assets/") {
         builder = builder.header(header::CACHE_CONTROL, "public, max-age=31536000, immutable");
