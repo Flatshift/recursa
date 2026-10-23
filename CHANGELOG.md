@@ -4,14 +4,14 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 
 ## 0.3.10 (2026-10-22)
 
-- **Split view for resolver detail.** Selecting a resolver on the results or Resolvers page collapses the list to a
-  compact shortlist (name, score bar) beside the detail pane, which takes the rest of the window. The resize grip and
-  the floating overlay are gone; ↑↓ still walk the list, Esc or the list header restores the full view, and narrow
-  windows give the detail the whole pane. Phones keep the sheet.
-- **Where the time goes** plots milliseconds beyond the wire on a linear axis, so a 3 ms share reads as a third of a
-  9 ms one; the wire's own value sits in the legend.
-- **Where it answers from** keeps the round trip, the time strip and the path together, with the registry facts
-  (egress, service network, RPKI, CDN mapping) under their own "Addresses and routing" heading.
+Refinements to the resolver detail introduced in 0.3.9.
+
+- Selecting a resolver now shows a compact shortlist (name, score bar) beside the detail pane instead of a floating
+  overlay with a resize grip. ↑↓ still walk the list; Esc or the list header restores the full view. Phones keep the
+  sheet.
+- **Where the time goes** uses a linear axis in milliseconds beyond the wire; the wire's own value moves to the legend.
+- **Where it answers from** keeps the round trip, time strip and path together, with egress, service network, RPKI and
+  CDN mapping under an "Addresses and routing" heading.
 
 ## 0.3.9 (2026-10-22)
 
