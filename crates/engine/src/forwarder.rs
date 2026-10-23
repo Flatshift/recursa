@@ -34,7 +34,7 @@ pub fn describe(version: &str) -> Option<String> {
 /// Ask a resolver for its version name over plain DNS. Blocking; a second at most.
 pub fn version_bind(ip: IpAddr) -> Option<String> {
     let mut x = UdpX::connect(SocketAddr::new(ip, 53)).ok()?;
-    let q = dns::encode_query(fastrand::u16(..), &QuerySpec::chaos_txt("version.bind")).ok()?;
+    let q = dns::encode_query(dns::new_id(), &QuerySpec::chaos_txt("version.bind")).ok()?;
     let r = x.exchange(&q, Duration::from_millis(900)).ok()?;
     dns::parse(&r.bytes).ok()?.txt_answers().into_iter().map(|t| clean(&t)).find(|t| !t.is_empty())
 }

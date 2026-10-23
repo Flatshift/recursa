@@ -43,3 +43,11 @@ pub mod trace;
 pub fn install_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
+
+/// Bytes from the operating system's secure random source, for values that only work if an attacker can't guess them:
+/// DNS query IDs, the random bits of an NTP origin timestamp, NTS unique identifiers and nonces, DNS client cookies.
+pub(crate) fn unpredictable<const N: usize>() -> [u8; N] {
+    let mut b = [0u8; N];
+    rustls::crypto::ring::default_provider().secure_random.fill(&mut b).expect("the system random source");
+    b
+}

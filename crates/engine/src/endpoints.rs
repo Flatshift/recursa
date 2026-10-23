@@ -40,7 +40,7 @@ pub fn bootstrap(host: &str, want_v6: bool, r: &Resolver, timeout: Duration, pla
     let short = timeout.min(Duration::from_millis(1500));
     for (ep, via) in lookup_servers(r, plain) {
         let Ok(mut x) = net::open(&ep, short) else { continue };
-        let Ok(q) = dns::encode_query(fastrand::u16(..), &QuerySpec::new(host, qtype)) else { continue };
+        let Ok(q) = dns::encode_query(dns::new_id(), &QuerySpec::new(host, qtype)) else { continue };
         let Ok(m) = x.exchange(&q, short).and_then(|rep| dns::parse(&rep.bytes).map_err(|e| net::XErr::Io(e.to_string()))) else {
             continue;
         };

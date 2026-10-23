@@ -26,7 +26,7 @@ impl Resolve {
             for s in &self.servers {
                 let attempt = || -> Result<dns::Message, String> {
                     let mut x = UdpX::connect(SocketAddr::new(*s, 53)).map_err(|e| e.to_string())?;
-                    let q = dns::encode_query(fastrand::u16(..), &QuerySpec::new(name, qtype)).map_err(|e| e.to_string())?;
+                    let q = dns::encode_query(dns::new_id(), &QuerySpec::new(name, qtype)).map_err(|e| e.to_string())?;
                     let r = x.exchange(&q, Duration::from_millis(1500)).map_err(|e| e.to_string())?;
                     let m = dns::parse(&r.bytes).map_err(|e| e.to_string())?;
                     // A truncated UDP answer is asked again over TCP.

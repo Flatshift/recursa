@@ -111,6 +111,11 @@ fn encode_name(out: &mut Vec<u8>, name: &str) -> Result<(), EncodeError> {
     Ok(())
 }
 
+/// A query ID nobody off the path can guess, so a spoofed reply has 1 in 65,536 chances on top of matching the port.
+pub fn new_id() -> u16 {
+    u16::from_ne_bytes(crate::unpredictable())
+}
+
 /// Encode a complete query message. The ID can later be patched with [`set_id`].
 pub fn encode_query(id: u16, q: &QuerySpec) -> Result<Vec<u8>, EncodeError> {
     let mut m = Vec::with_capacity(64 + q.name.len());
