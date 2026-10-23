@@ -347,7 +347,8 @@ pub fn parse(b: &[u8]) -> Result<Message, ParseError> {
             qname = n;
         }
     }
-    let mut answers = Vec::with_capacity(an as usize);
+    // A record takes at least 11 bytes, so the count can't ask for more room than the packet could fill.
+    let mut answers = Vec::with_capacity((an as usize).min(b.len() / 11));
     let mut authority = Vec::new();
     let mut opt = None;
     let mut ext_rcode_hi: u16 = 0;
