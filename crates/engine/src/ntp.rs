@@ -209,7 +209,7 @@ type Vet<'a> = dyn FnMut(&[u8], u64) -> Result<(), NtpError> + 'a;
 
 /// One exchange on a socket already connected to the server: sends what `make` builds from the transmit stamp, and
 /// takes the first reply that answers it. `vet` gets the whole reply (header and extension fields) and the stamp sent,
-/// Kiss-o'-Death included, and can reject it. A `Bad` rejection is a stray packet and an `Nts` one a reply that
+/// Kiss-o'-Death and unsynchronized replies included, and can reject it. A `Bad` rejection is a stray packet and an `Nts` one a reply that
 /// doesn't verify: both keep waiting (RFC 8915 §5.7), so a forged packet can't end an authenticated exchange, and the
 /// last `Nts` rejection is the result if nothing verifies in time. Anything else ends the exchange.
 fn exchange(sock: &UdpSocket, timeout: Duration, make: &dyn Fn(u64) -> Vec<u8>, vet: &mut Vet) -> Result<Sample, NtpError> {
@@ -239,9 +239,11 @@ fn exchange(sock: &UdpSocket, timeout: Duration, make: &dyn Fn(u64) -> Vec<u8>, 
                     _ => started.elapsed().as_nanos() as i128,
                 };
                 let t4 = t1 + trip;
+                // Everything that answers this request is vetted, an unsynchronized reply as much as a sample or a kiss:
+                // otherwise a forged one would end an authenticated exchange.
                 let r = match read_reply(&buf[..n], sent, t1, t4) {
-                    r @ (Ok(_) | Err(NtpError::Kiss(_))) => vet(&buf[..n], sent).and(r),
-                    r => r,
+                    r @ Err(NtpError::Bad(_)) => r,
+                    r => vet(&buf[..n], sent).and(r),
                 };
                 match r {
                     // Not an answer to this request: keep waiting for the real one.
@@ -2109,7 +2111,8 @@ mod tests {
 
     #[test]
     fn a_reply_that_fails_to_verify_does_not_end_an_authenticated_exchange() {
-        // A server that answers each request twice: first a forged Kiss-o'-Death, then the real reply.
+        // A server that answers each request three times: a forged Kiss-o'-Death, a forged unsynchronized reply, then
+        // the real one.
         let server = UdpSocket::bind("127.0.0.1:0").unwrap();
         let addr = server.local_addr().unwrap();
         std::thread::spawn(move || {
@@ -2122,18 +2125,19 @@ mod tests {
                 let mut kiss = reply(0, 0, 0, sent, now);
                 kiss[12..16].copy_from_slice(b"DENY");
                 let _ = server.send_to(&kiss, from);
+                let _ = server.send_to(&reply(0, 0, 16, sent, now), from);
                 let _ = server.send_to(&reply(0, 0, 2, sent, now), from);
             }
         });
         let sock = connect(addr).unwrap();
-        // Stands in for vet_nts: the kiss doesn't verify, the real reply does.
+        // Stands in for vet_nts: the forgeries don't verify, the real reply does.
         let mut vetted = 0;
         let r = exchange(&sock, Duration::from_secs(1), &|sent| request(sent).to_vec(), &mut |reply, _| {
             vetted += 1;
-            if reply[1] == 0 { Err(NtpError::Nts("aead_failure", "forged".into())) } else { Ok(()) }
+            if reply[1] == 0 || reply[1] > 15 { Err(NtpError::Nts("aead_failure", "forged".into())) } else { Ok(()) }
         });
         assert!(r.is_ok(), "{r:?}");
-        assert_eq!(vetted, 2);
+        assert_eq!(vetted, 3);
     }
 
     #[test]

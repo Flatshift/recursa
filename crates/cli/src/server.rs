@@ -95,14 +95,29 @@ fn token_eq(a: &str, b: &str) -> bool {
 }
 
 pub fn router(srv: Shared) -> Router {
-    Router::new()
+    // Every API route needs a session token, except the one that trades a launch code for it.
+    let authed = Router::new()
         .route("/api/runs/{id}/events", get(events))
         .route("/api/runs/{id}/export", get(export))
-        .route("/api/session", post(session))
         .route("/api/{*rest}", any(api))
+        .route_layer(middleware::from_fn_with_state(srv.clone(), require_token));
+    Router::new()
+        .route("/api/session", post(session))
+        .merge(authed)
         .fallback(static_asset)
         .layer(middleware::from_fn_with_state(srv.clone(), guard))
         .with_state(srv)
+}
+
+/// The session token, from the `x-recursa-token` header or, for an event stream (EventSource can't send headers),
+/// the `token` query parameter.
+async fn require_token(State(srv): State<Shared>, req: Request, next: Next) -> Response {
+    let header_token = req.headers().get("x-recursa-token").and_then(|v| v.to_str().ok());
+    let query_token = req.uri().query().and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("token=")));
+    if !header_token.or(query_token).is_some_and(|t| srv.sessions.lock().unwrap().valid(t)) {
+        return err(ApiError::new(401, "Missing or invalid session token. Open the link Recursa printed."));
+    }
+    next.run(req).await
 }
 
 async fn guard(State(srv): State<Shared>, req: Request, next: Next) -> Response {
@@ -110,13 +125,6 @@ async fn guard(State(srv): State<Shared>, req: Request, next: Next) -> Response 
     let allowed = [format!("127.0.0.1:{}", srv.port), format!("localhost:{}", srv.port), format!("[::1]:{}", srv.port)];
     if !allowed.iter().any(|a| a == host) {
         return (StatusCode::MISDIRECTED_REQUEST, "Recursa only answers on its loopback address.").into_response();
-    }
-    if req.uri().path().starts_with("/api/") && req.uri().path() != "/api/session" {
-        let header_token = req.headers().get("x-recursa-token").and_then(|v| v.to_str().ok());
-        let query_token = req.uri().query().and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("token=")));
-        if !header_token.or(query_token).is_some_and(|t| srv.sessions.lock().unwrap().valid(t)) {
-            return err(ApiError::new(401, "Missing or invalid session token. Open the link Recursa printed."));
-        }
     }
     if req.uri().path().starts_with("/api/")
         && req.method() != Method::GET
@@ -238,4 +246,29 @@ async fn export(State(srv): State<Shared>, Path(id): Path<String>, Query(q): Que
         x.body,
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn code_of(link: &str) -> &str {
+        link.split_once("#code=").unwrap().1
+    }
+
+    #[test]
+    fn a_launch_code_starts_one_session_and_a_second_use_ends_it() {
+        let mut s = Sessions::default();
+        let (a, b) = (s.link(8053), s.link(8053));
+        let Redeemed::Token(ta) = s.redeem(code_of(&a)) else { panic!("a fresh code starts a session") };
+        assert!(s.valid(&ta));
+        assert!(!s.valid(code_of(&a)), "a code is never a token");
+        let Redeemed::Token(tb) = s.redeem(code_of(&b)) else { panic!("each link has its own code") };
+        assert_ne!(ta, tb);
+        assert!(matches!(s.redeem(code_of(&a)), Redeemed::Reused));
+        assert!(!s.valid(&ta), "a reused code ends the session it started");
+        assert!(s.valid(&tb), "and only that one");
+        assert!(matches!(s.redeem(code_of(&a)), Redeemed::Invalid));
+        assert!(matches!(s.redeem("nope"), Redeemed::Invalid));
+    }
 }
