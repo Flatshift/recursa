@@ -583,7 +583,7 @@ async fn serve(cli: Cli) {
     let mut sessions = server::Sessions::default();
     let opened = !cli.no_open && open::that_detached(sessions.link(port)).is_ok();
     let printed = sessions.link(port);
-    eprintln!("Recursa is running at http://127.0.0.1:{port}/");
+    eprintln!("Recursa is running on 127.0.0.1, port {port}.");
     eprintln!("{} {printed}", if opened { "Another browser (the link works once):" } else { "Open (the link works once):" });
     eprintln!("Data: {}", app.store.path.display());
     if let Some(c) = app.calibration.read().unwrap().as_ref() {
