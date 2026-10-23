@@ -276,8 +276,15 @@ fn build_main(app: &AppHandle, route: &str) -> tauri::Result<WebviewWindow> {
     Ok(w)
 }
 
+/// The app's own pages: its custom schemes, the hosts Windows serves them on, and the Vite dev server in debug
+/// builds. Any other server on this computer, `localhost` included, opens in the browser, not in a Recursa window.
 fn is_internal(url: &Url) -> bool {
-    matches!(url.scheme(), "tauri" | "asset") || matches!(url.host_str(), Some("localhost" | "tauri.localhost" | "ipc.localhost"))
+    match (url.scheme(), url.host_str(), url.port()) {
+        ("tauri" | "asset" | "ipc", _, _) => true,
+        ("http" | "https", Some("tauri.localhost" | "ipc.localhost"), None) => true,
+        ("http", Some("localhost"), Some(5173)) => cfg!(debug_assertions),
+        _ => false,
+    }
 }
 
 fn open_external(url: &Url) {
@@ -372,5 +379,21 @@ fn sync_menus(app: &AppHandle) {
     let login = app.autolaunch().is_enabled().unwrap_or(false);
     for item in &t.login {
         let _ = item.set_checked(login);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_apps_own_pages_stay_in_its_windows() {
+        let internal = |u: &str| is_internal(&Url::parse(u).unwrap());
+        assert!(internal("tauri://localhost/runs"));
+        assert!(internal("http://tauri.localhost/settings"));
+        assert!(!internal("http://localhost:8080/"));
+        assert!(!internal("http://tauri.localhost:8080/"));
+        assert!(!internal("https://example.com/"));
+        assert_eq!(internal("http://localhost:5173/"), cfg!(debug_assertions));
     }
 }
