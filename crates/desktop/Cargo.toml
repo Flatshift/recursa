@@ -11,23 +11,23 @@ name = "recursa_desktop_lib"
 crate-type = ["staticlib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.7.1", features = [] }
+tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
 recursa-engine.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-tauri = { version = "2.12.1", features = ["tray-icon", "image-png"] }
-tauri-plugin-dialog = "2.8.1"
-tauri-plugin-notification = "2.5.1"
+tauri = { version = "2.12.5", features = ["tray-icon", "image-png"] }
+tauri-plugin-dialog = "2.8.3"
+tauri-plugin-notification = "2.7.0"
 tauri-plugin-clipboard-manager = "2.5.0"
 
 # Desktop-only: a second launch, remembered window geometry, launch at login, links to the browser.
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 open.workspace = true
 tauri-plugin-autostart = "2.7.0"
-tauri-plugin-single-instance = "2.5.2"
+tauri-plugin-single-instance = "2.5.4"
 tauri-plugin-window-state = "2.5.0"
 
 # Only for the alert shown when the app can't start (no window exists to attach a dialog to).
