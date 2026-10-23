@@ -165,7 +165,8 @@ fn read_reply(b: &[u8], sent: u64, t1: i128, t4: i128) -> Result<Sample, NtpErro
     }
     let stratum = b[1];
     if stratum == 0 {
-        let code: String = b[12..16].iter().filter(|c| c.is_ascii_graphic()).map(|c| *c as char).collect();
+        // Kiss codes are four capitals (RFC 5905 §7.4); nothing else reaches the ledger or a monitoring check line.
+        let code: String = b[12..16].iter().filter(|c| c.is_ascii_uppercase() || c.is_ascii_digit()).map(|c| *c as char).collect();
         return Err(NtpError::Kiss(code));
     }
     if li == 3 || stratum > 15 {
@@ -208,11 +209,13 @@ type Vet<'a> = dyn FnMut(&[u8], u64) -> Result<(), NtpError> + 'a;
 
 /// One exchange on a socket already connected to the server: sends what `make` builds from the transmit stamp, and
 /// takes the first reply that answers it. `vet` gets the whole reply (header and extension fields) and the stamp sent,
-/// and can reject it; a `Bad` rejection is a stray packet and keeps waiting, anything else ends the exchange.
+/// Kiss-o'-Death included, and can reject it. A `Bad` rejection is a stray packet and an `Nts` one a reply that
+/// doesn't verify: both keep waiting (RFC 8915 §5.7), so a forged packet can't end an authenticated exchange, and the
+/// last `Nts` rejection is the result if nothing verifies in time. Anything else ends the exchange.
 fn exchange(sock: &UdpSocket, timeout: Duration, make: &dyn Fn(u64) -> Vec<u8>, vet: &mut Vet) -> Result<Sample, NtpError> {
     // The low 16 bits of the transmit time are random, so a reply can be matched to this request alone (RFC 5905 §8).
     let t1_wall = unix_ns_now();
-    let sent = (to_ntp(t1_wall) & !0xffff) | fastrand::u16(..) as u64;
+    let sent = (to_ntp(t1_wall) & !0xffff) | u16::from_ne_bytes(crate::unpredictable()) as u64;
     let t1 = from_ntp(sent);
     let started = Instant::now();
     // The kernel stamps a reply as it arrives, so the time this thread waits to be scheduled isn't counted as network
@@ -221,10 +224,11 @@ fn exchange(sock: &UdpSocket, timeout: Duration, make: &dyn Fn(u64) -> Vec<u8>, 
     let sent_at = clock::now_ns();
     sock.send(&make(sent)).map_err(|e| NtpError::Io(e.to_string()))?;
     let mut buf = [0u8; 2048];
+    let mut rejected = None;
     loop {
         let left = timeout.saturating_sub(started.elapsed());
         if left.is_zero() {
-            return Err(NtpError::Timeout);
+            return Err(rejected.unwrap_or(NtpError::Timeout));
         }
         sock.set_read_timeout(Some(left)).map_err(|e| NtpError::Io(e.to_string()))?;
         match net::recv_stamped(sock, &mut buf) {
@@ -235,14 +239,19 @@ fn exchange(sock: &UdpSocket, timeout: Duration, make: &dyn Fn(u64) -> Vec<u8>, 
                     _ => started.elapsed().as_nanos() as i128,
                 };
                 let t4 = t1 + trip;
-                match read_reply(&buf[..n], sent, t1, t4).and_then(|s| vet(&buf[..n], sent).map(|_| s)) {
+                let r = match read_reply(&buf[..n], sent, t1, t4) {
+                    r @ (Ok(_) | Err(NtpError::Kiss(_))) => vet(&buf[..n], sent).and(r),
+                    r => r,
+                };
+                match r {
                     // Not an answer to this request: keep waiting for the real one.
                     Err(NtpError::Bad(_)) if left > Duration::from_millis(5) => continue,
+                    Err(e @ NtpError::Nts(..)) if left > Duration::from_millis(5) => rejected = Some(e),
                     r => return r,
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
-                return Err(NtpError::Timeout);
+                return Err(rejected.unwrap_or(NtpError::Timeout));
             }
             Err(e) => return Err(NtpError::Io(e.to_string())),
         }
@@ -636,7 +645,7 @@ fn nts_packet(sent: u64, keys: &NtsKeys, uid: &[u8; 32], cookie: &[u8]) -> Vec<u
     let mut p = request(sent).to_vec();
     push_ext(&mut p, EXT_UNIQUE_ID, uid);
     push_ext(&mut p, EXT_COOKIE, cookie);
-    let nonce: [u8; 16] = std::array::from_fn(|_| fastrand::u8(..));
+    let nonce: [u8; 16] = crate::unpredictable();
     let sealed = siv(&keys.c2s).and_then(|mut c| c.encrypt([&p[..], &nonce[..]], b"").ok()).unwrap_or_default();
     let mut body = Vec::with_capacity(4 + nonce.len() + sealed.len());
     body.extend_from_slice(&(nonce.len() as u16).to_be_bytes());
@@ -672,12 +681,16 @@ fn vet_nts(reply: &[u8], uid: &[u8; 32], keys: &NtsKeys, fresh: &mut Vec<Vec<u8>
         }
         at += len;
     }
-    let Some((start, body)) = auth else {
-        return Err(bad("missing_authenticator", "the reply has no NTS authenticator"));
-    };
     if !uid_ok {
         return Err(bad("invalid_unique_id", "the reply doesn't carry this request's unique identifier"));
     }
+    // A Kiss-o'-Death (an NTS NAK among them) needn't be authenticated, but must echo the unique ID (RFC 8915 §5.7).
+    if reply[1] == 0 && auth.is_none() {
+        return Ok(());
+    }
+    let Some((start, body)) = auth else {
+        return Err(bad("missing_authenticator", "the reply has no NTS authenticator"));
+    };
     if body.len() < 4 {
         return Err(bad("malformed_extensions", "a truncated NTS authenticator"));
     }
@@ -708,7 +721,7 @@ fn vet_nts(reply: &[u8], uid: &[u8; 32], keys: &NtsKeys, fresh: &mut Vec<Vec<u8>
 
 /// One authenticated exchange, spending `cookie`.
 fn nts_query(sock: &UdpSocket, keys: &NtsKeys, cookie: &[u8], fresh: &mut Vec<Vec<u8>>, timeout: Duration) -> Result<Sample, NtpError> {
-    let uid: [u8; 32] = std::array::from_fn(|_| fastrand::u8(..));
+    let uid: [u8; 32] = crate::unpredictable();
     exchange(sock, timeout, &|sent| nts_packet(sent, keys, &uid, cookie), &mut |reply, _| vet_nts(reply, &uid, keys, fresh))
 }
 
@@ -728,6 +741,19 @@ fn nts_check(host: &str, port: u16, plan: &Plan, cancel: &AtomicBool) -> NtsKe {
         ke.authenticated = Some(false);
         return ke;
     };
+    // Only a key exchange that is itself on a private network may name a time server there: a public one must not
+    // aim this computer's packets at its loopback or LAN.
+    let private = |ip: IpAddr| ip.is_unspecified() || crate::catalog::is_private(&ip);
+    if private(addr.ip()) && !(host, port).to_socket_addrs().is_ok_and(|mut a| a.any(|a| private(a.ip()))) {
+        ke.timed = Some(AddrStats {
+            ip: addr.ip().to_string(),
+            error: Some("the key exchange named a private address for a public server".into()),
+            error_kind: Some("bad_reply".into()),
+            ..Default::default()
+        });
+        ke.authenticated = Some(false);
+        return ke;
+    }
     let ip = addr.ip().to_string();
     let Ok(sock) = connect(addr) else { return ke };
     let spacing = plan.spacing.max(plan.floor);
@@ -2099,6 +2125,42 @@ mod tests {
         assert!(!k.ok);
         assert_eq!(k.error_kind.as_deref(), Some("timeout"), "{k:?}");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn a_reply_that_fails_to_verify_does_not_end_an_authenticated_exchange() {
+        // A server that answers each request twice: first a forged Kiss-o'-Death, then the real reply.
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = server.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let mut b = [0u8; 512];
+            while let Ok((n, from)) = server.recv_from(&mut b) {
+                if n < 48 {
+                    continue;
+                }
+                let (sent, now) = (be64(&b[40..]), unix_ns_now());
+                let mut kiss = reply(0, 0, 0, sent, now);
+                kiss[12..16].copy_from_slice(b"DENY");
+                let _ = server.send_to(&kiss, from);
+                let _ = server.send_to(&reply(0, 0, 2, sent, now), from);
+            }
+        });
+        let sock = connect(addr).unwrap();
+        // Stands in for vet_nts: the kiss doesn't verify, the real reply does.
+        let mut vetted = 0;
+        let r = exchange(&sock, Duration::from_secs(1), &|sent| request(sent).to_vec(), &mut |reply, _| {
+            vetted += 1;
+            if reply[1] == 0 { Err(NtpError::Nts("aead_failure", "forged".into())) } else { Ok(()) }
+        });
+        assert!(r.is_ok(), "{r:?}");
+        assert_eq!(vetted, 2);
+    }
+
+    #[test]
+    fn a_kiss_code_keeps_only_capitals_and_digits() {
+        let mut b = reply(0, 0, 0, 7, 0);
+        b[12..16].copy_from_slice(b"RA|E");
+        assert!(matches!(read_reply(&b, 7, 0, 0), Err(NtpError::Kiss(k)) if k == "RAE"));
     }
 
     /// The network half of the key exchange (`RECURSA_TEST_NTS=<host>`).

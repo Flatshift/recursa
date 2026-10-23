@@ -115,8 +115,7 @@ struct Ctx<'a> {
 
 impl Ctx<'_> {
     fn ask(&mut self, spec: &QuerySpec) -> Result<dns::Message, XErr> {
-        let id = fastrand::u16(..);
-        let q = dns::encode_query(id, spec).map_err(|e| XErr::Io(e.to_string()))?;
+        let q = dns::encode_query(dns::new_id(), spec).map_err(|e| XErr::Io(e.to_string()))?;
         let r = self.ex.exchange(&q, self.timeout)?;
         dns::parse(&r.bytes).map_err(|e| XErr::Io(format!("unparseable response: {e}")))
     }
@@ -292,7 +291,7 @@ pub fn probe(resolver_id: &str, via: &str, ex: &mut dyn Exchanger, timeout: Dura
     }
 
     // DNS Cookies (RFC 7873) and NSID (RFC 5001) in one exchange.
-    let client_cookie: [u8; 8] = std::array::from_fn(|_| fastrand::u8(..));
+    let client_cookie: [u8; 8] = crate::unpredictable();
     match c.ask(&QuerySpec::new(format!("ub{}.github.io", rand_label(10)), dns::TYPE_A).with_edns(|e| {
         e.cookie = Some(client_cookie);
         e.nsid = true;
