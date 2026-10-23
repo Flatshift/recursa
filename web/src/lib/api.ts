@@ -1,6 +1,6 @@
 // The UI's only transport layer. In the browser (the `recursa` CLI) calls go to the local
-// HTTP server with a per-launch token injected into index.html; in the desktop app they go
-// over Tauri IPC to the same engine routes. Nothing else in the UI knows which is in use.
+// HTTP server with a per-launch token; in the desktop app they go over Tauri IPC to the same
+// engine routes. Nothing else in the UI knows which is in use.
 
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -19,8 +19,39 @@ export const shell = desktop && !mobile;
 /** The macOS app, whose window has traffic lights over its top-left corner. */
 export const mac = shell && /Mac/.test(navigator.userAgent);
 
-const meta = document.querySelector<HTMLMetaElement>('meta[name="recursa-token"]');
-export const token = meta?.content && !meta.content.startsWith('%') ? meta.content : '';
+// The launch URL's fragment, which never reaches the server, carries the token (`#token=`, the address the CLI
+// prints) or a one-time code that the server trades for it (`#code=`, the address it opens). The token is kept
+// for this port so that other tabs of the same launch work; the next launch replaces it.
+const tokenKey = `recursa-token:${location.port}`;
+let token = '';
+
+const ready: Promise<void> = desktop
+  ? Promise.resolve()
+  : (async () => {
+      const h = new URLSearchParams(location.hash.slice(1));
+      const given = h.get('token');
+      const code = h.get('code');
+      if (given || code) history.replaceState(history.state, '', location.pathname + location.search);
+      if (given) token = given;
+      else if (code) {
+        try {
+          const res = await fetch('/api/session', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ code }),
+          });
+          if (res.ok) token = ((await res.json()) as { token: string }).token;
+        } catch {
+          // The first API call reports a server that isn't there.
+        }
+      }
+      try {
+        if (token) localStorage.setItem(tokenKey, token);
+        else token = localStorage.getItem(tokenKey) ?? '';
+      } catch {
+        // Storage blocked: this tab still works with the token it was given.
+      }
+    })();
 
 class ApiError extends Error {
   constructor(
@@ -45,6 +76,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
       throw ipcError(e);
     }
   }
+  await ready;
   let res: Response;
   try {
     res = await fetch(path, {
