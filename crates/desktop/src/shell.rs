@@ -282,9 +282,10 @@ fn build_main(app: &AppHandle, route: &str) -> tauri::Result<WebviewWindow> {
     Ok(w)
 }
 
-/// The Vite dev server (`devUrl` in tauri.conf.json), which serves the pages in debug builds only.
+/// The Vite dev server (`devUrl` in tauri.conf.json), which serves the pages whenever Tauri does, that is in any
+/// build without the `custom-protocol` feature (`tauri dev --release` included), not only debug builds.
 fn dev_url(app: &AppHandle) -> Option<Url> {
-    app.config().build.dev_url.clone().filter(|_| cfg!(debug_assertions))
+    app.config().build.dev_url.clone().filter(|_| tauri::is_dev())
 }
 
 /// The app's own pages: its custom schemes, the hosts Windows serves them on, and `dev`, the dev server's origin.

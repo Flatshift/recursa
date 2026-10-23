@@ -22,7 +22,7 @@ fn handshake_ms(ip: &str) -> Option<f64> {
             .filter_map(|_| {
                 let t = clock::now_ns();
                 TcpStream::connect_timeout(&addr, Duration::from_millis(1500)).ok()?;
-                Some(clock::now_ns().saturating_sub(t) as f64 / 1e6)
+                Some(clock::since(t) as f64 / 1e6)
             })
             .reduce(f64::min)
     })
@@ -82,7 +82,7 @@ fn handshake53_ms(ip: &str) -> Option<f64> {
         .filter_map(|_| {
             let t = clock::now_ns();
             TcpStream::connect_timeout(&addr, Duration::from_millis(1000)).ok()?;
-            Some(clock::now_ns().saturating_sub(t) as f64 / 1e6)
+            Some(clock::since(t) as f64 / 1e6)
         })
         .reduce(f64::min)
 }
