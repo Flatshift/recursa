@@ -1,11 +1,11 @@
 //! Local HTTP server for the browser UI: embedded assets, the REST API and Server-Sent Events.
 //!
 //! Bound to loopback only. Every request must carry an exact loopback Host header,
-//! which defeats DNS-rebinding. API calls need the per-launch token, and state-changing
+//! which defeats DNS-rebinding. API calls need a session token, and state-changing
 //! calls must come from our own Origin, which defeats CSRF from other local pages.
-//! The token is never in a page the server sends: the launch URL carries it in its fragment,
-//! or carries a one-time code that `POST /api/session` trades for it, so another local user
-//! who can reach the port still can't read it.
+//! No token is ever in a page or a URL: a launch link carries a one-time code in its fragment,
+//! which `POST /api/session` trades for a token (see [`Sessions`]), so another local user who
+//! can reach the port, or read a browser's command line, gets nothing that lasts.
 //! The API itself lives in the engine ([`AppState::call`]); this is only the transport.
 
 use axum::body::{Body, Bytes};
@@ -29,10 +29,60 @@ struct Assets;
 
 pub struct Server {
     pub app: Arc<AppState>,
-    pub token: String,
-    /// The one-time code in the URL Recursa opens, until a page trades it for the token.
-    pub launch: Mutex<Option<String>>,
+    pub sessions: Mutex<Sessions>,
     pub port: u16,
+}
+
+/// 32 bytes from the TLS provider's secure random source, as hex: a launch code or a session token. A guessable one
+/// would let any local page with the port drive the API.
+pub fn secret() -> String {
+    let mut buf = [0u8; 32];
+    rustls::crypto::CryptoProvider::get_default()
+        .expect("crypto provider installed at startup")
+        .secure_random
+        .fill(&mut buf)
+        .expect("secure random");
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Launch links and the sessions they started. A link carries a one-time code, never a token, because a browser
+/// started with a URL keeps it on its command line, where other users of the computer can read it. Each code starts
+/// its own session once. A code that comes back a second time means someone else may have traded it first, so the
+/// session it started ends there, and a new link is printed.
+#[derive(Default)]
+pub struct Sessions {
+    links: Vec<(String, Option<String>)>,
+}
+
+enum Redeemed {
+    Token(String),
+    Invalid,
+    Reused,
+}
+
+impl Sessions {
+    /// A new launch link on `port`.
+    pub fn link(&mut self, port: u16) -> String {
+        let code = secret();
+        let url = format!("http://127.0.0.1:{port}/#code={code}");
+        self.links.push((code, None));
+        url
+    }
+
+    fn valid(&self, token: &str) -> bool {
+        self.links.iter().any(|(_, t)| t.as_deref().is_some_and(|t| token_eq(t, token)))
+    }
+
+    fn redeem(&mut self, code: &str) -> Redeemed {
+        let Some(i) = self.links.iter().position(|(c, _)| token_eq(c, code)) else { return Redeemed::Invalid };
+        if self.links[i].1.is_some() {
+            self.links.remove(i);
+            return Redeemed::Reused;
+        }
+        let token = secret();
+        self.links[i].1 = Some(token.clone());
+        Redeemed::Token(token)
+    }
 }
 
 type Shared = Arc<Server>;
@@ -67,8 +117,8 @@ async fn guard(State(srv): State<Shared>, req: Request, next: Next) -> Response 
     if req.uri().path().starts_with("/api/") && req.uri().path() != "/api/session" {
         let header_token = req.headers().get("x-recursa-token").and_then(|v| v.to_str().ok());
         let query_token = req.uri().query().and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("token=")));
-        if !header_token.or(query_token).is_some_and(|t| token_eq(t, &srv.token)) {
-            return err(ApiError::new(401, "Missing or invalid session token. Open the address Recursa printed when it started."));
+        if !header_token.or(query_token).is_some_and(|t| srv.sessions.lock().unwrap().valid(t)) {
+            return err(ApiError::new(401, "Missing or invalid session token. Open the link Recursa printed."));
         }
     }
     if req.uri().path().starts_with("/api/")
@@ -90,17 +140,22 @@ struct SessionQ {
     code: String,
 }
 
-/// Trade the launch URL's one-time code for the session token. A used or wrong code gets nothing.
+/// Trade a launch link's one-time code for a session token. A wrong code gets nothing; a used one ends the session it
+/// started and prints a new link.
 async fn session(State(srv): State<Shared>, Json(q): Json<SessionQ>) -> Response {
-    let mut launch = srv.launch.lock().unwrap();
-    if !launch.as_deref().is_some_and(|c| token_eq(c, &q.code)) {
-        return err(ApiError::new(
-            401,
-            "This launch link is not valid or was already used. Open the address Recursa printed when it started.",
-        ));
+    let mut sessions = srv.sessions.lock().unwrap();
+    match sessions.redeem(&q.code) {
+        Redeemed::Token(token) => Json(json!({ "token": token })).into_response(),
+        Redeemed::Invalid => err(ApiError::new(401, "This launch link is not valid. Open the link Recursa printed.")),
+        Redeemed::Reused => {
+            eprintln!(
+                "\nA launch link was opened a second time, so the session it started has ended. If you didn't open it\n\
+                 twice, someone else on this computer saw it. New link (it opens once): {}",
+                sessions.link(srv.port)
+            );
+            err(ApiError::new(401, "This launch link was already used, so its session has ended. Open the new link Recursa printed."))
+        }
     }
-    *launch = None;
-    Json(json!({ "token": srv.token })).into_response()
 }
 
 /// Every REST call: hand the method, path and JSON body to the engine.

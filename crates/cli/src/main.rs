@@ -569,19 +569,6 @@ fn print_table(s: &bench::RunState) {
     }
 }
 
-/// The browser UI's per-launch API token, and the one-time code in the URL it opens: 32 bytes from
-/// the TLS provider's secure random source (a guessable token would let any local page with the port
-/// drive the API).
-fn session_token() -> String {
-    let mut buf = [0u8; 32];
-    rustls::crypto::CryptoProvider::get_default()
-        .expect("crypto provider installed at startup")
-        .secure_random
-        .fill(&mut buf)
-        .expect("secure random");
-    buf.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 async fn serve(cli: Cli) {
     let preferred = SocketAddr::from(([127, 0, 0, 1], cli.port));
     let listener = match tokio::net::TcpListener::bind(preferred).await {
@@ -591,12 +578,11 @@ async fn serve(cli: Cli) {
     let port = listener.local_addr().unwrap().port();
     let app = open_state(&cli, true);
     app.start_background();
-    let token = session_token();
-    let code = session_token();
-    // The token goes only in a URL fragment, which the browser never sends to the server. The printed
-    // address carries the token, for other browsers and tabs; the opened one carries the one-time code,
-    // because a browser started with it keeps the URL on its command line, where other users can read it.
-    eprintln!("Recursa is running at http://127.0.0.1:{port}/#token={token}");
+    // Two launch links: one to open now, one to print for another browser. Each opens once.
+    let mut sessions = server::Sessions::default();
+    let (opened, printed) = (sessions.link(port), sessions.link(port));
+    eprintln!("Recursa is running at http://127.0.0.1:{port}/");
+    eprintln!("{} {printed}", if cli.no_open { "Open (the link works once):" } else { "Another browser (the link works once):" });
     eprintln!("Data: {}", app.store.path.display());
     if let Some(c) = app.calibration.read().unwrap().as_ref() {
         eprintln!(
@@ -607,9 +593,9 @@ async fn serve(cli: Cli) {
         );
     }
     if !cli.no_open {
-        let _ = open::that(format!("http://127.0.0.1:{port}/#code={code}"));
+        let _ = open::that(opened);
     }
-    let srv = Arc::new(server::Server { app, token, launch: Mutex::new(Some(code)), port });
+    let srv = Arc::new(server::Server { app, sessions: Mutex::new(sessions), port });
     // Live event streams never end on their own, so Ctrl-C exits directly rather than
     // waiting for them to drain. SQLite in WAL mode is safe to stop at any point.
     tokio::select! {

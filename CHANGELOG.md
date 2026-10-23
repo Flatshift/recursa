@@ -7,8 +7,9 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 Security fixes from an audit, and dependency updates.
 
 - **Browser UI token.** The CLI no longer puts its session token in the page it serves, where another user on the same
-  computer could read it from the port. The address Recursa prints carries the token in its fragment (`#token=`); the
-  one it opens carries a one-time code (`#code=`) that the page trades for it.
+  computer could read it from the port, and no URL carries a token. The link Recursa opens, and the one it prints for
+  another browser, each carry a one-time code (`#code=`) that the page trades for its own session. A link opened twice
+  ends the session it started and Recursa prints a new one.
 - **TCP and DoT deadlines.** A server that sent a reply one byte at a time could hold a query, and so a whole run, for
   hours. Each exchange and TLS handshake now has a deadline.
 - **NTS.** A forged or unverifiable reply no longer ends an authenticated check; it is discarded, as RFC 8915 asks. A

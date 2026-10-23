@@ -147,10 +147,11 @@ web/             Svelte 5 + Vite + TypeScript interface; lib/api.ts picks HTTP o
 
 The app has no network listener: its window talks to the engine over in-process IPC. In browser mode, the server binds
 to loopback only. Any request with a Host header other than `127.0.0.1`, `localhost` or `[::1]` on its
-port is refused, which defeats DNS-rebinding. API calls need a per-launch token, and state-changing calls must come from
-the app's own Origin. The server never puts the token in a page, so another user on the same computer can't read it from
-the port. The address Recursa prints carries the token in its fragment (`#token=`); the one it opens in the browser
-carries a one-time code (`#code=`) that the page trades for the token.
+port is refused, which defeats DNS-rebinding. API calls need a session token, and state-changing calls must come from
+the app's own Origin. No token is ever in a page or a URL, so another user on the same computer can't read one from the
+port or from a browser's command line. Recursa opens one launch link and prints another for a second browser. Each
+carries a one-time code (`#code=`) that the page trades for its own session. A link opened a second time ends the
+session it started, and Recursa prints a new link: if someone else used the code first, their session ends too.
 
 ### Data
 

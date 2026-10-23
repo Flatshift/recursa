@@ -404,6 +404,9 @@ pub struct NtsKe {
     /// The cookies the server handed out: one is spent per authenticated query.
     #[serde(skip)]
     jar: Vec<Vec<u8>>,
+    /// The address the key exchange itself was held with.
+    #[serde(skip)]
+    ke_ip: Option<IpAddr>,
 }
 
 /// One NTS-KE record to send: a type, whether it is critical, and a body.
@@ -516,39 +519,6 @@ fn ke_failure(e: &std::io::Error) -> &'static str {
     }
 }
 
-/// A TCP stream whose every read and write must finish before one instant, however slowly the peer drips.
-struct Deadlined {
-    tcp: TcpStream,
-    deadline: Instant,
-}
-
-impl Deadlined {
-    /// Time left for the next read or write, or a timeout error once there is none.
-    fn left(&self) -> std::io::Result<Duration> {
-        Some(self.deadline.saturating_duration_since(Instant::now()))
-            .filter(|d| !d.is_zero())
-            .ok_or_else(|| std::io::ErrorKind::TimedOut.into())
-    }
-}
-
-impl Read for Deadlined {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.tcp.set_read_timeout(Some(self.left()?))?;
-        self.tcp.read(buf)
-    }
-}
-
-impl Write for Deadlined {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.tcp.set_write_timeout(Some(self.left()?))?;
-        self.tcp.write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.tcp.flush()
-    }
-}
-
 /// Does `host` complete an NTS key exchange on `port` (4460 unless told otherwise)? A TLS 1.3 handshake with a
 /// certificate that checks out, then the NTS-KE records; and, if it did, the keys that authenticated queries need.
 /// Blocking, and over within `timeout` in all: connecting, the handshake and the records share that one budget.
@@ -556,15 +526,17 @@ fn ke_session(host: &str, port: u16, timeout: Duration) -> (NtsKe, Option<NtsKey
     let mut r = NtsKe { host: host.to_string(), port, ..Default::default() };
     let started = Instant::now();
     let deadline = started + timeout;
-    let attempt = || -> Result<(NtsKe, Option<NtsKeys>), (&'static str, String)> {
+    let mut ke_ip = None;
+    let mut attempt = || -> Result<(NtsKe, Option<NtsKeys>), (&'static str, String)> {
         let addr = (host, port)
             .to_socket_addrs()
             .map_err(|e| ("dns", e.to_string()))?
             .find(|a| a.is_ipv4())
             .ok_or(("dns", "no IPv4 address".to_string()))?;
+        ke_ip = Some(addr.ip());
         let tcp = TcpStream::connect_timeout(&addr, deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(1)))
             .map_err(|e| (ke_failure(&e), e.to_string()))?;
-        let tcp = Deadlined { tcp, deadline };
+        let tcp = net::Bounded::until(tcp, deadline);
         let mut config = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_root_certificates(crate::net::root_store())
             .with_no_client_auth();
@@ -608,6 +580,7 @@ fn ke_session(host: &str, port: u16, timeout: Duration) -> (NtsKe, Option<NtsKey
             None
         }
     };
+    r.ke_ip = ke_ip;
     r.ms = Some(started.elapsed().as_secs_f64() * 1000.0);
     (r, keys)
 }
@@ -684,8 +657,9 @@ fn vet_nts(reply: &[u8], uid: &[u8; 32], keys: &NtsKeys, fresh: &mut Vec<Vec<u8>
     if !uid_ok {
         return Err(bad("invalid_unique_id", "the reply doesn't carry this request's unique identifier"));
     }
-    // A Kiss-o'-Death (an NTS NAK among them) needn't be authenticated, but must echo the unique ID (RFC 8915 §5.7).
-    if reply[1] == 0 && auth.is_none() {
+    // Only an NTS NAK may come unauthenticated, and it must still echo the unique ID (RFC 8915 §5.7). Any other
+    // unauthenticated Kiss-o'-Death (DENY, RATE, …) could be forged by anyone who saw the request: it is discarded.
+    if reply[1] == 0 && auth.is_none() && reply[12..16] == *b"NTSN" {
         return Ok(());
     }
     let Some((start, body)) = auth else {
@@ -725,6 +699,15 @@ fn nts_query(sock: &UdpSocket, keys: &NtsKeys, cookie: &[u8], fresh: &mut Vec<Ve
     exchange(sock, timeout, &|sent| nts_packet(sent, keys, &uid, cookie), &mut |reply, _| vet_nts(reply, &uid, keys, fresh))
 }
 
+/// May a key exchange held with `ke_ip` name `target` as its time server? Only one that is itself on a private network
+/// may name a server there: a public one must not aim this computer's packets at its loopback or LAN. The address the
+/// exchange was held with decides, not a fresh lookup of its name, which the server's own DNS could answer
+/// differently the second time.
+fn may_name(ke_ip: Option<IpAddr>, target: IpAddr) -> bool {
+    let private = |ip: IpAddr| ip.is_unspecified() || ip.is_multicast() || crate::catalog::is_private(&ip);
+    !private(target) || ke_ip.is_some_and(private)
+}
+
 /// Does `host` do NTS, and does its time verify? The key exchange first, then up to `plan.samples` authenticated
 /// queries to the server it names, spent from the cookies it gave, summarized like any address's.
 fn nts_check(host: &str, port: u16, plan: &Plan, cancel: &AtomicBool) -> NtsKe {
@@ -741,10 +724,7 @@ fn nts_check(host: &str, port: u16, plan: &Plan, cancel: &AtomicBool) -> NtsKe {
         ke.authenticated = Some(false);
         return ke;
     };
-    // Only a key exchange that is itself on a private network may name a time server there: a public one must not
-    // aim this computer's packets at its loopback or LAN.
-    let private = |ip: IpAddr| ip.is_unspecified() || crate::catalog::is_private(&ip);
-    if private(addr.ip()) && !(host, port).to_socket_addrs().is_ok_and(|mut a| a.any(|a| private(a.ip()))) {
+    if !may_name(ke.ke_ip, addr.ip()) {
         ke.timed = Some(AddrStats {
             ip: addr.ip().to_string(),
             error: Some("the key exchange named a private address for a public server".into()),
@@ -2154,6 +2134,33 @@ mod tests {
         });
         assert!(r.is_ok(), "{r:?}");
         assert_eq!(vetted, 2);
+    }
+
+    #[test]
+    fn a_public_key_exchange_cannot_name_a_private_time_server() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        assert!(may_name(Some(ip("162.159.200.1")), ip("162.159.200.123")));
+        assert!(!may_name(Some(ip("162.159.200.1")), ip("192.168.1.10")));
+        assert!(!may_name(Some(ip("162.159.200.1")), ip("127.0.0.1")));
+        assert!(!may_name(Some(ip("162.159.200.1")), ip("224.0.1.1")));
+        assert!(!may_name(None, ip("10.0.0.1")));
+        assert!(may_name(Some(ip("10.0.0.2")), ip("10.0.0.1")));
+    }
+
+    #[test]
+    fn only_an_nts_nak_may_come_unauthenticated() {
+        let keys = NtsKeys { c2s: [1; 32], s2c: [2; 32] };
+        let uid = [7u8; 32];
+        let kiss = |code: &[u8; 4], id: &[u8; 32]| {
+            let mut b = reply(0, 0, 0, 1, 0);
+            b[12..16].copy_from_slice(code);
+            push_ext(&mut b, EXT_UNIQUE_ID, id);
+            b
+        };
+        assert!(vet_nts(&kiss(b"NTSN", &uid), &uid, &keys, &mut Vec::new()).is_ok());
+        // Anyone who saw the request could forge these: without an authenticator they are discarded.
+        assert!(matches!(vet_nts(&kiss(b"DENY", &uid), &uid, &keys, &mut Vec::new()), Err(NtpError::Nts("missing_authenticator", _))));
+        assert!(matches!(vet_nts(&kiss(b"NTSN", &[8; 32]), &uid, &keys, &mut Vec::new()), Err(NtpError::Nts("invalid_unique_id", _))));
     }
 
     #[test]

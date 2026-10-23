@@ -206,7 +206,10 @@ pub fn show_settings(app: &AppHandle, section: Option<&str>) {
         .resizable(true)
         .minimizable(false)
         .maximizable(false)
-        .on_navigation(is_internal)
+        .on_navigation({
+            let dev = dev_url(app);
+            move |url| is_internal(url, dev.as_ref())
+        })
         .build();
     match built {
         Ok(w) => {
@@ -243,12 +246,15 @@ fn build_main(app: &AppHandle, route: &str) -> tauri::Result<WebviewWindow> {
         .inner_size(1280.0, 860.0)
         .min_inner_size(720.0, 560.0)
         // Links to the outside world open in the default browser, never in this window.
-        .on_navigation(|url| {
-            let internal = is_internal(url);
-            if !internal {
-                open_external(url);
+        .on_navigation({
+            let dev = dev_url(app);
+            move |url| {
+                let internal = is_internal(url, dev.as_ref());
+                if !internal {
+                    open_external(url);
+                }
+                internal
             }
-            internal
         })
         .on_new_window(|url, _| {
             open_external(&url);
@@ -276,14 +282,18 @@ fn build_main(app: &AppHandle, route: &str) -> tauri::Result<WebviewWindow> {
     Ok(w)
 }
 
-/// The app's own pages: its custom schemes, the hosts Windows serves them on, and the Vite dev server in debug
-/// builds. Any other server on this computer, `localhost` included, opens in the browser, not in a Recursa window.
-fn is_internal(url: &Url) -> bool {
+/// The Vite dev server (`devUrl` in tauri.conf.json), which serves the pages in debug builds only.
+fn dev_url(app: &AppHandle) -> Option<Url> {
+    app.config().build.dev_url.clone().filter(|_| cfg!(debug_assertions))
+}
+
+/// The app's own pages: its custom schemes, the hosts Windows serves them on, and `dev`, the dev server's origin.
+/// Any other server on this computer, `localhost` included, opens in the browser, not in a Recursa window.
+fn is_internal(url: &Url, dev: Option<&Url>) -> bool {
     match (url.scheme(), url.host_str(), url.port()) {
         ("tauri" | "asset" | "ipc", _, _) => true,
         ("http" | "https", Some("tauri.localhost" | "ipc.localhost"), None) => true,
-        ("http", Some("localhost"), Some(5173)) => cfg!(debug_assertions),
-        _ => false,
+        _ => dev.is_some_and(|d| d.origin() == url.origin()),
     }
 }
 
@@ -388,12 +398,14 @@ mod tests {
 
     #[test]
     fn only_the_apps_own_pages_stay_in_its_windows() {
-        let internal = |u: &str| is_internal(&Url::parse(u).unwrap());
-        assert!(internal("tauri://localhost/runs"));
-        assert!(internal("http://tauri.localhost/settings"));
-        assert!(!internal("http://localhost:8080/"));
-        assert!(!internal("http://tauri.localhost:8080/"));
-        assert!(!internal("https://example.com/"));
-        assert_eq!(internal("http://localhost:5173/"), cfg!(debug_assertions));
+        let dev = Url::parse("http://localhost:5173").unwrap();
+        let internal = |u: &str, dev: Option<&Url>| is_internal(&Url::parse(u).unwrap(), dev);
+        assert!(internal("tauri://localhost/runs", None));
+        assert!(internal("http://tauri.localhost/settings", None));
+        assert!(!internal("http://localhost:8080/", Some(&dev)));
+        assert!(!internal("http://tauri.localhost:8080/", None));
+        assert!(!internal("https://example.com/", None));
+        assert!(internal("http://localhost:5173/runs", Some(&dev)));
+        assert!(!internal("http://localhost:5173/runs", None));
     }
 }

@@ -70,7 +70,9 @@ def tauri_crates(lock, plan):
 
 def typescript(lock, plan):
     peer = fetch_json("https://registry.npmjs.org/svelte-check/latest").get("peerDependencies", {}).get("typescript", "")
-    if re.search(r"(\^|>=|~)\s*7|\b7\.", peer):
+    # Each comparator's major version: the 7 in "^7.0.0" or ">=7", never the one in "^5.7.2" or an upper bound "<7".
+    comparators = re.findall(r"([<>=^~]*)\s*v?(\d+)(?:\.[\dx*]+)*", peer)
+    if any(int(major) >= 7 and not op.startswith("<") for op, major in comparators):
         return "available", f"svelte-check accepts typescript {peer}: update TypeScript to 7"
     return "pending", f"svelte-check accepts typescript {peer}"
 
