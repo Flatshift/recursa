@@ -16,10 +16,12 @@ use std::time::{Duration, Instant};
 const CACHE_TTL: Duration = Duration::from_secs(600);
 
 fn is_sinkhole(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v) => v.is_unspecified() || v.is_loopback() || v.is_private() || v.is_link_local(),
-        IpAddr::V6(v) => v.is_unspecified() || v.is_loopback(),
-    }
+    // CGNAT stays allowed: some resolvers live there (Tailscale's 100.100.100.100).
+    crate::catalog::is_special(ip)
+        || match ip {
+            IpAddr::V4(v) => v.is_loopback() || v.is_private() || v.is_link_local(),
+            IpAddr::V6(v) => v.is_loopback(),
+        }
 }
 
 /// Address for a DoT/DoH host, plus a sentence on how it was found. Successful lookups

@@ -177,7 +177,8 @@ export async function saveExport(runId: string, format: 'csv' | 'json'): Promise
     throw new ApiError('Recursa isn’t responding. Is the app still running?', 0);
   }
   if (!res.ok) {
-    const msg = ((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? `Export failed (${res.status}).`;
+    const data = (await res.json().catch(() => null)) as { error?: string } | null;
+    const msg = (res.status === 401 && sessionError) || data?.error || `Export failed (${res.status}).`;
     throw new ApiError(msg, res.status);
   }
   const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? `recursa-${runId}.${format}`;
@@ -188,7 +189,8 @@ export async function saveExport(runId: string, format: 'csv' | 'json'): Promise
   document.body.append(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+  // Not at once: some browsers are still reading the blob when click() returns.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
   return null;
 }
 

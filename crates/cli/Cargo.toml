@@ -13,7 +13,6 @@ clap.workspace = true
 futures-util.workspace = true
 open.workspace = true
 rust-embed.workspace = true
-rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

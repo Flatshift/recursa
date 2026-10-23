@@ -47,22 +47,29 @@ def accepts_major(peer, major):
     """Does the npm range `peer` take some `major`.x release? Each `||` alternative is a set of comparators that must
     all hold: ">=5" with no upper bound takes 7, "^5.7.2" and ">=5 <7" don't."""
     for alt in peer.split("||"):
-        comparators = re.findall(r"([<>=^~]*)\s*v?(\d+)(?:\.[\dx*]+)*", alt)
+        comparators = re.findall(r"([<>=^~]*)\s*v?(\d+)((?:\.[\dx*]+)*)", alt)
         if not comparators:
             if alt.strip() in ("", "*", "x", "latest"):
                 return True
             continue
         ok = True
-        for op, m in comparators:
+        for op, m, rest in comparators:
             m = int(m)
+            # The minor and patch it names, up to an x: ">7" and ">7.x" exclude all of 7.x, ">7.0" doesn't; "<7" and
+            # "<7.0.0" exclude all of 7.x, "<7.1" doesn't.
+            parts = []
+            for p in rest.strip(".").split("."):
+                if not p.isdigit():
+                    break
+                parts.append(int(p))
             if op in ("", "=", "^", "~"):
                 ok &= m == major
             elif op == ">":
-                ok &= m <= major
+                ok &= m < major or (m == major and bool(parts))
             elif op == ">=":
                 ok &= m <= major
             elif op == "<":
-                ok &= m > major
+                ok &= m > major or (m == major and any(parts))
             elif op == "<=":
                 ok &= m >= major
         if ok:

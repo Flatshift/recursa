@@ -3784,7 +3784,6 @@ dependencies = [
  "open",
  "recursa-engine",
  "rust-embed",
- "rustls",
  "serde",
  "serde_json",
  "tokio",
