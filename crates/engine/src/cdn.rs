@@ -440,7 +440,11 @@ fn reference(ex: &mut dyn Exchanger, name: &str, timeout: Duration, tcp: bool) -
     fastrand::shuffle(&mut servers);
     let mut last = String::from("no nameserver answered");
     for host in servers.iter().take(3) {
-        let Some(addr) = ask(ex, QuerySpec::new(host.as_str(), dns::TYPE_A)).ok().and_then(|m| m.ipv4_answers().into_iter().next()) else {
+        // The resolver under test picks this address: never one on this computer or its network.
+        let Some(addr) = ask(ex, QuerySpec::new(host.as_str(), dns::TYPE_A))
+            .ok()
+            .and_then(|m| m.ipv4_answers().into_iter().find(|a| !crate::catalog::is_local_or_special(&IpAddr::V4(*a))))
+        else {
             continue;
         };
         let ep = Endpoint {
@@ -465,7 +469,7 @@ fn reference(ex: &mut dyn Exchanger, name: &str, timeout: Duration, tcp: bool) -
             reply = ask(x.as_mut(), spec.clone());
             match &reply {
                 Ok(m) if m.rcode == dns::RCODE_NOERROR && m.aa() => {
-                    for a in m.ipv4_answers().into_iter().filter(|a| !a.is_unspecified() && !a.is_loopback()) {
+                    for a in m.ipv4_answers().into_iter().filter(usable) {
                         if ips.len() < 6 && !ips.contains(&a.to_string()) {
                             ips.push(a.to_string());
                         }

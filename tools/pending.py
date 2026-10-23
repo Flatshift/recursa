@@ -49,6 +49,8 @@ def accepts_major(peer, major):
     for alt in peer.split("||"):
         # A hyphen range "A - B" is ">=A <=B".
         alt = re.sub(r"(\S+)\s+-\s+(\S+)", r">=\1 <=\2", alt)
+        # A prerelease or build tag ("7.0.0-rc.1", "+build.5") isn't more comparators: its numbers would be read as some.
+        alt = re.sub(r"(\d)[-+][0-9A-Za-z.-]*", r"\1", alt)
         comparators = re.findall(r"([<>=^~]*)\s*v?(\d+)((?:\.[\dx*]+)*)", alt)
         if not comparators:
             if alt.strip() in ("", "*", "x", "latest"):
@@ -98,7 +100,13 @@ def tauri_crates(lock, plan):
     left = [n for n in names if n in lock] + [f"glib {v}" for v in lock.get("glib", []) if ver(v) < (0, 19)]
     if not left:
         return "resolved", "none of them is in Cargo.lock any more"
-    gone = [n for n in left if f"Removing {n.split()[0]} " in plan]
+    def removed(n):
+        # "glib 0.18.5" is gone only when that version is: removing some other glib proves nothing.
+        name, _, v = n.partition(" ")
+        version = re.escape(v) + r"(?![\w.])" if v else ""
+        return re.search(rf"Removing {re.escape(name)} v{version}", plan)
+
+    gone = [n for n in left if removed(n)]
     if gone:
         return "available", f"cargo update removes {', '.join(gone)}"
     return "pending", f"still in Cargo.lock: {', '.join(left)}"
@@ -113,6 +121,16 @@ def typescript(lock, plan):
     if accepts_major(peer, 7):
         return "available", f"svelte-check accepts typescript {peer}: update TypeScript to 7"
     return "pending", f"svelte-check accepts typescript {peer}"
+
+
+def data(s):
+    """A workflow command's message, escaped as GitHub Actions asks."""
+    return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def prop(s):
+    """A workflow command's property value: a comma or colon would otherwise end it."""
+    return data(s).replace(":", "%3A").replace(",", "%2C")
 
 
 CHECKS = [
@@ -132,7 +150,7 @@ def main():
             state, detail = "unknown", f"check failed: {e}"
         print(f"{state:9} {title}: {detail}")
         if state in ("available", "resolved"):
-            print(f"::warning title=Pending fix {state}: {title}::{detail}. See docs/PENDING.md.")
+            print(f"::warning title={prop(f'Pending fix {state}: {title}')}::{data(detail)}. See docs/PENDING.md.")
         rows.append(f"| {title} | {state} | {detail} |")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
