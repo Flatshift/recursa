@@ -24,6 +24,8 @@ export const mac = shell && /Mac/.test(navigator.userAgent);
 // replaces it.
 const tokenKey = `recursa-token:${location.port}`;
 let token = '';
+/** Why the launch link's code was refused (already used, or not valid), shown instead of a bare 401. */
+let sessionError = '';
 
 const ready: Promise<void> = desktop
   ? Promise.resolve()
@@ -38,7 +40,9 @@ const ready: Promise<void> = desktop
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ code }),
           });
-          if (res.ok) token = ((await res.json()) as { token: string }).token;
+          const data = (await res.json().catch(() => null)) as { token?: string; error?: string } | null;
+          if (res.ok && data?.token) token = data.token;
+          else sessionError = data?.error ?? '';
         } catch {
           // The first API call reports a server that isn't there.
         }
@@ -96,7 +100,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     data = null;
   }
   if (!res.ok) {
-    const msg = (data as { error?: string } | null)?.error ?? `Request failed (${res.status}).`;
+    const msg = (res.status === 401 && sessionError) || (data as { error?: string } | null)?.error || `Request failed (${res.status}).`;
     throw new ApiError(msg, res.status);
   }
   return data as T;
@@ -164,12 +168,27 @@ export async function saveExport(runId: string, format: 'csv' | 'json'): Promise
       throw ipcError(e);
     }
   }
+  // Fetched with the token in a header, then saved from memory, so the token stays out of the download list.
+  await ready;
+  let res: Response;
+  try {
+    res = await fetch(`/api/runs/${encodeURIComponent(runId)}/export?format=${format}`, { headers: { 'x-recursa-token': token } });
+  } catch {
+    throw new ApiError('Recursa isn’t responding. Is the app still running?', 0);
+  }
+  if (!res.ok) {
+    const msg = ((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? `Export failed (${res.status}).`;
+    throw new ApiError(msg, res.status);
+  }
+  const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? `recursa-${runId}.${format}`;
+  const url = URL.createObjectURL(await res.blob());
   const a = document.createElement('a');
-  a.href = `/api/runs/${encodeURIComponent(runId)}/export?format=${format}&token=${encodeURIComponent(token)}`;
-  a.download = '';
+  a.href = url;
+  a.download = name;
   document.body.append(a);
   a.click();
   a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
   return null;
 }
 

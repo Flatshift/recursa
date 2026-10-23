@@ -807,7 +807,7 @@ mod imp {
                         }
                         Ok(false) => {
                             if reply_ok(&p.slots[i].reply, p.dest) {
-                                e.us = (clock::now_ns().saturating_sub(sent_ns) / 1000).clamp(1, u32::MAX as u64) as u32;
+                                e.us = (clock::since(sent_ns) / 1000).clamp(1, u32::MAX as u64) as u32;
                             }
                         }
                         Err(()) => {}

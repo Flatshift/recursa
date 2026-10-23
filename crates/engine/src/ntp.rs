@@ -704,7 +704,7 @@ fn nts_query(sock: &UdpSocket, keys: &NtsKeys, cookie: &[u8], fresh: &mut Vec<Ve
 /// exchange was held with decides, not a fresh lookup of its name, which the server's own DNS could answer
 /// differently the second time.
 fn may_name(ke_ip: Option<IpAddr>, target: IpAddr) -> bool {
-    let private = |ip: IpAddr| ip.is_unspecified() || ip.is_multicast() || crate::catalog::is_private(&ip);
+    let private = |ip: IpAddr| crate::catalog::is_local_or_special(&ip);
     !private(target) || ke_ip.is_some_and(private)
 }
 
