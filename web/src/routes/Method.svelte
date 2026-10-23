@@ -504,7 +504,7 @@
       <h2>What Recursa sends where</h2>
       <p>
         The web interface is served only on <code>127.0.0.1</code>. It refuses all other Host headers, which blocks DNS rebinding.
-        It also requires a token that Recursa makes at each launch. Outbound, Recursa connects only to the resolvers you select, the
+        It also requires a session token, which the page gets by trading the one-time code in the link Recursa opens or prints. Outbound, Recursa connects only to the resolvers you select, the
         CDN edges that they return, the time servers you choose on the Time page (UDP 123, and TCP 4460 for the NTS check), and the
         public sources above. During a run it also pings your default gateway. On a resolver's page, or in its
         inspector, Sample 18 queries sends 18 normal queries to that one resolver, one time; Check live feeds, only when you start it,
