@@ -104,6 +104,13 @@ mod imp {
 
 pub use imp::*;
 
+/// Nanoseconds since `t`, an earlier [`now_ns`]. Zero, not a wrapped or panicking subtraction, if the clock stepped
+/// back in between (Linux's `CLOCK_REALTIME` can).
+#[inline]
+pub fn since(t: u64) -> u64 {
+    now_ns().saturating_sub(t)
+}
+
 /// Ask the scheduler to treat the calling thread as latency-critical, so the gap between
 /// the send stamp and the `send()` call stays as short as possible. Best effort: on
 /// macOS this is the user-interactive QoS class (performance cores, highest priority

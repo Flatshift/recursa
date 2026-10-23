@@ -656,7 +656,7 @@ impl TcpX {
         if self.stream.is_none() {
             let t = clock::now_ns();
             self.stream = Some(Bounded::new(connect_tcp(self.addr, timeout)?, timeout).map_err(io_err)?);
-            self.setup_ns = Some(clock::now_ns().saturating_sub(t));
+            self.setup_ns = Some(clock::since(t));
         }
         Ok(())
     }
@@ -758,7 +758,7 @@ impl DotX {
                 _ => io_err(e),
             })?;
         }
-        self.setup_ns = Some(clock::now_ns().saturating_sub(t));
+        self.setup_ns = Some(clock::since(t));
         self.stream = Some(rustls::StreamOwned::new(conn, sock));
         Ok(())
     }
@@ -871,7 +871,7 @@ impl DohX {
             .await
             .map_err(|_| XErr::Timeout)?
         })?;
-        self.setup_ns = Some(clock::now_ns().saturating_sub(t));
+        self.setup_ns = Some(clock::since(t));
         self.sender = Some(sender);
         self.conn = Some(conn);
         Ok(())

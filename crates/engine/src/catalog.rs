@@ -184,6 +184,12 @@ pub fn system_entries(addrs: &[IpAddr]) -> Vec<Resolver> {
         .collect()
 }
 
+/// An address no public server should point this computer at: private, loopback or link-local (see [`is_private`]),
+/// unspecified, multicast or the IPv4 broadcast address.
+pub fn is_local_or_special(ip: &IpAddr) -> bool {
+    ip.is_unspecified() || ip.is_multicast() || matches!(ip, IpAddr::V4(v) if v.is_broadcast()) || is_private(ip)
+}
+
 pub fn is_private(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v) => v.is_private() || v.is_loopback() || v.is_link_local() || v.octets()[0] == 100 && (v.octets()[1] & 0xC0) == 64,

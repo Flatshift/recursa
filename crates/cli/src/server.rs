@@ -3,9 +3,11 @@
 //! Bound to loopback only. Every request must carry an exact loopback Host header,
 //! which defeats DNS-rebinding. API calls need a session token, and state-changing
 //! calls must come from our own Origin, which defeats CSRF from other local pages.
-//! No token is ever in a page or a URL: a launch link carries a one-time code in its fragment,
-//! which `POST /api/session` trades for a token (see [`Sessions`]), so another local user who
-//! can reach the port, or read a browser's command line, gets nothing that lasts.
+//! No token is ever in the served page or a launch link: a launch link carries a one-time code in
+//! its fragment, which `POST /api/session` trades for a token (see [`Sessions`]), so another local
+//! user who can reach the port, or read a browser's command line, gets nothing that lasts. (The
+//! page puts its token in the URL of a run's event stream, since EventSource can't send a header;
+//! the browser keeps no history of those requests.)
 //! The API itself lives in the engine ([`AppState::call`]); this is only the transport.
 
 use axum::body::{Body, Bytes};
@@ -21,6 +23,7 @@ use recursa_engine::app::{ApiError, AppState};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::convert::Infallible;
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 #[derive(rust_embed::Embed)]
@@ -33,16 +36,10 @@ pub struct Server {
     pub port: u16,
 }
 
-/// 32 bytes from the TLS provider's secure random source, as hex: a launch code or a session token. A guessable one
+/// 32 bytes from the system's secure random source, as hex: a launch code or a session token. A guessable one
 /// would let any local page with the port drive the API.
 pub fn secret() -> String {
-    let mut buf = [0u8; 32];
-    rustls::crypto::CryptoProvider::get_default()
-        .expect("crypto provider installed at startup")
-        .secure_random
-        .fill(&mut buf)
-        .expect("secure random");
-    buf.iter().map(|b| format!("{b:02x}")).collect()
+    recursa_engine::unpredictable::<32>().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Launch links and the sessions they started. A link carries a one-time code, never a token, because a browser
@@ -143,15 +140,23 @@ struct SessionQ {
 /// Trade a launch link's one-time code for a session token. A wrong code gets nothing; a used one ends the session it
 /// started and prints a new link.
 async fn session(State(srv): State<Shared>, Json(q): Json<SessionQ>) -> Response {
-    let mut sessions = srv.sessions.lock().unwrap();
-    match sessions.redeem(&q.code) {
-        Redeemed::Token(token) => Json(json!({ "token": token })).into_response(),
-        Redeemed::Invalid => err(ApiError::new(401, "This launch link is not valid. Open the link Recursa printed.")),
-        Redeemed::Reused => {
-            eprintln!(
+    // The lock is let go before printing: a panic while holding it would poison every later request.
+    let redeemed = {
+        let mut sessions = srv.sessions.lock().unwrap();
+        match sessions.redeem(&q.code) {
+            Redeemed::Reused => Err(sessions.link(srv.port)),
+            r => Ok(r),
+        }
+    };
+    match redeemed {
+        Ok(Redeemed::Token(token)) => Json(json!({ "token": token })).into_response(),
+        Ok(_) => err(ApiError::new(401, "This launch link is not valid. Open the link Recursa printed.")),
+        Err(link) => {
+            // Not eprintln!, which panics when stderr is gone (the terminal closed).
+            let _ = writeln!(
+                std::io::stderr(),
                 "\nA launch link was opened a second time, so the session it started has ended. If you didn't open it\n\
-                 twice, someone else on this computer saw it. New link (it opens once): {}",
-                sessions.link(srv.port)
+                 twice, someone else on this computer saw it. New link (it opens once): {link}"
             );
             err(ApiError::new(401, "This launch link was already used, so its session has ended. Open the new link Recursa printed."))
         }

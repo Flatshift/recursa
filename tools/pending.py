@@ -43,6 +43,33 @@ def fetch_json(url):
         return json.load(r)
 
 
+def accepts_major(peer, major):
+    """Does the npm range `peer` take some `major`.x release? Each `||` alternative is a set of comparators that must
+    all hold: ">=5" with no upper bound takes 7, "^5.7.2" and ">=5 <7" don't."""
+    for alt in peer.split("||"):
+        comparators = re.findall(r"([<>=^~]*)\s*v?(\d+)(?:\.[\dx*]+)*", alt)
+        if not comparators:
+            if alt.strip() in ("", "*", "x", "latest"):
+                return True
+            continue
+        ok = True
+        for op, m in comparators:
+            m = int(m)
+            if op in ("", "=", "^", "~"):
+                ok &= m == major
+            elif op == ">":
+                ok &= m <= major
+            elif op == ">=":
+                ok &= m <= major
+            elif op == "<":
+                ok &= m > major
+            elif op == "<=":
+                ok &= m >= major
+        if ok:
+            return True
+    return False
+
+
 def quick_xml(lock, plan):
     have = [v for v in lock.get("quick-xml", []) if ver(v) < (0, 41)]
     if not have:
@@ -70,9 +97,7 @@ def tauri_crates(lock, plan):
 
 def typescript(lock, plan):
     peer = fetch_json("https://registry.npmjs.org/svelte-check/latest").get("peerDependencies", {}).get("typescript", "")
-    # Each comparator's major version: the 7 in "^7.0.0" or ">=7", never the one in "^5.7.2" or an upper bound "<7".
-    comparators = re.findall(r"([<>=^~]*)\s*v?(\d+)(?:\.[\dx*]+)*", peer)
-    if any(int(major) >= 7 and not op.startswith("<") for op, major in comparators):
+    if accepts_major(peer, 7):
         return "available", f"svelte-check accepts typescript {peer}: update TypeScript to 7"
     return "pending", f"svelte-check accepts typescript {peer}"
 

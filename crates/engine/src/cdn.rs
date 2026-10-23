@@ -510,7 +510,7 @@ enum Probe {
 fn probe(addr: SocketAddr, timeout: Duration) -> Probe {
     let t0 = clock::now_ns();
     let r = TcpStream::connect_timeout(&addr, timeout);
-    let ms = ((clock::now_ns().saturating_sub(t0) as f64 / 1e6) * 1000.0).round() / 1000.0;
+    let ms = ((clock::since(t0) as f64 / 1e6) * 1000.0).round() / 1000.0;
     match r {
         Ok(_) => Probe::Sample(ms),
         Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => Probe::Refused(ms),

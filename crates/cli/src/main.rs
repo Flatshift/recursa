@@ -578,9 +578,10 @@ async fn serve(cli: Cli) {
     let port = listener.local_addr().unwrap().port();
     let app = open_state(&cli, true);
     app.start_background();
-    // Two launch links: one to open now, one to print for another browser. Each opens once.
+    // Two launch links: one to open now (unless told not to), one to print for another browser. Each opens once.
     let mut sessions = server::Sessions::default();
-    let (opened, printed) = (sessions.link(port), sessions.link(port));
+    let opened = (!cli.no_open).then(|| sessions.link(port));
+    let printed = sessions.link(port);
     eprintln!("Recursa is running at http://127.0.0.1:{port}/");
     eprintln!("{} {printed}", if cli.no_open { "Open (the link works once):" } else { "Another browser (the link works once):" });
     eprintln!("Data: {}", app.store.path.display());
@@ -592,7 +593,7 @@ async fn serve(cli: Cli) {
             c.floor_p50_us
         );
     }
-    if !cli.no_open {
+    if let Some(opened) = opened {
         let _ = open::that(opened);
     }
     let srv = Arc::new(server::Server { app, sessions: Mutex::new(sessions), port });
