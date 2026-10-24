@@ -85,7 +85,7 @@ cd crates/desktop && ../../web/node_modules/.bin/tauri build     # the app (Taur
 ```
 
 The UI in `web/dist` is embedded into both at compile time. For UI work, run `recursa --no-open` and `npm run dev` in
-`web/`. Vite proxies `/api` to port 7353.
+`web/`, then open the link Recursa printed with port 5173 in place of 7353. Vite proxies `/api` to port 7353.
 
 To check the desktop bridge without clicking, run a debug build in smoke mode. It boots the real UI, follows a short run
 live, checks the timing floor with the window open and a menu command, then exits 0 or 1:
