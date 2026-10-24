@@ -892,11 +892,11 @@ impl DohX {
                     }
                     out.extend_from_slice(&chunk);
                 }
-                let t1 = clock::now_ns();
+                let rtt_ns = clock::since(t0);
                 if !dns::is_response_to(&out, query) {
                     return Err(XErr::Http("reply doesn't match the query".into()));
                 }
-                Ok(Reply { bytes: out, rtt_ns: t1.saturating_sub(t0), user_rtt_ns: t1.saturating_sub(t0), kernel_stamp: false, ttl: None })
+                Ok(Reply { bytes: out, rtt_ns, user_rtt_ns: rtt_ns, kernel_stamp: false, ttl: None })
             })
             .await
             .map_err(|_| XErr::Timeout)?

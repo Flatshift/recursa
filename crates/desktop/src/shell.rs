@@ -207,20 +207,8 @@ pub fn show_settings(app: &AppHandle, section: Option<&str>) {
         .minimizable(false)
         .maximizable(false)
         // Its outside links (the GPL, the RPKI agreement) open in the default browser, as the main window's do.
-        .on_navigation({
-            let dev = dev_url(app);
-            move |url| {
-                let internal = is_internal(url, dev.as_ref());
-                if !internal {
-                    open_external(url);
-                }
-                internal
-            }
-        })
-        .on_new_window(|url, _| {
-            open_external(&url);
-            NewWindowResponse::Deny
-        })
+        .on_navigation(keep_inside(app))
+        .on_new_window(new_window_to_browser)
         .build();
     match built {
         Ok(w) => {
@@ -257,20 +245,8 @@ fn build_main(app: &AppHandle, route: &str) -> tauri::Result<WebviewWindow> {
         .inner_size(1280.0, 860.0)
         .min_inner_size(720.0, 560.0)
         // Links to the outside world open in the default browser, never in this window.
-        .on_navigation({
-            let dev = dev_url(app);
-            move |url| {
-                let internal = is_internal(url, dev.as_ref());
-                if !internal {
-                    open_external(url);
-                }
-                internal
-            }
-        })
-        .on_new_window(|url, _| {
-            open_external(&url);
-            NewWindowResponse::Deny
-        });
+        .on_navigation(keep_inside(app))
+        .on_new_window(new_window_to_browser);
     let b = b.on_page_load(|w, p| {
         if p.event() == tauri::webview::PageLoadEvent::Finished {
             // A new page knows nothing of the window's chrome yet.
@@ -291,6 +267,24 @@ fn build_main(app: &AppHandle, route: &str) -> tauri::Result<WebviewWindow> {
     #[cfg(target_os = "macos")]
     crate::chrome::install(&w);
     Ok(w)
+}
+
+/// A window's navigation rule: the app's own pages stay in it, anything else opens in the default browser.
+fn keep_inside(app: &AppHandle) -> impl Fn(&Url) -> bool + Send + 'static {
+    let dev = dev_url(app);
+    move |url| {
+        let internal = is_internal(url, dev.as_ref());
+        if !internal {
+            open_external(url);
+        }
+        internal
+    }
+}
+
+/// A page asking for a new window: its link opens in the default browser instead.
+fn new_window_to_browser(url: Url, _: tauri::webview::NewWindowFeatures) -> NewWindowResponse<Wry> {
+    open_external(&url);
+    NewWindowResponse::Deny
 }
 
 /// The Vite dev server (`devUrl` in tauri.conf.json), which serves the pages whenever Tauri does, that is in any
