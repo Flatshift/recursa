@@ -152,7 +152,7 @@ the app's own Origin. No token is ever in the served page or a launch link, so a
 read one from the port or from a browser's command line. Recursa opens one launch link and prints another for a second
 browser. Each carries a one-time code (`#code=`) that the page trades for its own session. A link opened a second time
 ends the session it started, and Recursa prints a new link: if someone else used the code first, their session ends
-too.
+too. The opened link stops working after two minutes if no page used it.
 
 ### Data
 

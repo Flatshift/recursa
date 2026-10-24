@@ -582,7 +582,7 @@ async fn serve(cli: Cli) {
     // Launching the opener can succeed with no browser to show the page (no display, over SSH), so the printed link's
     // label never claims a browser opened.
     let mut sessions = server::Sessions::default();
-    let opened = !cli.no_open && open::that_detached(sessions.link(port)).is_ok();
+    let opened = !cli.no_open && open::that_detached(sessions.opener_link(port)).is_ok();
     let printed = sessions.link(port);
     eprintln!("Recursa is running on 127.0.0.1, port {port}.");
     eprintln!(

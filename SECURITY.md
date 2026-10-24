@@ -7,4 +7,4 @@ Include what you found, how to reproduce it, and the version (Settings › About
 within a week.
 
 Recursa sends DNS queries to the resolvers you choose, and serves its browser interface only on 127.0.0.1 behind a
-per-launch token. Reports about either are especially welcome.
+session token that the page gets by trading a one-time launch code. Reports about either are especially welcome.
