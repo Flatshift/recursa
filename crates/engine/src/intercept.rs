@@ -6,7 +6,7 @@
 //! resolver: something on the local network answered it.
 
 use crate::dns::{self, QuerySpec};
-use crate::net::{self, Endpoint, Exchanger, Transport, UdpX};
+use crate::net::{self, Endpoint, Transport, UdpX};
 use crate::{bench, clock};
 use serde_json::{Value, json};
 use std::net::{IpAddr, SocketAddr, TcpStream};
@@ -32,9 +32,9 @@ fn handshake_ms(ip: &str) -> Option<f64> {
 fn udp_probe(ip: &str) -> (Option<f64>, Option<u8>) {
     let Some(mut x) = format!("{ip}:53").parse().ok().and_then(|a| UdpX::connect(a).ok()) else { return (None, None) };
     let (mut best, mut hops): (Option<f64>, Option<u8>) = (None, None);
+    let spec = QuerySpec::new("www.google.com", dns::TYPE_A);
     for i in 0..4 {
-        let Ok(q) = dns::encode_query(dns::new_id(), &QuerySpec::new("www.google.com", dns::TYPE_A)) else { continue };
-        let Ok(r) = x.exchange(&q, Duration::from_millis(1500)) else { continue };
+        let Ok(dns::Answer { reply: r, .. }) = dns::ask(&mut x, &spec, Duration::from_millis(1500)) else { continue };
         if let Some(h) = r.ttl.map(net::hops) {
             hops = Some(hops.map_or(h, |x| x.min(h)));
         }
@@ -55,9 +55,8 @@ fn chaos(ip: &str, tcp: bool) -> (Option<String>, Option<String>) {
     let ask = |name: &str| -> Option<String> {
         let ep = Endpoint { transport: if tcp { Transport::Tcp } else { Transport::Udp }, addr, host: None, url: None };
         let mut x = net::open(&ep, Duration::from_millis(1000)).ok()?;
-        let q = dns::encode_query(dns::new_id(), &QuerySpec::chaos_txt(name)).ok()?;
-        let r = x.exchange(&q, Duration::from_millis(1000)).ok()?;
-        dns::parse(&r.bytes).ok()?.txt_answers().into_iter().map(|t| crate::forwarder::clean(&t)).find(|t| !t.is_empty())
+        let m = dns::ask(x.as_mut(), &QuerySpec::chaos_txt(name), Duration::from_millis(1000)).ok()?.msg;
+        m.txt_answers().into_iter().map(|t| crate::forwarder::clean(&t)).find(|t| !t.is_empty())
     };
     (ask("version.bind"), ask("id.server"))
 }
@@ -68,9 +67,8 @@ fn fresh_name_ms(ip: &str) -> Option<f64> {
     let mut x = format!("{ip}:53").parse().ok().and_then(|a| UdpX::connect(a).ok())?;
     (0..3)
         .filter_map(|_| {
-            let q =
-                dns::encode_query(dns::new_id(), &QuerySpec::new(format!("ub{}.com", crate::probes::rand_label(14)), dns::TYPE_A)).ok()?;
-            x.exchange(&q, Duration::from_millis(1500)).ok().map(|r| r.rtt_ns as f64 / 1e6)
+            let spec = QuerySpec::new(format!("ub{}.com", crate::probes::rand_label(14)), dns::TYPE_A);
+            dns::ask(&mut x, &spec, Duration::from_millis(1500)).ok().map(|a| a.reply.rtt_ns as f64 / 1e6)
         })
         .reduce(f64::min)
 }

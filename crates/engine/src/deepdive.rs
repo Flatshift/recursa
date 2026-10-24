@@ -14,7 +14,7 @@ use crate::catalog::Resolver;
 use crate::dns::{self, QuerySpec};
 use crate::endpoints;
 use crate::intel::{FeedHost, ThreatFeeds};
-use crate::net::{self, Endpoint, Exchanger, Transport, XErr};
+use crate::net::{self, Endpoint, Exchanger, Transport};
 use crate::probes::{self, FilterCategory, rand_label};
 use crate::stats::{self, Summary};
 use serde::Serialize;
@@ -197,17 +197,13 @@ impl Session<'_> {
             e.dnssec_ok = true;
             e.nsid = true;
         });
-        let res =
-            dns::encode_query(dns::new_id(), &spec).map_err(|e| XErr::Io(e.to_string())).and_then(|q| self.ex.exchange(&q, self.timeout));
-        let out = match res {
-            Ok(r) => match dns::parse(&r.bytes) {
-                Ok(msg) => {
-                    Some(Asked { rtt_ms: r.rtt_ns as f64 / 1e6, kernel_stamp: r.kernel_stamp, bytes: r.bytes, msg, at: Instant::now() })
-                }
-                Err(_) => None,
-            },
-            Err(_) => None,
-        };
+        let out = dns::ask(self.ex, &spec, self.timeout).ok().map(|a| Asked {
+            rtt_ms: a.reply.rtt_ns as f64 / 1e6,
+            kernel_stamp: a.reply.kernel_stamp,
+            bytes: a.reply.bytes,
+            msg: a.msg,
+            at: Instant::now(),
+        });
         self.timeline.push(Step { kind, ms: out.as_ref().map(|a| a.rtt_ms) });
         if out.is_some() {
             self.failures = 0;
@@ -628,10 +624,8 @@ pub struct TransportCost {
 
 /// One query over `ex`, with its round trip in milliseconds and its size.
 fn ask_once(ex: &mut dyn Exchanger, spec: &QuerySpec, timeout: Duration) -> Option<(f64, usize, dns::Message)> {
-    let q = dns::encode_query(dns::new_id(), spec).ok()?;
-    let r = ex.exchange(&q, timeout).ok()?;
-    let m = dns::parse(&r.bytes).ok()?;
-    Some((r.rtt_ns as f64 / 1e6, r.bytes.len(), m))
+    let a = dns::ask(ex, spec, timeout).ok()?;
+    Some((a.reply.rtt_ns as f64 / 1e6, a.reply.bytes.len(), a.msg))
 }
 
 /// Ask for the root DNSKEY set with DO over UDP at 512 and 1232 bytes, then over TCP.
@@ -886,7 +880,7 @@ pub fn deep_checks(r: &Resolver, timeout: Duration, cancel: &AtomicBool) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::Reply;
+    use crate::net::{Reply, XErr};
 
     /// Answers every query itself: slower for unique-label names, a fixed TTL, and a
     /// scripted OPT with NSID and an EDE.

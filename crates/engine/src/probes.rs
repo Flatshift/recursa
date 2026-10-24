@@ -115,9 +115,7 @@ struct Ctx<'a> {
 
 impl Ctx<'_> {
     fn ask(&mut self, spec: &QuerySpec) -> Result<dns::Message, XErr> {
-        let q = dns::encode_query(dns::new_id(), spec).map_err(|e| XErr::Io(e.to_string()))?;
-        let r = self.ex.exchange(&q, self.timeout)?;
-        dns::parse(&r.bytes).map_err(|e| XErr::Io(format!("unparseable response: {e}")))
+        dns::ask(self.ex, spec, self.timeout).map(|a| a.msg)
     }
 }
 
