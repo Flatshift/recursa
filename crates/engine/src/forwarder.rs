@@ -9,7 +9,7 @@
 //! answer is still treated as a forwarder when it is this computer's default gateway.
 
 use crate::dns::{self, QuerySpec};
-use crate::net::{Exchanger, UdpX};
+use crate::net::UdpX;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
@@ -34,9 +34,8 @@ pub fn describe(version: &str) -> Option<String> {
 /// Ask a resolver for its version name over plain DNS. Blocking; a second at most.
 pub fn version_bind(ip: IpAddr) -> Option<String> {
     let mut x = UdpX::connect(SocketAddr::new(ip, 53)).ok()?;
-    let q = dns::encode_query(dns::new_id(), &QuerySpec::chaos_txt("version.bind")).ok()?;
-    let r = x.exchange(&q, Duration::from_millis(900)).ok()?;
-    dns::parse(&r.bytes).ok()?.txt_answers().into_iter().map(|t| clean(&t)).find(|t| !t.is_empty())
+    let m = dns::ask(&mut x, &QuerySpec::chaos_txt("version.bind"), Duration::from_millis(900)).ok()?.msg;
+    m.txt_answers().into_iter().map(|t| clean(&t)).find(|t| !t.is_empty())
 }
 
 /// A description of the forwarder at `ip`, when it is one: dnsmasq or Pi-hole by what it says it is, or

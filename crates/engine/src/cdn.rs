@@ -359,14 +359,9 @@ fn lookup(ex: &mut dyn Exchanger, host: &str, timeout: Duration) -> Outcome {
 }
 
 fn lookup_once(ex: &mut dyn Exchanger, host: &str, timeout: Duration) -> Outcome {
-    let msg = (|| {
-        let q = dns::encode_query(dns::new_id(), &QuerySpec::new(host, dns::TYPE_A)).map_err(|e| e.to_string())?;
-        let msg = ex.exchange(&q, timeout).map_err(|e| e.to_string())?;
-        dns::parse(&msg.bytes).map_err(|e| e.to_string())
-    })();
-    let msg = match msg {
-        Ok(m) => m,
-        Err(e) => return Outcome::Failed(e),
+    let msg = match dns::ask(ex, &QuerySpec::new(host, dns::TYPE_A), timeout) {
+        Ok(a) => a.msg,
+        Err(e) => return Outcome::Failed(e.to_string()),
     };
     match msg.rcode {
         dns::RCODE_NOERROR => {}
@@ -416,9 +411,7 @@ pub fn references(ex: &mut dyn Exchanger, targets: &BTreeMap<String, String>, ti
 
 fn reference(ex: &mut dyn Exchanger, name: &str, timeout: Duration, tcp: bool) -> Result<Reference, String> {
     let ask = |ex: &mut dyn Exchanger, spec: QuerySpec| -> Result<dns::Message, String> {
-        let q = dns::encode_query(dns::new_id(), &spec).map_err(|e| e.to_string())?;
-        let r = ex.exchange(&q, timeout).map_err(|e| e.to_string())?;
-        dns::parse(&r.bytes).map_err(|e| e.to_string())
+        dns::ask(ex, &spec, timeout).map(|a| a.msg).map_err(|e| e.to_string())
     };
     // The zone that holds `name`: an NS query for it either answers (it's a zone apex)
     // or returns the enclosing zone's SOA in the authority section.
