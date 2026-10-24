@@ -1,4 +1,4 @@
-import type { Transport, TestKind } from './types';
+import type { Resolver, Transport, TestKind } from './types';
 
 export const TEST_LABEL: Record<TestKind, string> = {
   cached: 'Cached',
@@ -91,17 +91,16 @@ export function runEstimateMs(
   return msTotal;
 }
 
+/** Resolvers the catalog documents, so published claims apply. */
+export const documented = (r: Resolver) => r.group === 'public' || r.group === 'legacy';
+
 export function label(provider: string, variant: string): string {
   return variant ? `${provider} ${variant}` : provider;
 }
 
-export function country(code: string | undefined | null): string {
-  if (!code) return '';
-  try {
-    return new Intl.DisplayNames(undefined, { type: 'region' }).of(code) ?? code;
-  } catch {
-    return code;
-  }
+/** Scores and short latencies: one decimal under 10, whole numbers above. */
+export function score(v: number): string {
+  return v < 10 ? v.toFixed(1) : Math.round(v).toString();
 }
 
 /** "a", "a and b", "a, b and c". */

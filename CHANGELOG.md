@@ -2,6 +2,21 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- **Pick cards.** The Overview picks are compact cards: goal, resolver, deciding figure and a short note, with the
+  full sentence on hover.
+- **Cache and fresh-lookup picks.** Two more picks name the fastest resolver on cached answers and on fresh lookups; the
+  speed score is the average of the two.
+- **Failed answers cost.** Error replies and network failures count against the speed score like timeouts. A failure
+  that hits three or more resolvers at once is excused as a network blip.
+- **Speed score.** One slow answer no longer moves a resolver's score, and TLD lookups weigh less.
+- **TLD test.** Queries are paced so the test no longer trips rate limits. A resolver that still refuses has that test
+  marked limited and left out of its score.
+- **Run status.** The check under way shows in the status bar, clear of the latency sheet.
+- **Resolver details.** The panel uses the full width beside the shortlist, and CDN table values no longer wrap.
+- **Sidebar.** Navigation, runs and monitoring read as three distinct sections.
+
 ## 0.3.12 (2026-10-24)
 
 Security fixes from an audit, and dependency updates.

@@ -2,7 +2,7 @@
 
 import { nativeMenu, type MenuItem } from './api';
 
-export { SEPARATOR, type MenuItem } from './api';
+export { SEPARATOR } from './api';
 
 interface Open {
   x: number;

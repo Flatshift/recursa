@@ -5,9 +5,9 @@
   // every answered query on a shared log axis, the speed score it is sorted by and the answer
   // rate. The full ladder is one view over (Latency).
   import { app } from '../lib/store.svelte';
-  import { WEIGHTS, type Row } from '../lib/verdict';
+  import { RELIABLE, WEIGHTS, type Row } from '../lib/verdict';
   import type { Sample, TestKind, WarmSample } from '../lib/types';
-  import { TEST_LABEL, ms, pct, plural } from '../lib/format';
+  import { TEST_LABEL, label, ms, pct, plural } from '../lib/format';
   import { logDomain, logScale, tickLabel } from '../lib/scale';
   import { warmByTarget, warmJitter } from '../lib/warm';
   import { flip } from 'svelte/animate';
@@ -155,7 +155,7 @@
           {#each shown.length || warmAxis ? labelled : [] as t}<text x={x(t)} y="10" text-anchor="middle">{tickLabel(t)}</text>{/each}
         </svg>
       </span>
-      <span class="h" title="Speed score, in ms: cached, uncached and TLD lookups weighted together, each median pulled toward its p95. The list is sorted by it.">score</span>{#if withCdn}<span class="h cdnh" title="CDN edges compared with the nearest any resolver found">CDN</span>{/if}<span class="h">answered</span>
+      <span class="h" title="Speed score, in ms: cached, uncached and TLD lookups weighted together, each test's mean after its slowest tenth is pulled down to its p90. The list is sorted by it.">score</span>{#if withCdn}<span class="h cdnh" title="CDN edges compared with the nearest any resolver found">CDN</span>{/if}<span class="h">answered</span>
     </li>
     {#each order as idx (idx)}
       {@const r = byIdx.get(idx)!}
@@ -187,15 +187,15 @@
             {#if withCdn}<span class="cdn num" title={r.cdn == null ? 'No CDN result for this resolver' : `CDN edges ${r.cdn < 0.05 ? 'as near as any resolver found' : `${ms(r.cdn)} farther than the nearest`}; this has its own pick and doesn’t move the order`}
                 >{r.cdn == null ? '—' : r.cdn < 0.05 ? 'best' : `+${ms(r.cdn, false)}`}</span
               >{/if}
-            <span class="ok num" class:bad={r.success < 0.98}>{pct(r.success)}</span>
+            <span class="ok num" class:bad={r.success < RELIABLE}>{pct(r.success)}</span>
           </button>
         {:else}
           <div
             class="row ghost-line"
             role="img"
             aria-label={wn
-              ? `${r.target.provider} ${r.target.variant}: warming up, ${plural(wn, 'warm-up answer')}, not recorded`
-              : `${r.target.provider} ${r.target.variant}: waiting for answers`}
+              ? `${label(r.target.provider, r.target.variant)}: warming up, ${plural(wn, 'warm-up answer')}, not recorded`
+              : `${label(r.target.provider, r.target.variant)}: waiting for answers`}
           >
             <span class="n num">·</span>
             <span class="who"><b>{r.target.provider}</b> {r.target.variant}{#if multi}<TransportChip t={r.target.transport} />{/if}</span>
@@ -232,7 +232,7 @@
   {/snippet}
   <p class="legend-note">
     {#each tests as k}<span><i class="key {k}"></i>{TEST_LABEL[k]}</span>{/each}
-    <span>every answered query, log ms · tick: speed score (cached {pct(WEIGHTS.cached, 0)}, uncached {pct(WEIGHTS.uncached, 0)}, TLD {pct(WEIGHTS.tld, 0)}, each median pulled toward its p95, plus some of its deviation)</span>
+    <span>every answered query, log ms · tick: speed score (cached {pct(WEIGHTS.cached, 0)}, uncached {pct(WEIGHTS.uncached, 0)}, TLD {pct(WEIGHTS.tld, 0)}, each test's mean after its slowest tenth is pulled down to its p90)</span>
   </p>
 </section>
 

@@ -12,7 +12,6 @@
   import { onResolverContext } from '../lib/resolverMenu';
   import Toolbar from '../components/Toolbar.svelte';
   import RunProgress from '../components/RunProgress.svelte';
-  import Working from '../components/Working.svelte';
   import Verdict from '../components/Verdict.svelte';
   import RankList from '../components/RankList.svelte';
   import Ladder from '../components/Ladder.svelte';
@@ -399,7 +398,6 @@
                 {:else if running}
                   <div>
                     <Verdict v={null} live={liveVerdict} cdn={run.config.cdn} onopen={open}>
-                      {#snippet status()}<Working {run} />{/snippet}
                       <RankList
                         rows={rank(rows)}
                         samples={run.samples}
@@ -485,7 +483,6 @@
                   onopen={open}
                 />
               </div>
-              {#if running}<div class="under"><Working {run} /></div>{/if}
             {:else if app.runView === 'cdn'}
               {#if run.cdn?.version === 2 && Object.keys(run.cdn.resolvers).length}
                 <CdnPanel {run} cdn={run.cdn} onopen={open} />
@@ -501,7 +498,6 @@
                       No CDN results: none of the resolvers answered the CDN lookups.
                     {/if}
                   </p>
-                  {#if running}<Working {run} />{/if}
                 </div>
               {/if}
             {:else if app.runView === 'caps'}
@@ -510,7 +506,6 @@
               {:else}
                 <div class="empty">
                   <p>Capability probes run after the latency tests.</p>
-                  <Working {run} />
                 </div>
               {/if}
             {:else if app.runView === 'numbers'}
@@ -754,14 +749,6 @@
   .empty h2 {
     font-size: var(--t-xl);
     color: var(--ink);
-  }
-  /* The working line keeps to the bottom edge of the pane while the ladder is taller than it, then takes its place
-     under the sheet. */
-  .under {
-    position: sticky;
-    bottom: 0;
-    padding: 2px 32px 0;
-    background: var(--bg);
   }
   @media (max-width: 560px) {
     .ladder {

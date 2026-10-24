@@ -5,7 +5,7 @@
   import { shortcut, shortcutParts } from '../lib/keys';
   import type { Check, Resolver, TestKind, Transport } from '../lib/types';
   import CachedNames from './CachedNames.svelte';
-  import { TEST_HINT, TEST_LABEL, TRANSPORT_LABEL, duration, label, ms, runEstimateMs } from '../lib/format';
+  import { TEST_HINT, TEST_LABEL, TRANSPORT_LABEL, documented, duration, label, ms, runEstimateMs } from '../lib/format';
   import { onResolverContext } from '../lib/resolverMenu';
   import { latestChecks } from '../lib/measured';
   import Icon from './Icon.svelte';
@@ -38,7 +38,7 @@
   const custom = $derived(resolvers.filter((r) => r.group === 'custom'));
   const providers = $derived.by(() => {
     const m = new Map<string, Resolver[]>();
-    for (const r of resolvers.filter((r) => r.group === 'public' || r.group === 'legacy')) {
+    for (const r of resolvers.filter((r) => documented(r))) {
       if (!m.has(r.provider)) m.set(r.provider, []);
       m.get(r.provider)!.push(r);
     }
@@ -67,7 +67,7 @@
   const sendsEcs = (r: Resolver, measured: Map<string, Check>) => {
     const m = measured.get(r.id);
     if (m) return m.present === true;
-    return (r.group === 'public' || r.group === 'legacy') && r.published.ecs === true;
+    return documented(r) && r.published.ecs === true;
   };
   async function pickEcs() {
     const measured = await latestChecks(app.boot?.runs ?? [], 'ecs');
@@ -513,7 +513,7 @@
   <div class="rrow" class:on={selected.has(r.id)} data-resolver={r.id}>
     <label>
       <input type="checkbox" aria-label="{label(r.provider, r.variant)}, {r.ipv4[0] ?? r.ipv6[0] ?? r.name}" checked={selected.has(r.id)} onchange={() => toggle(r.id)} />
-      <span class="rname">{r.group === 'public' || r.group === 'legacy' ? r.variant || r.provider : label(r.provider, r.variant)}</span>
+      <span class="rname">{documented(r) ? r.variant || r.provider : label(r.provider, r.variant)}</span>
       <span class="rip mono">{r.ipv4[0] ?? r.ipv6[0] ?? r.name}</span>
       <span class="chips">
         {#if !r.udp}<span class="chip enc" title={r.notes ?? ''}>encrypted only</span>{/if}

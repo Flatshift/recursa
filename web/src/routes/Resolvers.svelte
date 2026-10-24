@@ -9,7 +9,7 @@
   import { PUBLISHED_ONLY } from '../lib/caps';
   import { HIT_SHARE, buildRows } from '../lib/verdict';
   import { status, stateLabel, stateGlyph, localNote, elsewhereNote } from '../lib/status.svelte';
-  import { ago } from '../lib/format';
+  import { TRANSPORT_LABEL, ago, documented } from '../lib/format';
   import Cell from '../components/Cell.svelte';
   import Glyph from '../components/Glyph.svelte';
   import Provenance from '../components/Provenance.svelte';
@@ -60,12 +60,9 @@
   function encrypted(r: Resolver): { label: string; verified: boolean }[] {
     const run = last && inLast(r) ? last : null;
     const out: { label: string; verified: boolean }[] = [];
-    for (const [key, lbl] of [
-      ['dot', 'DoT'],
-      ['doh', 'DoH'],
-    ] as const) {
+    for (const key of ['dot', 'doh'] as const) {
       const c = capCell(run, r, key);
-      if (c.status === 'pass') out.push({ label: lbl, verified: c.prov === 'verified' });
+      if (c.status === 'pass') out.push({ label: TRANSPORT_LABEL[key], verified: c.prov === 'verified' });
     }
     for (const p of PUBLISHED_ONLY) if (p.get(r.published)) out.push({ label: p.key === 'dnscrypt' ? 'DNSCrypt' : p.key.replace('doq', 'DoQ').replace('odoh', 'ODoH'), verified: false });
     return out;
@@ -79,7 +76,7 @@
   const split = $derived(!!open && !mobile);
   let bodyW = $state(1200);
   const narrow = $derived(bodyW < 720);
-  const name = (r: Resolver) => (r.group === 'public' || r.group === 'legacy' ? r.variant || r.provider : `${r.provider} ${r.variant}`);
+  const name = (r: Resolver) => (documented(r) ? r.variant || r.provider : `${r.provider} ${r.variant}`);
   const picks = $derived<[string, Pick[]][]>(groups.map(([g, rs]) => [g, rs.map((r) => ({ id: r.id, name: name(r), sub: r.ipv4[0] ?? r.ipv6[0] ?? r.name }))]));
   function onKey(e: KeyboardEvent) {
     if ((e.target as HTMLElement)?.tagName === 'INPUT' || menu.open) return;
@@ -191,7 +188,7 @@
                         >{#if elsewhereNote(feed)}<span class="away">{elsewhereNote(feed)}</span>{/if}
                       {:else if r.status_feed && !status.data}
                         <span class="muted">{status.error ? 'unavailable' : 'checking…'}</span>
-                      {:else if r.group === 'public' || r.group === 'legacy'}
+                      {:else if documented(r)}
                         <span class="muted" title="This operator publishes no status page">none</span>
                       {:else}
                         <span class="muted">—</span>

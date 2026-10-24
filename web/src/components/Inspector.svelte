@@ -96,7 +96,7 @@
 </aside>
 
 <style>
-  /* Beside the shortlist it takes the rest of the window; the text stays within a readable measure. */
+  /* Beside the shortlist it takes the rest of the window; tables use the width, prose keeps its measure in ResolverDetail. */
   .inspector {
     position: relative;
     flex: 1;
@@ -187,7 +187,6 @@
   .inner {
     padding: 0 28px 40px;
     height: 100%;
-    max-width: 816px;
   }
   .head {
     display: flex;

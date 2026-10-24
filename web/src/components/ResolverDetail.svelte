@@ -595,6 +595,10 @@
   .detail {
     padding-bottom: 24px;
   }
+  /* Tables take the pane's width; running text stays within a readable measure. */
+  p {
+    max-width: 72ch;
+  }
   .top {
     display: flex;
     gap: 12px;
@@ -740,6 +744,11 @@
   .mini.edges td:nth-child(2),
   .mini.edges th:nth-child(2) {
     text-align: left;
+  }
+  /* A number and its note each stay on one line; the edge column absorbs the width. */
+  .mini .num,
+  .mini.edges th:first-child {
+    white-space: nowrap;
   }
   .mini .key {
     margin-right: 6px;

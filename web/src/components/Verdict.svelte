@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Verdict } from '../lib/verdict';
-  import { CDN_ROUND_TRIPS, HIT_SHARE, JITTER_WEIGHT, MIX_LABEL, RELIABLE, TAIL_WEIGHT, TIMEOUT_COST_MS, WEIGHTS } from '../lib/verdict';
+  import { CDN_ROUND_TRIPS, HIT_SHARE, MIX_LABEL, RELIABLE, TIMEOUT_COST_MS, WEIGHTS } from '../lib/verdict';
   import { pct } from '../lib/format';
   import { app } from '../lib/store.svelte';
   import Provenance from './Provenance.svelte';
@@ -18,7 +18,6 @@
     caution = null,
     onopen,
     children,
-    status,
   }: {
     v: Verdict | null;
     /** While the run is measuring: what to say in place of the verdict. The picks hold ghosts. */
@@ -27,8 +26,6 @@
     caution?: string | null;
     onopen: (id: string) => void;
     children?: Snippet;
-    /** While the run keeps working after the latency rounds: the line naming the check under way. */
-    status?: Snippet;
   } = $props();
 
   const sentence = $derived(v?.sentence ?? live?.sentence ?? '');
@@ -36,7 +33,7 @@
   // Phone: a long explanation shows three lines until asked for the rest, so the ranking reaches the first screen.
   let more = $state(false);
   const clamp = $derived(mobile && !more && detail.length > 150);
-  const ghostGoals = $derived(['Fastest answers', ...(cdn ? ['Nearest CDN edges'] : []), 'Best protection', 'Most private', 'Steadiest']);
+  const ghostGoals = $derived(['Fastest answers', 'Fastest cache', 'Fastest fresh lookups', ...(cdn ? ['Nearest CDN edges'] : []), 'Best protection', 'Most private', 'Steadiest']);
 </script>
 
 <section class="verdict" aria-labelledby="verdict-h" aria-busy={!v}>
@@ -49,7 +46,6 @@
         <p class="detail" class:clamp>{detail}</p>
         {#if clamp}<button class="more" onclick={() => (more = true)}>More</button>{/if}
       {/if}
-      {#if status}{@render status()}{/if}
       {#if caution && mobile}
         <details class="caution-d">
           <summary><Icon name="info" size={14} />No reliability record</summary>
@@ -68,16 +64,20 @@
           <p>
             Fastest answers ranks by a speed score, in ms: cached
             {pct(WEIGHTS.cached, 0)}, uncached {pct(WEIGHTS.uncached, 0)}, TLD {pct(WEIGHTS.tld, 0)}. Cached answers are most of what
-            you get, uncached lookups are the delays you notice, and TLD lookups show how fast a resolver reaches a top-level
-            domain's own servers when it has to.
+            you get, uncached lookups are the delays you notice, and TLD lookups are a small share of real traffic.
           </p>
           <p>
-            Each test counts its median pulled {pct(TAIL_WEIGHT, 0)} of the way toward its 95th percentile, plus {pct(JITTER_WEIGHT, 0)}
-            of its standard deviation, so consistency counts: a steady resolver beats an erratic one with the same median, and
-            one lucky fast answer counts for nothing.
+            Fastest cache and Fastest fresh lookups are the two halves of that score on their own: the cached test alone, and the
+            uncached and TLD tests at 0.8 and 0.2. The speed score is their average, and a resolver that leads one half often trails
+            the other.
           </p>
           <p>
-            Timeouts cost too: each adds {TIMEOUT_COST_MS / 1000} s, about what your computer waits before it asks again, spread over
+            Each test counts its mean after the slowest tenth of answers is pulled down to the 90th percentile, so one straggler
+            cannot move it. The 95th percentile and the jitter are shown beside the score rather than folded in. A test in
+            which a resolver began refusing or stopped answering is left out of its score and marked limited.
+          </p>
+          <p>
+            Timeouts and failed answers cost too: each adds {TIMEOUT_COST_MS / 1000} s, about what your computer waits before it asks again, spread over
             every query sent. A resolver that drops 1% of queries carries {TIMEOUT_COST_MS / 100} ms more.
           </p>
           <p>
@@ -110,11 +110,12 @@
     {#if v?.picks.length}
       <dl class="picks">
         {#each v.picks as p}
-          <div class="pick">
+          <div class="pick" title={p.evidence}>
             <dt>{p.goal}</dt>
             <dd>
               <button class="name" onclick={() => onopen(p.resolverId)}>{p.name}</button>
-              <span class="ev"><Provenance kind={p.verified ? 'verified' : 'published'} /> {p.evidence}</span>
+              <span class="fig" class:num={/^[\d±+]/.test(p.figure)}><Provenance kind={p.verified ? 'verified' : 'published'} />{p.figure}</span>
+              {#if p.note}<span class="note">{p.note}</span>{/if}
             </dd>
           </div>
         {/each}
@@ -125,8 +126,9 @@
           <div class="pick">
             <dt>{g}</dt>
             <dd>
-              <span class="ghost" style:width="{110 + ((i * 41) % 50)}px" style:height="12px" style:margin="3px 0 4px"></span>
-              <span class="ghost" style:width="{70 + ((i * 29) % 25)}%" style:height="8px"></span>
+              <span class="ghost" style:width="{90 + ((i * 41) % 50)}px" style:height="12px" style:margin="3px 0 5px"></span>
+              <span class="ghost" style:width="{48 + ((i * 17) % 20)}px" style:height="13px" style:margin="0 0 5px"></span>
+              <span class="ghost" style:width="{60 + ((i * 29) % 30)}%" style:height="8px"></span>
             </dd>
           </div>
         {/each}
@@ -206,31 +208,33 @@
     font-size: var(--t-xs);
     color: var(--ink-3);
   }
+  /* One small card per goal: the goal, who wins it, the deciding figure, a short note. The full sentence is the
+     card's title; the cards wrap to whatever the width allows. */
   .picks {
     margin: 0;
     display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px;
     align-content: start;
   }
   .pick {
     display: grid;
-    grid-template-columns: 132px minmax(0, 1fr);
-    gap: 12px;
-    padding: 9px 0;
-    border-top: 1px solid var(--rule);
-  }
-  .pick:first-child {
-    border-top: 0;
-    padding-top: 2px;
+    align-content: start;
+    gap: 4px;
+    min-width: 0;
+    padding: 10px 12px 11px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-lg);
   }
   dt {
     font-size: var(--t-xs);
     color: var(--ink-3);
-    padding-top: 2px;
   }
   dd {
     margin: 0;
     display: grid;
-    gap: 2px;
+    gap: 3px;
     min-width: 0;
   }
   .name {
@@ -240,6 +244,7 @@
     background: none;
     font-weight: 620;
     font-size: var(--t-sm);
+    line-height: 1.3;
     cursor: default;
     text-align: left;
   }
@@ -248,12 +253,20 @@
     text-decoration-color: var(--rule-2);
     text-underline-offset: 3px;
   }
-  .ev {
+  .fig {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin-top: 2px;
+    font-size: var(--t-base);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+  }
+  .note {
     font-size: var(--t-xs);
     color: var(--ink-2);
-    display: flex;
-    gap: 6px;
-    align-items: baseline;
+    line-height: 1.35;
   }
   /* Wide: the headline and its detail side by side, the picks in one row of columns, so no
      column runs long beside an empty one. */
@@ -279,41 +292,14 @@
       margin-top: 3px;
     }
     .picks {
-      grid-auto-flow: column;
-      grid-auto-columns: minmax(0, 1fr);
-      padding-top: 18px;
-      border-top: 1px solid var(--rule);
-    }
-    .pick,
-    .pick:first-child {
-      grid-template-columns: minmax(0, 1fr);
-      align-content: start;
-      gap: 5px;
-      padding: 0 18px;
-      border-top: 0;
-      border-left: 1px solid var(--rule);
-    }
-    .pick:first-child {
-      padding-left: 0;
-      border-left: 0;
-    }
-    .pick:last-child {
-      padding-right: 0;
-    }
-    dt {
-      padding-top: 0;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-top: 2px;
     }
   }
   @container verdict (max-width: 760px) {
     .grid {
       grid-template-columns: minmax(0, 1fr);
       gap: 20px;
-    }
-  }
-  @container verdict (max-width: 440px) {
-    .pick {
-      grid-template-columns: 1fr;
-      gap: 2px;
     }
   }
   @media (max-width: 900px) {
@@ -395,24 +381,19 @@
   }
   :global(html.mobile) .picks {
     order: 3;
-    margin-top: -6px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
   }
-  :global(html.mobile) .pick,
-  :global(html.mobile) .pick:first-child {
-    grid-template-columns: 104px minmax(0, 1fr);
-    gap: 10px;
-    padding: 9px 0;
-    border-top: 1px solid var(--rule);
+  :global(html.mobile) .pick {
+    padding: 10px 12px;
   }
   :global(html.mobile) dt {
     font-size: var(--t-sm);
-    padding-top: 1px;
   }
   :global(html.mobile) .name {
     font-size: var(--t-base);
   }
-  :global(html.mobile) .ev {
+  :global(html.mobile) .note {
     font-size: var(--t-sm);
-    display: block;
   }
 </style>

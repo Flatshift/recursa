@@ -57,6 +57,8 @@ interface Summary {
   ok: number;
   timeouts: number;
   errors: number;
+  /** Errors that cost in the score (SERVFAIL, REFUSED, other error codes, network errors); a subset of `errors`. */
+  failures: number;
   success: number;
   min: number | null;
   p25: number | null;
@@ -69,6 +71,8 @@ interface Summary {
   mean: number | null;
   sd: number | null;
   iqr: number | null;
+  wmean: number | null;
+  limited?: boolean;
 }
 
 export interface Target {
@@ -102,6 +106,8 @@ export interface Sample {
   h: number;
   /** DNS TTL of the first answer record, in seconds (absent for negative answers and older runs). */
   d?: number;
+  /** Excused by the engine: this failure hit several resolvers at once and counts as nothing. */
+  x?: boolean;
 }
 
 /** A warm-up answer: shown while the run warms up, never recorded. */
@@ -127,7 +133,7 @@ interface FilterSample {
   how: string;
 }
 
-export interface FilterCategory {
+interface FilterCategory {
   tested: number;
   blocked: number;
   source: string;
@@ -181,7 +187,7 @@ interface ResolverIntel {
   egress: IpInfo | null;
 }
 
-export interface Edge {
+interface Edge {
   ip: string;
   /** Minimum handshake RTT: the best estimate of path latency. */
   rtt_ms: number | null;
@@ -195,7 +201,7 @@ export interface Edge {
   on_net: boolean;
 }
 
-export type AsYou = 'same' | 'near' | 'different';
+type AsYou = 'same' | 'near' | 'different';
 export type HostStatus = 'ok' | 'failed' | 'blocked' | 'unreachable' | 'off_cdn';
 
 /** One hostname through one resolver. */
@@ -324,7 +330,7 @@ interface Calibration {
   at: number;
 }
 
-export interface Vantage {
+interface Vantage {
   ipv4: string | null;
   ipv6: string | null;
   ipv6_reachable: boolean;
@@ -332,7 +338,7 @@ export interface Vantage {
   geo?: { country?: string } | null;
 }
 
-export interface Interception {
+interface Interception {
   verdict: 'direct' | 'intercepted' | 'partial' | 'unknown';
   checked_at: number;
   link: { interface: string; wifi: boolean } | null;
@@ -866,7 +872,7 @@ export interface SizeStep {
   ms: number | null;
 }
 
-export interface TtlLimit {
+interface TtlLimit {
   kind: 'long' | 'short';
   name: string;
   qtype: string;
@@ -874,7 +880,7 @@ export interface TtlLimit {
   resolver: number | null;
 }
 
-export interface NegativeCache {
+interface NegativeCache {
   name: string;
   rcode: string | null;
   authoritative: number | null;
@@ -902,14 +908,14 @@ export interface CacheAsk {
   fetched: boolean;
 }
 
-export interface CacheCount {
+interface CacheCount {
   rows: { name: string; asks: CacheAsk[] }[];
   /** At least this many caches answer for the address; null when TTLs don't count down. */
   caches: number | null;
   rounds: number;
 }
 
-export interface TransportCost {
+interface TransportCost {
   transport: string;
   setup_ms: number | null;
   first_ms: number | null;

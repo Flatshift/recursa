@@ -1,7 +1,7 @@
 import type { CheckStatus, Resolver, RunState } from './types';
 import { CAP } from './caps';
 import { check } from './verdict';
-import { holder, ms, pct, when } from './format';
+import { documented, holder, ms, pct, when } from './format';
 
 export interface Cell {
   status: CheckStatus;
@@ -29,8 +29,7 @@ export function capCell(run: RunState | null, r: Resolver, key: string): Cell {
   const def = CAP[key];
   // Only catalog entries have operator documentation. For the system resolver and custom
   // entries, anything not measured is unknown, never an implied "no".
-  const documented = r.group === 'public' || r.group === 'legacy';
-  const pub = documented ? def?.published?.(r.published, r) : null;
+  const pub = documented(r) ? def?.published?.(r.published, r) : null;
   if (pub != null) {
     const status: CheckStatus = def.goodWhenPresent === undefined ? 'info' : pub === def.goodWhenPresent ? 'pass' : 'fail';
     const filterKey = key.startsWith('filter_');

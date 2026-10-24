@@ -94,6 +94,11 @@ impl std::fmt::Display for XErr {
     }
 }
 
+/// The unspecified bind address of the same family as `addr`.
+pub(crate) fn unspecified(addr: &std::net::IpAddr) -> &'static str {
+    if addr.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" }
+}
+
 fn io_err(e: io::Error) -> XErr {
     match e.kind() {
         io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => XErr::Timeout,
@@ -510,7 +515,7 @@ pub struct UdpX {
 #[cfg(windows)]
 impl UdpX {
     pub fn connect(addr: SocketAddr) -> io::Result<Self> {
-        let bind: SocketAddr = if addr.is_ipv4() { "0.0.0.0:0".parse().unwrap() } else { "[::]:0".parse().unwrap() };
+        let bind: SocketAddr = unspecified(&addr.ip()).parse().unwrap();
         let sock = std::net::UdpSocket::bind(bind)?;
         sock.connect(addr)?;
         let kernel_ts = stamp_arrivals(&sock);

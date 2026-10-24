@@ -335,7 +335,7 @@ impl AppState {
             return Err(ApiError::new(409, "A run is already in progress."));
         };
         let Some(measure) = lock::wait(&lock::measure_path(), Duration::from_secs(10)).await else {
-            return Err(ApiError::new(409, "Another Recursa window or terminal is measuring right now. Try again when it finishes."));
+            return Err(ApiError::new(409, BUSY));
         };
         // Servers asked a few minutes ago, or that said stop, are left alone; if that is all of them, there is nothing to do.
         let (entries, skipped) = self.ntp_guard(&entries);
@@ -464,7 +464,7 @@ impl AppState {
         };
         // Wait out a monitoring cycle (seconds at most); refuse if another process is running a benchmark.
         let Some(measure) = lock::wait(&lock::measure_path(), Duration::from_secs(10)).await else {
-            return Err(ApiError::new(409, "Another Recursa window or terminal is measuring right now. Try again when it finishes."));
+            return Err(ApiError::new(409, BUSY));
         };
         let app = self.clone();
         let deps = bench::Deps {
@@ -737,7 +737,7 @@ impl AppState {
             return Err(ApiError::new(409, "Wait for the current run to finish."));
         };
         let Some(measure) = lock::wait(&lock::measure_path(), Duration::from_secs(10)).await else {
-            return Err(ApiError::new(409, "Another Recursa window or terminal is measuring right now. Try again when it finishes."));
+            return Err(ApiError::new(409, BUSY));
         };
         let label = r.label();
         let held = (FlagGuard::set(&self.measuring), claim, measure);
@@ -772,7 +772,7 @@ impl AppState {
             return Err(ApiError::new(409, "Wait for the current run to finish."));
         };
         let Some(measure) = lock::wait(&lock::measure_path(), Duration::from_secs(10)).await else {
-            return Err(ApiError::new(409, "Another Recursa window or terminal is measuring right now. Try again when it finishes."));
+            return Err(ApiError::new(409, BUSY));
         };
         let held = (FlagGuard::set(&self.measuring), claim, measure);
         let res = Resolve::new(self.system.read().unwrap().clone());
@@ -805,7 +805,7 @@ impl AppState {
             return Err(ApiError::new(409, "Wait for the current run to finish."));
         };
         let Some(measure) = lock::wait(&lock::measure_path(), Duration::from_secs(10)).await else {
-            return Err(ApiError::new(409, "Another Recursa window or terminal is measuring right now. Try again when it finishes."));
+            return Err(ApiError::new(409, BUSY));
         };
         let held = (FlagGuard::set(&self.measuring), claim, measure);
         let cancel = Arc::new(AtomicBool::new(false));
@@ -833,7 +833,7 @@ impl AppState {
             return Err(ApiError::new(409, "Wait for the current run to finish."));
         };
         let Some(measure) = lock::wait(&lock::measure_path(), Duration::from_secs(10)).await else {
-            return Err(ApiError::new(409, "Another Recursa window or terminal is measuring right now. Try again when it finishes."));
+            return Err(ApiError::new(409, BUSY));
         };
         let held = (FlagGuard::set(&self.measuring), claim, measure);
         let cancel = Arc::new(AtomicBool::new(false));
@@ -983,13 +983,13 @@ impl AppState {
         let samples = v["samples"].as_array().unwrap_or(&empty);
         let q = |x: &Value| format!("\"{}\"", x.as_str().unwrap_or("").replace('"', "\"\""));
         let mut out = String::with_capacity(64 + samples.len() * 96);
-        out.push_str("resolver_id,provider,variant,transport,family,ip,test,round,outcome,rtt_ms,at_ms\n");
+        out.push_str("resolver_id,provider,variant,transport,family,ip,test,round,outcome,rtt_ms,at_ms,excused\n");
         for s in samples {
             let Some(t) = s["t"].as_u64().and_then(|i| targets.get(i as usize)) else { continue };
             let us = s["us"].as_u64().unwrap_or(0);
             let rtt = if us > 0 { format!("{:.3}", us as f64 / 1000.0) } else { String::new() };
             out.push_str(&format!(
-                "{},{},{},{},{},{},{},{},{},{},{}\n",
+                "{},{},{},{},{},{},{},{},{},{},{},{}\n",
                 q(&t["resolver_id"]),
                 q(&t["provider"]),
                 q(&t["variant"]),
@@ -1000,7 +1000,8 @@ impl AppState {
                 s["i"],
                 s["o"].as_str().unwrap_or(""),
                 rtt,
-                s["at"]
+                s["at"],
+                u8::from(s["x"].as_bool().unwrap_or(false))
             ));
         }
         Some(Export { filename: format!("recursa-{id}.csv"), mime: "text/csv; charset=utf-8", body: out })
@@ -1050,15 +1051,12 @@ struct NtpRequest {
     custom: Vec<String>,
     #[serde(default = "ntp_samples")]
     samples: u32,
-    #[serde(default = "yes_")]
+    #[serde(default = "crate::bench::yes")]
     nts: bool,
 }
 
 fn ntp_samples() -> u32 {
     4
-}
-fn yes_() -> bool {
-    true
 }
 
 /// A saved list of Cached-test names.
@@ -1077,6 +1075,9 @@ struct NameLists {
 struct ParseNames {
     text: String,
 }
+
+/// The 409 body for every write that needs the measuring lock.
+const BUSY: &str = "Another Recursa window or terminal is measuring right now. Try again when it finishes.";
 
 /// Saved lists kept, and the longest text that is read as one.
 const MAX_LISTS: usize = 20;

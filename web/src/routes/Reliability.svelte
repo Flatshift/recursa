@@ -4,7 +4,7 @@
   import { api, confirmAction, mobile } from '../lib/api';
   import { status, stateLabel, stateGlyph, localNote } from '../lib/status.svelte';
   import type { MonitorConfig, MonitorHist, MonitorHistory } from '../lib/types';
-  import { ago, day, list, ms, pct, plural, when } from '../lib/format';
+  import { ago, day, documented, label, list, ms, pct, plural, when } from '../lib/format';
   import Glyph from '../components/Glyph.svelte';
   import Icon from '../components/Icon.svelte';
   import Toolbar from '../components/Toolbar.svelte';
@@ -98,11 +98,11 @@
   const resolvers = $derived(app.resolvers);
   const nameOf = (id: string) => {
     const r = resolvers.find((x) => x.id === id);
-    return r ? `${r.provider} ${r.variant}`.trim() : id;
+    return r ? label(r.provider, r.variant) : id;
   };
   const feeds = $derived(status.data?.live.feeds ?? []);
   const feedless = $derived(
-    [...new Set(resolvers.filter((r) => (r.group === 'public' || r.group === 'legacy') && !r.status_feed).map((r) => r.provider))],
+    [...new Set(resolvers.filter((r) => documented(r) && !r.status_feed).map((r) => r.provider))],
   );
 
   // What each operator published about a resolver: curated incidents, plus its live feed's.
