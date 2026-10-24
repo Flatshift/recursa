@@ -320,12 +320,12 @@ impl Seen {
     }
 }
 
-/// Resolve every CDN hostname through one resolver, `rounds` times, interleaved.
+/// Resolve every CDN hostname through one resolver, `RESOLVE_ROUNDS` times, interleaved.
 /// Returns CDN id → hostname → mapping.
-pub fn resolve_all(ex: &mut dyn Exchanger, timeout: Duration, rounds: u32) -> BTreeMap<String, BTreeMap<String, HostMapping>> {
+pub fn resolve_all(ex: &mut dyn Exchanger, timeout: Duration) -> BTreeMap<String, BTreeMap<String, HostMapping>> {
     let order = interleaved();
     let mut seen: BTreeMap<&str, Seen> = BTreeMap::new();
-    for _ in 0..rounds.max(1) {
+    for _ in 0..RESOLVE_ROUNDS {
         for (_, h) in &order {
             seen.entry(h.name).or_default().record(lookup(ex, h.name, timeout));
         }
@@ -495,6 +495,7 @@ fn cluster(ip: &str) -> Option<[u8; 3]> {
 }
 
 const PROBE_THREADS: usize = 8;
+const RESOLVE_ROUNDS: u32 = 2;
 const PASS_ONE_MS: f64 = 1200.0;
 
 enum Probe {
@@ -543,6 +544,7 @@ pub fn time_edges(ips: &BTreeSet<String>) -> BTreeMap<String, Edge> {
     time_port(ips, 443)
 }
 
+/// `time_edges` against any port, so the test can use a listener of its own.
 fn time_port(ips: &BTreeSet<String>, port: u16) -> BTreeMap<String, Edge> {
     let mut edges: BTreeMap<String, Edge> = ips.iter().map(|ip| (ip.clone(), Edge { ip: ip.clone(), ..Default::default() })).collect();
     let mut order: Vec<(String, SocketAddr)> =
@@ -1116,7 +1118,7 @@ mod tests {
     #[test]
     fn resolving_blocks_private_answers_and_retries_once() {
         let mut ex = Stub { ip: [10, 0, 0, 1], fail_first: 0, calls: 0 };
-        let m = resolve_all(&mut ex, Duration::from_millis(50), 2);
+        let m = resolve_all(&mut ex, Duration::from_millis(50));
         let n = hosts_in(&m);
         assert_eq!(n, 16);
         assert!(m.values().flat_map(|h| h.values()).all(|x| x.status == HostStatus::Blocked && x.ips.is_empty()));
@@ -1124,7 +1126,7 @@ mod tests {
 
         // A public address on the queried name: only the CDN whose own name it is passes.
         let mut ex = Stub { ip: [23, 1, 1, 1], fail_first: 1, calls: 0 };
-        let m = resolve_all(&mut ex, Duration::from_millis(50), 2);
+        let m = resolve_all(&mut ex, Duration::from_millis(50));
         assert_eq!(ex.calls as usize, n * 2 + 1); // one timeout, retried
         let status = |cdn: &str, host: &str| m[cdn][host].status;
         assert_eq!(status("akamai", "www.apple.com"), HostStatus::OffCdn);

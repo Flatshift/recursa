@@ -209,7 +209,7 @@ impl AppState {
             forwarders: RwLock::new(HashMap::new()),
             vantage: RwLock::new(Value::Null),
             interception: RwLock::new(Value::Null),
-            calibration: RwLock::new(calibrate.then(|| crate::calibrate::run(200).ok()).flatten()),
+            calibration: RwLock::new(calibrate.then(|| crate::calibrate::run(crate::calibrate::STARTUP_SAMPLES).ok()).flatten()),
             ntp: Mutex::new(None),
             monitor: watch::Sender::new(monitor_cfg),
             ntp_monitor: watch::Sender::new(ntp_monitor_cfg),
@@ -225,7 +225,7 @@ impl AppState {
         let app = self.clone();
         tokio::spawn(async move {
             if app.calibration.read().unwrap().is_none()
-                && let Ok(Ok(c)) = tokio::task::spawn_blocking(|| crate::calibrate::run(200)).await
+                && let Ok(Ok(c)) = tokio::task::spawn_blocking(|| crate::calibrate::run(crate::calibrate::STARTUP_SAMPLES)).await
             {
                 *app.calibration.write().unwrap() = Some(c);
             }
@@ -560,7 +560,7 @@ impl AppState {
             ("GET", ["env"]) => ok(self.env()),
             ("POST", ["calibrate"]) => {
                 self.idle()?;
-                let c = tokio::task::spawn_blocking(|| crate::calibrate::run(300))
+                let c = tokio::task::spawn_blocking(|| crate::calibrate::run(crate::calibrate::RECHECK_SAMPLES))
                     .await
                     .map_err(|e| ApiError::new(500, e.to_string()))?
                     .map_err(|e| ApiError::new(500, e.to_string()))?;
@@ -782,7 +782,7 @@ impl AppState {
         let label = r.label();
         let out = self
             .measure_blocking(move |cancel| {
-                let timeout = Duration::from_millis(2000);
+                let timeout = DEEP_DIVE_TIMEOUT;
                 let (mut ex, transport) = crate::endpoints::open_best(&r, &[], timeout, false)?;
                 Some(crate::deepdive::run(ex.as_mut(), transport, timeout, cancel))
             })
@@ -819,9 +819,7 @@ impl AppState {
         // Download the feeds first: the intel cache doesn't fetch while measuring.
         let feeds = if prior.is_none() { self.intel.threat_feeds().await } else { Default::default() };
         let out = self
-            .measure_blocking(move |cancel| {
-                crate::deepdive::live_blocking(&r, prior, feeds, opts.plain, Duration::from_millis(2000), cancel)
-            })
+            .measure_blocking(move |cancel| crate::deepdive::live_blocking(&r, prior, feeds, opts.plain, DEEP_DIVE_TIMEOUT, cancel))
             .await?;
         let (result, sample) = out.map_err(|m| ApiError::new(502, m))?;
         if sample.categories.values().any(|c| !c.hosts.is_empty()) {
@@ -833,7 +831,7 @@ impl AppState {
     /// The Deep Dive's further checks (see [`crate::deepdive::deep_checks`]). Holds the run claim like the dive itself.
     async fn deep_checks(&self, id: &str) -> Result<crate::deepdive::DeepChecks, ApiError> {
         let r = self.find_resolver(id)?;
-        let out = self.measure_blocking(move |cancel| crate::deepdive::deep_checks(&r, Duration::from_millis(2000), cancel)).await?;
+        let out = self.measure_blocking(move |cancel| crate::deepdive::deep_checks(&r, DEEP_DIVE_TIMEOUT, cancel)).await?;
         out.map_err(|m| ApiError::new(502, m))
     }
 
@@ -1060,6 +1058,8 @@ struct ParseNames {
 }
 
 /// The 409 body when this process already has a run, look or trace going.
+/// Per-query timeout for the deep-dive checks.
+const DEEP_DIVE_TIMEOUT: Duration = Duration::from_millis(2000);
 const RUN_ACTIVE: &str = "Wait for the current run to finish.";
 /// The 409 body when another process holds the machine-wide measure lock.
 const BUSY: &str = "Another Recursa window or terminal is measuring right now. Try again when it finishes.";
