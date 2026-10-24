@@ -2,7 +2,7 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.3.13 (2026-10-24)
 
 - **Pick cards.** The Overview picks are compact cards: goal, resolver, deciding figure and a short note, with the
   full sentence on hover.
