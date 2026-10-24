@@ -2,23 +2,28 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
-## 0.3.12 (2026-10-23)
+## 0.3.12 (2026-10-24)
 
 Security fixes from an audit, and dependency updates.
 
 - **Browser UI token.** The CLI no longer puts its session token in the page it serves, where another user on the same
-  computer could read it from the port, and no launch link carries a token. The link Recursa opens, and the one it prints for
-  another browser, each carry a one-time code (`#code=`) that the page trades for its own session. A link opened twice
-  ends the session it started and Recursa prints a new one.
+  computer could read it from the port, and no launch link carries a token. The link Recursa opens, and the one it
+  prints for another browser, each carry a one-time code (`#code=`) that the page trades for its own session. A link
+  opened twice ends the session it started, its live streams included, and Recursa prints a new one. The opened link
+  expires after two minutes if no page used it. Exports send the token in a header, so it stays out of the download
+  list.
 - **TCP and DoT deadlines.** A server that sent a reply one byte at a time could hold a query, and so a whole run, for
   hours. Each exchange and TLS handshake now has a deadline.
-- **NTS.** A forged or unverifiable reply no longer ends an authenticated check; it is discarded, as RFC 8915 asks. A
-  public NTS-KE server can't name a loopback or LAN address as its time server. DNS query IDs, NTS identifiers and DNS
-  cookies come from the system's secure random source.
+- **NTS.** A forged or unverifiable reply, a Kiss-o'-Death or an unsynchronized one included, no longer ends an
+  authenticated check; it is discarded, as RFC 8915 asks. Only an NTS NAK may come unauthenticated. A public NTS-KE
+  server can't name a loopback, LAN or multicast address as its time server, and when it names no server, or itself,
+  the queries go to the address the key exchange used. DNS query IDs, NTS identifiers and DNS cookies come from the
+  system's secure random source.
 - **Smaller fixes.** Feed downloads stop at 16 MB while they are read. Incident links from status pages must be https.
   The data directory is private (0700) on macOS and Linux and is never in the shared temp directory. The desktop app
-  opens other `localhost` pages in the browser, not in its window. The Deep Dive doesn't query private addresses a
-  resolver gives it. A backward clock step can't wrap a round trip.
+  opens other `localhost` pages in the browser, not in its window, and its Settings window's outside links open in the
+  browser again. Recursa doesn't query local, multicast or broadcast addresses a resolver under test gives it (Deep
+  Dive, CDN mapping, cached-test TTLs). A backward clock step can't wrap a round trip. `npm run dev` works again.
 - **Dependencies.** rustls 0.23.46, rustls-webpki 0.103.16 and webpki-roots 1.0.11 fix eight RustSec advisories. Tauri
   2.12.5, tokio 1.54.1, Vite 8, TypeScript 6 and Vitest 5. CI builds on Node 26 with its actions pinned by commit.
   quick-xml 0.39 (RUSTSEC-2026-0194, -0195), used by Routinator's RRDP client, waits for a new `rpki` release.
