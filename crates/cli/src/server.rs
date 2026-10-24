@@ -25,6 +25,7 @@ use serde_json::{Value, json};
 use std::convert::Infallible;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 #[derive(rust_embed::Embed)]
 #[folder = "../../web/dist"]
@@ -46,10 +47,18 @@ pub fn secret() -> String {
 /// started with a URL keeps it on its command line, where other users of the computer can read it. Each code starts
 /// its own session once. A code that comes back a second time means someone else may have traded it first, so the
 /// session it started ends there, and a new link is printed.
+///
+/// That check needs the user to trade the code too. The link Recursa opens itself may never load (the opener can
+/// succeed with no display, over SSH), and then its code, which was on a command line, would let whoever read it in
+/// unnoticed: unused after [`OPENER_WINDOW`], it stops working.
 #[derive(Default)]
 pub struct Sessions {
-    links: Vec<(String, Option<String>)>,
+    /// Each link's code, the session token it started, and until when it may start one.
+    links: Vec<(String, Option<String>, Option<Instant>)>,
 }
+
+/// How long the link Recursa opens itself has to reach the page: a browser loads it within moments or never.
+const OPENER_WINDOW: Duration = Duration::from_secs(120);
 
 enum Redeemed {
     Token(String),
@@ -58,23 +67,39 @@ enum Redeemed {
 }
 
 impl Sessions {
-    /// A new launch link on `port`.
+    /// A new launch link on `port`, good until it is used.
     pub fn link(&mut self, port: u16) -> String {
+        self.add(port, None)
+    }
+
+    /// A launch link on `port` for the browser Recursa opens itself: unused after [`OPENER_WINDOW`], it stops working.
+    pub fn opener_link(&mut self, port: u16) -> String {
+        self.add(port, Some(Instant::now() + OPENER_WINDOW))
+    }
+
+    fn add(&mut self, port: u16, until: Option<Instant>) -> String {
         let code = secret();
         let url = format!("http://127.0.0.1:{port}/#code={code}");
-        self.links.push((code, None));
+        self.links.push((code, None, until));
         url
     }
 
     fn valid(&self, token: &str) -> bool {
-        self.links.iter().any(|(_, t)| t.as_deref().is_some_and(|t| token_eq(t, token)))
+        self.links.iter().any(|(_, t, _)| t.as_deref().is_some_and(|t| token_eq(t, token)))
     }
 
     fn redeem(&mut self, code: &str) -> Redeemed {
-        let Some(i) = self.links.iter().position(|(c, _)| token_eq(c, code)) else { return Redeemed::Invalid };
-        if self.links[i].1.is_some() {
-            self.links.remove(i);
-            return Redeemed::Reused;
+        let Some(i) = self.links.iter().position(|(c, ..)| token_eq(c, code)) else { return Redeemed::Invalid };
+        match &self.links[i] {
+            (_, Some(_), _) => {
+                self.links.remove(i);
+                return Redeemed::Reused;
+            }
+            (_, None, Some(until)) if Instant::now() >= *until => {
+                self.links.remove(i);
+                return Redeemed::Invalid;
+            }
+            _ => {}
         }
         let token = secret();
         self.links[i].1 = Some(token.clone());
@@ -284,5 +309,16 @@ mod tests {
         assert!(s.valid(&tb), "and only that one");
         assert!(matches!(s.redeem(code_of(&a)), Redeemed::Invalid));
         assert!(matches!(s.redeem("nope"), Redeemed::Invalid));
+    }
+
+    #[test]
+    fn an_opener_link_left_unused_stops_working() {
+        let mut s = Sessions::default();
+        let late = s.add(8053, Some(Instant::now()));
+        assert!(matches!(s.redeem(code_of(&late)), Redeemed::Invalid), "past its window");
+        assert!(matches!(s.redeem(code_of(&late)), Redeemed::Invalid), "and gone");
+        let prompt = s.opener_link(8053);
+        let Redeemed::Token(t) = s.redeem(code_of(&prompt)) else { panic!("an opener link used in time starts a session") };
+        assert!(s.valid(&t));
     }
 }

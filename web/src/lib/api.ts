@@ -1,5 +1,5 @@
 // The UI's only transport layer. In the browser (the `recursa` CLI) calls go to the local
-// HTTP server with a per-launch token; in the desktop app they go over Tauri IPC to the same
+// HTTP server with a session token traded for a launch code; in the desktop app they go over Tauri IPC to the same
 // engine routes. Nothing else in the UI knows which is in use.
 
 import { Channel, invoke } from '@tauri-apps/api/core';
