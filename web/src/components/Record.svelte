@@ -336,7 +336,7 @@
 </div>
 
 {#if tip}
-  <div class="tip" style:left="{tip.x}px" style:top="{tip.y}px" role="tooltip">{tip.text}</div>
+  <div class="tip chart-tip" style:left="{tip.x}px" style:top="{tip.y}px" role="tooltip">{tip.text}</div>
 {/if}
 
 <style>
@@ -548,17 +548,8 @@
     font-weight: 600;
   }
   .tip {
-    position: fixed;
-    z-index: var(--z-tooltip);
-    transform: translate(-50%, calc(-100% - 8px));
-    pointer-events: none;
-    background: var(--surface);
     color: var(--ink);
-    border-radius: var(--r-md);
-    box-shadow: var(--shadow-pop);
     padding: 5px 9px;
-    font-size: var(--t-xs);
-    white-space: nowrap;
   }
   @container record (max-width: 760px) {
     .head,

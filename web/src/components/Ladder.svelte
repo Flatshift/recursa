@@ -498,7 +498,7 @@
 </div>
 
 {#if tip}
-  <div class="tip" style:left="{tip.x}px" style:top="{tip.y}px" role="tooltip">
+  <div class="chart-tip" style:left="{tip.x}px" style:top="{tip.y}px" role="tooltip">
     <div class="tt-h"><span class="key {tip.s.k}"></span>{TEST_LABEL[tip.s.k]} · round {tip.s.i + 1}</div>
     <div class="tt-v num">{ms(tip.s.us / 1000)}</div>
     <div class="tt-s">{label(tip.row.target.provider, tip.row.target.variant)} · {outcomeLabel[tip.s.o]}</div>
@@ -894,30 +894,10 @@
   .nm .who {
     display: block;
   }
-  .tip {
-    position: fixed;
-    z-index: var(--z-tooltip);
-    transform: translate(-50%, calc(-100% - 8px));
-    pointer-events: none;
-    background: var(--surface);
-    border-radius: var(--r-md);
-    box-shadow: var(--shadow-pop);
-    padding: 7px 10px;
-    font-size: var(--t-xs);
-    white-space: nowrap;
-  }
   .tt-h {
     display: flex;
     align-items: center;
     gap: 6px;
-    color: var(--ink-2);
-  }
-  .tt-v {
-    font-size: var(--t-md);
-    font-weight: 620;
-  }
-  .tt-s {
-    color: var(--ink-3);
   }
   @container ladder (max-width: 680px) {
     /* Label on its own line; plot and numbers share the row below. Set on the rows: a container query can't style
