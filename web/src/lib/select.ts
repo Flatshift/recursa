@@ -1,10 +1,10 @@
 // Arrow keys walk the resolvers on screen, in the order they are drawn, and move the selection the Inspector follows.
-import { app } from "./store.svelte";
+import { app } from './store.svelte';
 
-export function stepInspect(dir: 1 | -1) {
+function stepInspect(dir: 1 | -1) {
   const ids: string[] = [];
   for (const el of document.querySelectorAll<HTMLElement>(
-    "[data-resolver]:not(.rrow)",
+    '[data-resolver]:not(.rrow)',
   )) {
     const id = el.dataset.resolver;
     if (id && el.getClientRects().length && !ids.includes(id)) ids.push(id);
@@ -19,19 +19,19 @@ export function stepInspect(dir: 1 | -1) {
 
 /** ⌘↵ (Ctrl+↵ off a Mac) opens the selected resolver's page; ↑↓ move the selection. True when handled. */
 export function selectKey(e: KeyboardEvent): boolean {
-  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && app.inspect) {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && app.inspect) {
     e.preventDefault();
     app.navigate(`/resolver/${app.inspect}`);
     return true;
   }
   if (
-    (e.key === "ArrowDown" || e.key === "ArrowUp") &&
+    (e.key === 'ArrowDown' || e.key === 'ArrowUp') &&
     !e.metaKey &&
     !e.ctrlKey &&
     !e.altKey
   ) {
     e.preventDefault();
-    stepInspect(e.key === "ArrowDown" ? 1 : -1);
+    stepInspect(e.key === 'ArrowDown' ? 1 : -1);
     return true;
   }
   return false;

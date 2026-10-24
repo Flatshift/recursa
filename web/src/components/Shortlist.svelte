@@ -2,6 +2,7 @@
   // The list a page collapses to while a resolver is inspected beside it: one line per resolver with its score as a
   // thin bar, so the detail pane gets the width. The header takes the full view back. ↑↓ walk it (lib/select).
   import Icon from './Icon.svelte';
+  import { score } from '../lib/format';
 
   export type Pick = { id: string; name: string; sub?: string; score?: number | null };
 
@@ -26,7 +27,6 @@
 
   // Bars are relative to the slowest score on the list; a row without a score draws none.
   const max = $derived(Math.max(0, ...groups.flatMap(([, ps]) => ps.map((p) => p.score ?? 0))));
-  const scoreText = (v: number) => (v < 10 ? v.toFixed(1) : Math.round(v).toString());
 </script>
 
 <nav class="shortlist" class:collapsed aria-label="Resolvers">
@@ -38,7 +38,7 @@
         <button class="row" class:sel={p.id === selected} data-resolver={p.id} aria-current={p.id === selected ? 'true' : undefined} onclick={() => onselect(p.id)}>
           <span class="top">
             <span class="nm">{p.name}</span>
-            {#if p.score != null}<span class="num sc">{scoreText(p.score)}</span>{/if}
+            {#if p.score != null}<span class="num sc">{score(p.score)}</span>{/if}
           </span>
           {#if p.score != null && max > 0}
             <span class="bar"><span class="fill" style:width="{Math.max(2, (100 * p.score) / max)}%"></span></span>

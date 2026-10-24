@@ -269,7 +269,7 @@ pub fn query(sock: &UdpSocket, timeout: Duration) -> Result<Sample, NtpError> {
 }
 
 fn connect(addr: SocketAddr) -> std::io::Result<UdpSocket> {
-    let sock = UdpSocket::bind(if addr.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" })?;
+    let sock = UdpSocket::bind(net::unspecified(&addr.ip()))?;
     sock.connect(addr)?;
     Ok(sock)
 }

@@ -4,11 +4,12 @@
   import { app } from '../lib/store.svelte';
   import { mobile } from '../lib/api';
   import type { Row } from '../lib/verdict';
-  import { CDN_ROUND_TRIPS, CONNECTION_SHARE, HIT_SHARE, MIX_LABEL, TESTS, TIMEOUT_COST_MS, WEIGHTS, timeoutCost } from '../lib/verdict';
+  import { CDN_ROUND_TRIPS, BLIP_RULE, CONNECTION_SHARE, HIT_SHARE, MIX_LABEL, RELIABLE, TESTS, TIMEOUT_COST_MS, WEIGHTS, failureCost } from '../lib/verdict';
   import type { TestKind } from '../lib/types';
-  import { TEST_LABEL, ms, pct } from '../lib/format';
+  import { TEST_LABEL, label, ms, pct } from '../lib/format';
 
   const NAME: Record<TestKind, string> = { cached: 'cached', uncached: 'uncached', tld: 'TLD' };
+  const LIMITED_TITLE = 'Began refusing or stopped answering during this test; the figures from the answered part are not scored.';
   const weightsText = TESTS.map((k) => `${NAME[k]} ${Math.round(WEIGHTS[k] * 100)}%`).join(', ');
 
   const perLookupTitle = $derived(
@@ -23,7 +24,7 @@
 
   const ks = $derived(TESTS.filter((k) => tests.includes(k)));
   const val = (r: Row, k: Key): number | string => {
-    if (k === 'name') return `${r.target.provider} ${r.target.variant} ${r.target.transport}`;
+    if (k === 'name') return `${label(r.target.provider, r.target.variant)} ${r.target.transport}`;
     if (k === 'composite') return r.composite ?? Infinity;
     if (k === 'perlookup') return r.perLookup ?? Infinity;
     if (k === 'success') return r.success;
@@ -92,7 +93,7 @@
             {#if r.baseline}<BaselineChip what={r.forwarder} />{/if}
             {#if r.intercepted}<span class="warn">answered locally</span>{/if}
           </span>
-          <span class="cscore num" title={timeoutCost(r) >= 0.05 ? `Includes ${ms(timeoutCost(r))} for timeouts` : undefined}>{ms(r.composite, false)}<small>score</small></span>
+          <span class="cscore num" title={failureCost(r) >= 0.05 ? `Includes ${ms(failureCost(r))} for timeouts and failed answers` : undefined}>{ms(r.composite, false)}<small>score</small></span>
           <span class="stats">
             <span><span class="k">Per lookup</span><span class="v num">{ms(r.perLookup, false)}</span></span>
             {#each ks as k}
@@ -107,7 +108,7 @@
       </li>
     {/each}
   </ol>
-  <p class="foot">All times in milliseconds; each test shows its median / p95. Medians and percentiles use answered queries only; timeouts, errors and a filter’s block answers count against “Answered”.</p>
+  <p class="foot">All times in milliseconds; each test shows its median / p95. Medians and percentiles use answered queries only; timeouts, errors and a filter’s block answers count against “Answered”. {BLIP_RULE}</p>
 {:else}
 <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable region must be keyboard-reachable) -->
 
@@ -116,7 +117,7 @@
     <thead>
       <tr>
         {@render head('name', 'Target')}
-        {@render head('composite', 'Score', `Speed score, in ms: ${weightsText}, each median pulled halfway toward its p95, plus a quarter of its standard deviation, plus ${TIMEOUT_COST_MS / 1000} s for each timeout spread over every query`)}
+        {@render head('composite', 'Score', `Speed score, in ms: ${weightsText}, each test's mean after its slowest tenth is pulled down to its 90th percentile, plus ${TIMEOUT_COST_MS / 1000} s for each timeout or failed answer (SERVFAIL, REFUSED, a network error), spread over every query.`)}
         {@render head('perlookup', 'Per lookup', perLookupTitle)}
         {#each ks as k}
           {@render head(`${k}-p50`, `${TEST_LABEL[k]} p50`)}
@@ -139,16 +140,21 @@
               {#if r.intercepted}<span class="warn">answered locally</span>{/if}
             </button>
           </th>
-          <td class="num strong" title={timeoutCost(r) >= 0.05 ? `Includes ${ms(timeoutCost(r))} for timeouts` : undefined}>{ms(r.composite, false)}</td>
+          <td class="num strong" title={failureCost(r) >= 0.05 ? `Includes ${ms(failureCost(r))} for timeouts and failed answers` : undefined}>{ms(r.composite, false)}</td>
           <td
             class="num"
             title={r.cdnTerm == null ? "No CDN term: edges weren't mapped for this resolver" : r.cdnTerm >= 0.05 ? `Includes ${ms(r.cdnTerm)} for CDN edges` : undefined}>{ms(r.perLookup, false)}</td>
           {#each ks as k}
-            <td class="num" title={k === 'cached' && r.target.cache_hits != null ? `${pct(r.target.cache_hits, 0)} of these answers came from the resolver's cache` : undefined}>{ms(r.dist[k].p50, false)}</td>
-            <td class="num dim">{ms(r.dist[k].p95, false)}</td>
+            {#if r.dist[k].limited}
+              <td class="num small dim" title={LIMITED_TITLE}>limited</td>
+              <td class="num small dim" title={LIMITED_TITLE}>limited</td>
+            {:else}
+              <td class="num" title={k === 'cached' && r.target.cache_hits != null ? `${pct(r.target.cache_hits, 0)} of these answers came from the resolver's cache` : undefined}>{ms(r.dist[k].p50, false)}</td>
+              <td class="num dim">{ms(r.dist[k].p95, false)}</td>
+            {/if}
           {/each}
           <td class="num">{ms(iqr(r), false)}</td>
-          <td class="num" class:bad={r.success < 0.98}>{pct(r.success)}</td>
+          <td class="num" class:bad={r.success < RELIABLE}>{pct(r.success)}</td>
           {#if hasSetup}<td class="num dim">{r.target.setup_ms != null ? ms(r.target.setup_ms, false) : '—'}</td>{/if}
           <td class="num" class:bad={r.intercepted && (r.target.hops ?? 99) <= 1}>{r.target.hops ?? '—'}</td>
         </tr>
@@ -156,7 +162,7 @@
     </tbody>
   </table>
 </div>
-<p class="foot">All times in milliseconds. Medians and percentiles use answered queries only; timeouts, errors and a filter’s block answers count against “Answered”. Uncached answers that came from a cache are left out.</p>
+<p class="foot">All times in milliseconds. Medians and percentiles use answered queries only; timeouts, errors and a filter’s block answers count against “Answered”. {BLIP_RULE} Uncached answers that came from a cache are left out.</p>
 {/if}
 
 <style>
@@ -247,6 +253,9 @@
   }
   .dim {
     color: var(--ink-3);
+  }
+  .small {
+    font-size: 0.85em;
   }
   .bad {
     color: var(--critical);

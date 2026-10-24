@@ -48,13 +48,7 @@ type RoundProbes = Vec<(u8, Option<(IpAddr, f64)>)>;
 
 /// RFC 1918, 100.64/10, link-local and loopback (IPv6: ULA, link-local, loopback): the user's own network.
 pub fn is_private(ip: IpAddr) -> bool {
-    match ip.to_canonical() {
-        IpAddr::V4(a) => {
-            let o = a.octets();
-            a.is_private() || a.is_loopback() || a.is_link_local() || (o[0] == 100 && (64..128).contains(&o[1]))
-        }
-        IpAddr::V6(a) => a.is_loopback() || (a.segments()[0] & 0xfe00) == 0xfc00 || (a.segments()[0] & 0xffc0) == 0xfe80,
-    }
+    crate::catalog::is_private(&ip)
 }
 
 fn round1(ms: f64) -> f64 {

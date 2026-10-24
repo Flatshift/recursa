@@ -331,7 +331,7 @@
       {/if}
     </div>
     <div class="tcol"><span class="unit">no answer</span></div>
-    <div class="ncol"><span class="unit" title={test === 'all' ? 'Speed score, in ms: the three tests weighted together, each median pulled toward its p95. Rows are sorted by it.' : undefined}>{test === 'all' ? 'speed score' : 'median'}</span></div>
+    <div class="ncol"><span class="unit" title={test === 'all' ? 'Speed score, in ms: the three tests weighted together, each test’s mean after its slowest tenth is pulled down to its p90. Rows are sorted by it.' : undefined}>{test === 'all' ? 'speed score' : 'median'}</span></div>
   </div>
 
   {#if cross}<div class="cross" style:left="{cross.left}px" aria-hidden="true"></div>{/if}
@@ -819,7 +819,7 @@
     font-size: var(--t-xs);
     color: var(--ink-2);
     line-height: 22px;
-    padding-left: var(--pad, 18px);
+    padding-left: 18px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

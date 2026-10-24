@@ -111,6 +111,11 @@ impl Resolver {
         list.iter().find_map(|s| s.parse().ok())
     }
 
+    /// Any address, IPv4 first.
+    pub fn any_ip(&self) -> Option<IpAddr> {
+        self.primary(false).or_else(|| self.primary(true))
+    }
+
     /// The plain-DNS addresses worth monitoring, primary first: the IPv4 pair when there is
     /// one (IPv6 only for resolvers that have nothing else). Two at most.
     pub fn plain_servers(&self) -> Vec<String> {

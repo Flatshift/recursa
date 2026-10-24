@@ -15,11 +15,6 @@ use std::time::{Duration, Instant};
 
 const CACHE_TTL: Duration = Duration::from_secs(600);
 
-fn is_sinkhole(ip: &IpAddr) -> bool {
-    // CGNAT stays allowed: some resolvers live there (Tailscale's 100.100.100.100).
-    crate::catalog::is_local_or_special_but_cgnat(ip)
-}
-
 /// Address for a DoT/DoH host, plus a sentence on how it was found. Successful lookups
 /// are cached for ten minutes so monitoring cycles don't repeat them. Without `plain` (an
 /// encrypted-only run) the lookup goes over DoT only.
@@ -42,10 +37,11 @@ pub fn bootstrap(host: &str, want_v6: bool, r: &Resolver, timeout: Duration, pla
         let Ok(m) = x.exchange(&q, short).and_then(|rep| dns::parse(&rep.bytes).map_err(|e| net::XErr::Io(e.to_string()))) else {
             continue;
         };
+        // CGNAT stays allowed: some resolvers live there (Tailscale's 100.100.100.100).
         let found = if want_v6 {
-            m.ipv6_answers().into_iter().map(IpAddr::V6).find(|ip| !is_sinkhole(ip))
+            m.ipv6_answers().into_iter().map(IpAddr::V6).find(|ip| !crate::catalog::is_local_or_special_but_cgnat(ip))
         } else {
-            m.ipv4_answers().into_iter().map(IpAddr::V4).find(|ip| !is_sinkhole(ip))
+            m.ipv4_answers().into_iter().map(IpAddr::V4).find(|ip| !crate::catalog::is_local_or_special_but_cgnat(ip))
         };
         if let Some(ip) = found {
             let how = format!("{host} → {ip} via {via}");
@@ -73,7 +69,7 @@ fn lookup_servers(r: &Resolver, plain: bool) -> Vec<(Endpoint, String)> {
             })
             .collect();
     }
-    let own = r.primary(false).or_else(|| r.primary(true)).filter(|_| r.udp).map(|ip| (ip, format!("{} itself", r.label())));
+    let own = r.any_ip().filter(|_| r.udp).map(|ip| (ip, format!("{} itself", r.label())));
     let public = ["1.1.1.1", "9.9.9.9", "8.8.8.8"].into_iter().map(|s| (s.parse::<IpAddr>().unwrap(), s.to_string()));
     own.into_iter()
         .chain(public)
@@ -106,7 +102,7 @@ pub fn encrypted(r: &Resolver, t: Transport, want_v6: bool, timeout: Duration, p
 /// UDP as the last resort. A private (local) resolver is always asked over UDP: it *is*
 /// the device on the path. `planned` holds endpoints already bootstrapped for this run.
 pub fn open_best(r: &Resolver, planned: &[Endpoint], timeout: Duration, avoid_udp: bool) -> Option<(Box<dyn Exchanger>, &'static str)> {
-    let local = r.primary(false).or_else(|| r.primary(true)).is_some_and(|ip| catalog::is_private(&ip));
+    let local = r.any_ip().is_some_and(|ip| catalog::is_private(&ip));
     let open_plain = |t: Transport| {
         let ep = plain(r, t, false).or_else(|| plain(r, t, true))?;
         net::open(&ep, timeout).ok().map(|x| (x, t.label()))

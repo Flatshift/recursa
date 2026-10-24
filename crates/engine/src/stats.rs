@@ -24,6 +24,14 @@ pub struct Summary {
     pub sd: f64,
     /// Interquartile range, our jitter measure.
     pub iqr: f64,
+    /// The mean after pulling the slowest tenth down to the 90th percentile, so one straggler cannot move it;
+    /// what the speed score uses.
+    pub wmean: f64,
+    /// The resolver answered this test normally, then began refusing or went silent, so the figures here are
+    /// from the answered part and the test is left out of the score and the answered share.
+    pub limited: bool,
+    /// Errors that cost in the score (SERVFAIL, REFUSED, other error codes, network errors); a subset of `errors`.
+    pub failures: u32,
 }
 
 /// Linear-interpolated quantile over sorted data (type 7, as R and NumPy default).
@@ -38,10 +46,10 @@ pub fn quantile(sorted: &[f64], q: f64) -> f64 {
 }
 
 /// `ms` holds round trips (milliseconds) of successful queries only.
-pub fn summarize(ms: &mut [f64], sent: u32, timeouts: u32, errors: u32) -> Summary {
+pub fn summarize(ms: &mut [f64], sent: u32, timeouts: u32, errors: u32, failures: u32) -> Summary {
     ms.sort_by(|a, b| a.total_cmp(b));
     let n = ms.len();
-    let mut s = Summary { sent, ok: n as u32, timeouts, errors, ..Default::default() };
+    let mut s = Summary { sent, ok: n as u32, timeouts, errors, failures, ..Default::default() };
     s.success = if sent == 0 { 0.0 } else { n as f64 / sent as f64 };
     if n == 0 {
         let nan = f64::NAN;
@@ -56,6 +64,7 @@ pub fn summarize(ms: &mut [f64], sent: u32, timeouts: u32, errors: u32) -> Summa
         s.mean = nan;
         s.sd = nan;
         s.iqr = nan;
+        s.wmean = nan;
         return s;
     }
     s.min = ms[0];
@@ -68,6 +77,7 @@ pub fn summarize(ms: &mut [f64], sent: u32, timeouts: u32, errors: u32) -> Summa
     s.p99 = quantile(ms, 0.99);
     s.iqr = s.p75 - s.p25;
     s.mean = ms.iter().sum::<f64>() / n as f64;
+    s.wmean = ms.iter().map(|x| x.min(s.p90)).sum::<f64>() / n as f64;
     s.sd = if n > 1 { (ms.iter().map(|x| (x - s.mean).powi(2)).sum::<f64>() / (n - 1) as f64).sqrt() } else { 0.0 };
     s
 }
@@ -79,11 +89,23 @@ mod tests {
     #[test]
     fn quartiles() {
         let mut v = vec![4.0, 1.0, 3.0, 2.0, 5.0];
-        let s = summarize(&mut v, 6, 1, 0);
+        let s = summarize(&mut v, 6, 1, 0, 0);
         assert_eq!(s.p50, 3.0);
         assert_eq!(s.p25, 2.0);
         assert_eq!(s.p75, 4.0);
         assert_eq!(s.ok, 5);
         assert!((s.success - 5.0 / 6.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn winsorised_mean_caps_the_slowest_tenth() {
+        let mut v: Vec<f64> = (1..=29).map(f64::from).collect();
+        v.push(1000.0);
+        let s = summarize(&mut v, 30, 0, 0, 0);
+        assert!((s.p90 - 27.1).abs() < 1e-9);
+        assert!((s.wmean - (378.0 + 3.0 * 27.1) / 30.0).abs() < 1e-9);
+        assert!((s.wmean - 15.31).abs() < 0.01);
+        assert!((s.mean - (435.0 + 1000.0) / 30.0).abs() < 1e-9);
+        assert!(summarize(&mut [], 0, 0, 0, 0).wmean.is_nan());
     }
 }

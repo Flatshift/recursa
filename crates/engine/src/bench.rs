@@ -28,6 +28,11 @@ use tokio::sync::broadcast;
 /// Pause after each query in Accurate mode; the Deep Dive spaces its few queries the same way.
 pub(crate) const ACCURATE_GAP: Duration = Duration::from_millis(4);
 
+/// One TLD query every 100 ms to a resolver across all its transports (10 q/s), because random-label NXDOMAIN
+/// traffic is what abuse heuristics key on. A four-transport resolver's TLD phase takes about 12 s at 30 samples
+/// instead of about 4 s. Cached and Uncached are not paced this way.
+pub(crate) const TLD_RESOLVER_GAP: Duration = Duration::from_millis(100);
+
 pub const CACHED_NAMES: &[&str] = &[
     "www.google.com",
     "www.youtube.com",
@@ -61,9 +66,12 @@ impl Fresh {
     }
 }
 
-/// What a timeout costs, in ms, when the composite counts it: a stub resolver waits about a second
-/// before it asks again. The UI mirrors this.
+/// What a timeout or a failed answer costs, in ms, when the composite counts it: a stub resolver waits about a
+/// second before it asks again, and the user is without an answer either way. The UI mirrors this.
 pub const TIMEOUT_COST_MS: f64 = 1000.0;
+/// Failures from this many distinct resolvers inside one window of this length are a network blip from here (mirrors the UI).
+pub const BLIP_WINDOW_MS: u32 = 2000;
+pub const BLIP_RESOLVERS: usize = 3;
 
 /// Consecutive timeouts after which a target is dropped from the rest of the run.
 const DROP_AFTER: u32 = 6;
@@ -126,7 +134,7 @@ impl Default for FilterProbes {
     }
 }
 
-fn yes() -> bool {
+pub(crate) fn yes() -> bool {
     true
 }
 fn default_transports() -> Vec<Transport> {
@@ -202,6 +210,14 @@ pub enum Outcome {
     Neterr,
 }
 
+impl Outcome {
+    /// The user got no answer they could use and the cause sits at the resolver or on the path to it, so the
+    /// speed score charges it like a timeout. A filter's block or rewrite is the resolver doing as configured.
+    pub fn costs(self) -> bool {
+        matches!(self, Outcome::Servfail | Outcome::Refused | Outcome::Rcode | Outcome::Neterr | Outcome::Unreachable)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct Sample {
     /// Target index.
@@ -219,6 +235,9 @@ pub struct Sample {
     /// DNS TTL of the first answer record, in seconds (none for negative or empty answers).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub d: Option<u32>,
+    /// Excused: this failure hit several resolvers at once, so it is a network blip from here and counts as nothing.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub x: bool,
 }
 
 /// A warm-up answer, shown live and never recorded: warm-up queries prime caches and paths and do not count.
@@ -1212,13 +1231,13 @@ pub struct Stall {
 /// limit looks like from here, though so is a network that dropped; the note says which it can't tell.
 pub fn stalls(s: &RunState) -> Vec<Stall> {
     let mut seq: BTreeMap<(u16, TestKind), Vec<(u32, Outcome)>> = BTreeMap::new();
-    for x in &s.samples {
+    for x in s.samples.iter().filter(|x| !x.x) {
         seq.entry((x.t, x.k)).or_default().push((x.i, x.o));
     }
     let mut out = Vec::new();
     for ((t, test), mut v) in seq {
         v.sort_by_key(|(i, _)| *i);
-        let bad = |o: Outcome| matches!(o, Outcome::Timeout | Outcome::Refused | Outcome::Servfail);
+        let bad = |o: Outcome| o.costs() || o == Outcome::Timeout;
         let tail = v.iter().rev().take_while(|(_, o)| bad(*o)).count();
         if tail < 5 || v.len() - tail < 5 {
             continue;
@@ -1231,11 +1250,37 @@ pub fn stalls(s: &RunState) -> Vec<Stall> {
         let how = match v[v.len() - 1].1 {
             Outcome::Refused => "began refusing queries",
             Outcome::Servfail => "began returning SERVFAIL",
+            Outcome::Rcode => "began returning errors",
             _ => "stopped answering",
         };
         out.push(Stall { target: t as usize, test, answered: head.len() - lost, stopped: tail, how });
     }
     out
+}
+
+/// Excuses failures that hit [`BLIP_RESOLVERS`] or more distinct resolvers inside one [`BLIP_WINDOW_MS`] bucket: that is
+/// the network from here, not any resolver. Sets the flag either way, so running it again only adds excusals.
+fn excuse_blips(s: &mut RunState) {
+    let failed = |x: &Sample| x.o == Outcome::Timeout || x.o.costs();
+    let mut buckets: BTreeMap<u32, BTreeSet<&str>> = BTreeMap::new();
+    for x in s.samples.iter().filter(|x| failed(x)) {
+        if let Some(t) = s.targets.get(x.t as usize) {
+            buckets.entry(x.at / BLIP_WINDOW_MS).or_default().insert(t.resolver_id.as_str());
+        }
+    }
+    let hit: BTreeSet<u32> = buckets.into_iter().filter(|(_, r)| r.len() >= BLIP_RESOLVERS).map(|(b, _)| b).collect();
+    for x in s.samples.iter_mut().filter(|x| failed(x)) {
+        x.x = hit.contains(&(x.at / BLIP_WINDOW_MS));
+    }
+}
+
+/// Marks each stalled target's summary for `test` as limited, so scoring leaves it out.
+fn mark_limited(s: &mut RunState, test: TestKind) {
+    for st in stalls(s).into_iter().filter(|st| st.test == test) {
+        if let Some(sum) = s.targets.get_mut(st.target).and_then(|t| t.stats.get_mut(test.key())) {
+            sum.limited = true;
+        }
+    }
 }
 
 /// What the published limits make of the load Recursa sent, as notes. A resolver with a published rate gets a
@@ -1266,12 +1311,31 @@ fn load_notes(s: &RunState, selected: &[Resolver]) -> Vec<(String, Option<String
             (Some(l), _) => format!(" {}", l.text),
             (None, _) => " It publishes no limit to compare with.".to_string(),
         };
+        let left_out = if st.test == TestKind::Tld { " Its TLD result is left out of its score." } else { "" };
         out.push((
             format!(
-                "{} {} over {} after {} answered {} queries, and then {} the next {}. That can be a rate limit on this address, or the network.{context}",
+                "{} {} over {} after {} answered {} queries, and then {} the next {}. That can be a rate limit on this address, or the network.{context}{left_out}",
                 t.provider, t.variant, t.transport.label(), st.answered, st.test.key(), st.how, st.stopped
             ),
             Some(t.resolver_id.clone()),
+        ));
+    }
+    let excused: Vec<&Sample> = s.samples.iter().filter(|x| x.x).collect();
+    if !excused.is_empty() {
+        let mut buckets: BTreeMap<u32, BTreeSet<&str>> = BTreeMap::new();
+        for x in &excused {
+            if let Some(t) = s.targets.get(x.t as usize) {
+                buckets.entry(x.at / BLIP_WINDOW_MS).or_default().insert(t.resolver_id.as_str());
+            }
+        }
+        let m = buckets.values().map(|r| r.len()).max().unwrap_or(0);
+        out.push((
+            format!(
+                "{} failed queries that hit {m} resolvers within the same {} seconds were excused as a network blip from here and count as nothing.",
+                excused.len(),
+                BLIP_WINDOW_MS / 1000
+            ),
+            None,
         ));
     }
     out
@@ -1280,6 +1344,7 @@ fn load_notes(s: &RunState, selected: &[Resolver]) -> Vec<(String, Option<String
 fn report_load(h: &RunHandle, selected: &[Resolver]) {
     let notes = h.with(|s| {
         s.rates = peak_rates(s);
+        excuse_blips(s);
         load_notes(s, selected)
     });
     for (text, id) in notes {
@@ -1416,7 +1481,7 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
         if h.cancelled() {
             break;
         }
-        run_phase(h, test, &mut xs, cfg, &cached, &fresh, timeout, gap, t0);
+        run_phase(h, test, &mut xs, cfg, &cached, &fresh, timeout, gap, TLD_RESOLVER_GAP, t0);
         match test {
             TestKind::Uncached => flag_cached_answers(h, &fresh.zones),
             TestKind::Cached => cache_hit_rates(h, &cached, &auth, cached != crate::names::defaults()),
@@ -1496,10 +1561,8 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
         h.phase("intel", selected.len() as u32);
         let egress: BTreeMap<String, Option<String>> =
             h.with(|s| s.probes.iter().map(|(k, p)| (k.clone(), p.egress.first().cloned())).collect());
-        let jobs: Vec<(String, Option<IpAddr>, Option<String>)> = selected
-            .iter()
-            .map(|r| (r.id.clone(), r.primary(false).or_else(|| r.primary(true)), egress.get(&r.id).cloned().flatten()))
-            .collect();
+        let jobs: Vec<(String, Option<IpAddr>, Option<String>)> =
+            selected.iter().map(|r| (r.id.clone(), r.any_ip(), egress.get(&r.id).cloned().flatten())).collect();
         let intel = deps.intel.clone();
         let results = deps.rt.block_on(async move {
             let futs = jobs.into_iter().map(|(id, ip, eg)| {
@@ -1531,6 +1594,7 @@ fn run_phase(
     fresh: &Fresh,
     timeout: Duration,
     gap: Duration,
+    resolver_gap: Duration,
     t0: Instant,
 ) {
     let mut active: Vec<usize> = (0..xs.len()).filter(|i| xs[*i].is_some()).collect();
@@ -1557,6 +1621,19 @@ fn run_phase(
     let cancel = &h.cancel;
     let pacer = Pacer::new(gap);
     let pacer = &pacer;
+    // The TLD test also spaces queries per resolver, so its transports interleave instead of bursting together.
+    let resolver_ids: Vec<String> = h.with(|s| s.targets.iter().map(|t| t.resolver_id.clone()).collect());
+    let mut by_resolver: BTreeMap<&str, Pacer> = BTreeMap::new();
+    if test == TestKind::Tld {
+        for &i in &active {
+            by_resolver.entry(resolver_ids[i].as_str()).or_insert_with(|| Pacer::new(resolver_gap));
+        }
+    }
+    let mut per_target: Vec<Option<&Pacer>> = vec![None; xs.len()];
+    for &i in &active {
+        per_target[i] = by_resolver.get(resolver_ids[i].as_str());
+    }
+    let per_target = &per_target;
     let dropped: Vec<usize> = std::thread::scope(|sc| {
         let workers: Vec<_> = groups
             .iter_mut()
@@ -1565,9 +1642,11 @@ fn run_phase(
                 sc.spawn(move || {
                     if accurate {
                         let (ti, x) = &mut g[0];
-                        measure_paced(*ti, x.as_mut(), pacer, test, samples, cached, fresh, timeout, t0, cancel, stx).into_iter().collect()
+                        measure_paced(*ti, x.as_mut(), pacer, per_target[*ti], test, samples, cached, fresh, timeout, t0, cancel, stx)
+                            .into_iter()
+                            .collect()
                     } else {
-                        measure(g, test, samples, cached, fresh, timeout, gap, t0, cancel, stx)
+                        measure(g, per_target, test, samples, cached, fresh, timeout, gap, t0, cancel, stx)
                     }
                 })
             })
@@ -1640,7 +1719,7 @@ fn query_once(
     } else {
         *streak = 0;
     }
-    let _ = tx.send(Sample { t: ti as u16, k: test, i: round, us, o, at: t0.elapsed().as_millis() as u32, h, d });
+    let _ = tx.send(Sample { t: ti as u16, k: test, i: round, us, o, at: t0.elapsed().as_millis() as u32, h, d, x: false });
     dead
 }
 
@@ -1676,6 +1755,7 @@ fn measure_paced(
     ti: usize,
     x: &mut dyn Exchanger,
     pacer: &Pacer,
+    per: Option<&Pacer>,
     test: TestKind,
     samples: u32,
     cached: &[String],
@@ -1691,6 +1771,9 @@ fn measure_paced(
         if cancel.load(Ordering::Relaxed) {
             break;
         }
+        if let Some(p) = per {
+            p.wait();
+        }
         pacer.wait();
         if query_once(x, ti, test, round, cached, fresh, timeout, t0, &tx, &mut streak) {
             return Some(ti);
@@ -1702,6 +1785,7 @@ fn measure_paced(
 #[allow(clippy::too_many_arguments)]
 fn measure(
     g: &mut [(usize, Box<dyn Exchanger>)],
+    per: &[Option<&Pacer>],
     test: TestKind,
     samples: u32,
     cached: &[String],
@@ -1726,6 +1810,9 @@ fn measure(
                 continue;
             }
             let (ti, x) = &mut g[j];
+            if let Some(p) = per[*ti] {
+                p.wait();
+            }
             dead[j] = query_once(x.as_mut(), *ti, test, round, cached, fresh, timeout, t0, &tx, &mut streak[j]);
             std::thread::sleep(gap);
         }
@@ -1734,27 +1821,37 @@ fn measure(
 }
 
 fn compute_stats(h: &RunHandle, test: TestKind) {
-    h.with(|s| {
-        let n = s.targets.len();
-        let mut ms: Vec<Vec<f64>> = vec![Vec::new(); n];
-        let mut counts = vec![(0u32, 0u32, 0u32); n]; // sent, timeouts, errors
-        // An Uncached answer that came from a cache measured nothing the test is for: it isn't counted at all.
-        for smp in s.samples.iter().filter(|x| x.k == test && x.o != Outcome::FromCache) {
-            let t = smp.t as usize;
-            counts[t].0 += 1;
-            match smp.o {
-                Outcome::Ok => ms[t].push(smp.us as f64 / 1000.0),
-                Outcome::Timeout => counts[t].1 += 1,
-                _ => counts[t].2 += 1,
+    h.with(|s| compute_stats_in(s, test));
+}
+
+fn compute_stats_in(s: &mut RunState, test: TestKind) {
+    excuse_blips(s);
+    let n = s.targets.len();
+    let mut ms: Vec<Vec<f64>> = vec![Vec::new(); n];
+    let mut counts = vec![(0u32, 0u32, 0u32, 0u32); n]; // sent, timeouts, errors, failures
+    // An Uncached answer that came from a cache measured nothing the test is for, and an excused failure was the
+    // network's: neither is counted at all.
+    for smp in s.samples.iter().filter(|x| x.k == test && x.o != Outcome::FromCache && !x.x) {
+        let t = smp.t as usize;
+        counts[t].0 += 1;
+        match smp.o {
+            Outcome::Ok => ms[t].push(smp.us as f64 / 1000.0),
+            Outcome::Timeout => counts[t].1 += 1,
+            o => {
+                counts[t].2 += 1;
+                counts[t].3 += o.costs() as u32;
             }
         }
-        for (t, v) in ms.iter_mut().enumerate() {
-            let (sent, to, err) = counts[t];
-            if sent > 0 {
-                s.targets[t].stats.insert(test.key().into(), stats::summarize(v, sent, to, err));
-            }
+    }
+    for (t, v) in ms.iter_mut().enumerate() {
+        let (sent, to, err, fail) = counts[t];
+        if sent > 0 {
+            s.targets[t].stats.insert(test.key().into(), stats::summarize(v, sent, to, err, fail));
         }
-    });
+    }
+    if test == TestKind::Tld {
+        mark_limited(s, test);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1903,7 +2000,7 @@ fn check_paths(set: Setup, h: &RunHandle, selected: &[Resolver]) -> Vec<String> 
         .iter()
         .filter(|r| r.group != "system")
         .filter_map(|r| {
-            let ip = r.primary(false).or_else(|| r.primary(true)).filter(|ip| !crate::catalog::is_private(ip))?;
+            let ip = r.any_ip().filter(|ip| !crate::catalog::is_private(ip))?;
             let ports: Vec<u16> = [(r.dot.is_some(), 853), (r.doh.is_some(), 443), (r.udp && set.plain, 53)]
                 .into_iter()
                 .filter(|(on, _)| *on)
@@ -1948,12 +2045,8 @@ fn check_paths(set: Setup, h: &RunHandle, selected: &[Resolver]) -> Vec<String> 
                 ttls[x.t as usize].push(x.h);
             }
         }
-        let private: BTreeSet<&str> = s
-            .resolvers
-            .iter()
-            .filter(|r| r.primary(false).or_else(|| r.primary(true)).is_some_and(|ip| crate::catalog::is_private(&ip)))
-            .map(|r| r.id.as_str())
-            .collect();
+        let private: BTreeSet<&str> =
+            s.resolvers.iter().filter(|r| r.any_ip().is_some_and(|ip| crate::catalog::is_private(&ip))).map(|r| r.id.as_str()).collect();
         for t in s.targets.iter_mut().filter(|t| t.transport == Transport::Udp) {
             let ttl = &mut ttls[t.idx];
             ttl.sort_unstable();
@@ -2218,32 +2311,20 @@ fn infer_forwarder(h: &RunHandle) {
     }
 }
 
-/// What each test counts for in the overall latency. Cached answers are most of what people get;
-/// uncached lookups (cache misses) are the delays they notice; TLD lookups show how quickly a resolver gets through the
-/// root and TLD servers when it has to, which is a real share of a slow lookup. The UI mirrors this.
-pub const TEST_WEIGHTS: [(&str, f64); 3] = [("cached", 0.40), ("uncached", 0.35), ("tld", 0.25)];
+/// What each test counts for in the overall latency. Cached answers are most of what people get; uncached lookups
+/// (cache misses) are the delays they notice; TLD lookups (NXDOMAIN) are a small share of real traffic, so they count
+/// least. The UI mirrors this.
+pub const TEST_WEIGHTS: [(&str, f64); 3] = [("cached", 0.50), ("uncached", 0.40), ("tld", 0.10)];
 
-/// How far a test's typical latency is pulled from its median toward its 95th percentile: consistency
-/// counts, so a steady resolver beats an erratic one with the same median, and one lucky fast answer
-/// counts for nothing. The UI mirrors this.
-pub const TAIL_WEIGHT: f64 = 0.5;
-
-/// How much of a test's standard deviation is added on top. The 95th percentile ignores the worst one answer in
-/// twenty, so two resolvers can share a tail yet differ in how far their stragglers go; the deviation sees that.
-/// The UI mirrors this.
-pub const JITTER_WEIGHT: f64 = 0.25;
-
-/// One test's typical latency: the median, halfway to the 95th percentile, plus a quarter of the deviation.
-fn typical(s: &stats::Summary) -> Option<f64> {
-    s.p50.is_finite().then(|| {
-        let tail = if s.p95.is_finite() { (s.p95 - s.p50).max(0.0) } else { 0.0 };
-        let jitter = if s.sd.is_finite() { s.sd } else { 0.0 };
-        s.p50 + TAIL_WEIGHT * tail + JITTER_WEIGHT * jitter
-    })
+/// One test's cost: its winsorised mean (the mean after the slowest tenth is pulled down to the 90th percentile), so
+/// one straggler cannot move it. Tail and jitter stay visible as the p95 and Jitter columns; they are not folded in.
+fn cost(s: &stats::Summary) -> Option<f64> {
+    s.wmean.is_finite().then_some(s.wmean)
 }
 
-/// The speed score the fastest pick ranks by, in ms: each test's typical latency, weighted by [`TEST_WEIGHTS`], plus
-/// what its timeouts cost on average ([`TIMEOUT_COST_MS`] for each one, spread over every query sent).
+/// The speed score the fastest pick ranks by, in ms: each test's cost ([`cost`]), weighted by [`TEST_WEIGHTS`], plus
+/// what its timeouts and failed answers cost on average ([`TIMEOUT_COST_MS`] for each one, spread over every query sent). A limited test
+/// is left out of both.
 pub fn composite(t: &TargetInfo) -> Option<f64> {
     score(&t.stats)
 }
@@ -2251,22 +2332,23 @@ pub fn composite(t: &TargetInfo) -> Option<f64> {
 fn score(stats: &BTreeMap<String, stats::Summary>) -> Option<f64> {
     let (mut sum, mut w) = (0.0, 0.0);
     for (k, wt) in TEST_WEIGHTS {
-        if let Some(v) = stats.get(k).and_then(typical) {
+        if let Some(v) = stats.get(k).filter(|s| !s.limited).and_then(cost) {
             sum += v * wt;
             w += wt;
         }
     }
-    (w > 0.0).then(|| sum / w + timeout_cost_of(stats))
+    (w > 0.0).then(|| sum / w + failure_cost_of(stats))
 }
 
-/// The average wait timeouts add to each lookup: the share of queries that timed out, times [`TIMEOUT_COST_MS`].
-fn timeout_cost_of(stats: &BTreeMap<String, stats::Summary>) -> f64 {
-    let (to, sent) = stats.values().fold((0u32, 0u32), |(a, n), s| (a + s.timeouts, n + s.sent));
+/// The average wait timeouts and failed answers add to each lookup: the share of queries that timed out or failed,
+/// times [`TIMEOUT_COST_MS`].
+fn failure_cost_of(stats: &BTreeMap<String, stats::Summary>) -> f64 {
+    let (to, sent) = stats.values().filter(|s| !s.limited).fold((0u32, 0u32), |(a, n), s| (a + s.timeouts + s.failures, n + s.sent));
     if sent == 0 { 0.0 } else { TIMEOUT_COST_MS * to as f64 / sent as f64 }
 }
 
 pub fn success(t: &TargetInfo) -> f64 {
-    let (ok, sent) = t.stats.values().fold((0u32, 0u32), |(o, n), s| (o + s.ok, n + s.sent));
+    let (ok, sent) = t.stats.values().filter(|s| !s.limited).fold((0u32, 0u32), |(o, n), s| (o + s.ok, n + s.sent));
     if sent == 0 { 0.0 } else { ok as f64 / sent as f64 }
 }
 
@@ -2313,26 +2395,30 @@ pub fn ranked(s: &RunState) -> Vec<Ranked<'_>> {
 }
 
 /// Whether `behind` trails `ahead` by less than this run can tell apart: both speed scores redrawn 200 times from
-/// their own queries (timeouts and errors drawn as such), and the 95% interval of the difference reaches zero.
+/// their own queries (timeouts, failed answers and other errors drawn as such), and the 95% interval of the difference reaches zero.
 /// Mirrors `tiedWith` in the UI step for step, seed included, so the run list and the verdict agree.
 pub fn tied(s: &RunState, ahead: &TargetInfo, behind: &TargetInfo) -> bool {
-    // Per test: answered round trips (ms, sorted), timeouts, queries counted.
-    type Draws = Vec<(&'static str, Vec<f64>, u32, u32)>;
+    // Per test: answered round trips (ms, sorted), timeouts, failures, queries counted.
+    type Draws = Vec<(&'static str, Vec<f64>, u32, u32, u32)>;
     let collect = |t: &TargetInfo| -> Draws {
         TestKind::ALL
             .iter()
             .map(|k| {
-                let (mut v, mut to, mut sent) = (Vec::new(), 0, 0);
-                for x in s.samples.iter().filter(|x| x.t as usize == t.idx && x.k == *k && x.o != Outcome::FromCache) {
+                let (mut v, mut to, mut fail, mut sent) = (Vec::new(), 0, 0, 0);
+                if t.stats.get(k.key()).is_some_and(|s| s.limited) {
+                    return (k.key(), v, to, fail, sent);
+                }
+                for x in s.samples.iter().filter(|x| x.t as usize == t.idx && x.k == *k && x.o != Outcome::FromCache && !x.x) {
                     sent += 1;
                     match x.o {
                         Outcome::Ok => v.push(x.us as f64 / 1000.0),
                         Outcome::Timeout => to += 1,
+                        o if o.costs() => fail += 1,
                         _ => {}
                     }
                 }
                 v.sort_by(|a, b| a.total_cmp(b));
-                (k.key(), v, to, sent)
+                (k.key(), v, to, fail, sent)
             })
             .collect()
     };
@@ -2340,18 +2426,20 @@ pub fn tied(s: &RunState, ahead: &TargetInfo, behind: &TargetInfo) -> bool {
     let mut rand = Mulberry32(fnv1a(&format!("{}:{}:{}", s.id, ahead.idx, behind.idx)));
     let mut redraw = |d: &Draws| {
         let mut st = BTreeMap::new();
-        for (k, v, to, sent) in d {
-            let (mut out, mut timeouts) = (Vec::new(), 0);
+        for (k, v, to, fail, sent) in d {
+            let (mut out, mut timeouts, mut failures) = (Vec::new(), 0, 0);
             for _ in 0..*sent {
                 let x = (rand.next() * *sent as f64).floor() as usize;
                 if x < v.len() {
                     out.push(v[x]);
                 } else if x < v.len() + *to as usize {
                     timeouts += 1;
+                } else if x < v.len() + *to as usize + *fail as usize {
+                    failures += 1;
                 }
             }
             if *sent > 0 {
-                st.insert(k.to_string(), stats::summarize(&mut out, *sent, timeouts, 0));
+                st.insert(k.to_string(), stats::summarize(&mut out, *sent, timeouts, 0, failures));
             }
         }
         score(&st)
@@ -2449,45 +2537,38 @@ mod tests {
     }
 
     #[test]
-    fn consistency_and_cached_answers_count_in_the_composite() {
+    fn cost_is_the_winsorised_mean_and_cached_weighs_most() {
         let r = crate::catalog::builtin().into_iter().find(|r| r.id == "cloudflare").unwrap();
-        let mk = |p50: f64, p95: f64| {
+        let mk = |w: f64| {
             let mut t = TargetInfo::new(&r, Transport::Udp, false, r.primary(false).unwrap());
             for k in ["cached", "uncached", "tld"] {
-                t.stats.insert(k.into(), stats::Summary { p50, p95, ..Default::default() });
+                t.stats.insert(k.into(), stats::Summary { wmean: w, ..Default::default() });
             }
             t
         };
         assert!((TEST_WEIGHTS.iter().map(|(_, w)| w).sum::<f64>() - 1.0).abs() < 1e-9);
-        // Same median: the one with the long tail ranks behind the steady one.
-        let (steady, erratic) = (composite(&mk(15.0, 16.0)).unwrap(), composite(&mk(15.0, 40.0)).unwrap());
-        assert!((steady - 15.5).abs() < 1e-9 && (erratic - 27.5).abs() < 1e-9, "{steady} {erratic}");
-        // Two resolvers with the same median and 95th percentile: the one with the wider spread ranks behind.
-        let spread = |sd: f64| {
-            let mut t = mk(15.0, 21.0);
-            for v in t.stats.values_mut() {
-                v.sd = sd;
-            }
+        // 29 answers near 15 ms and one of 1830 ms: the straggler moves the score by well under 1 ms.
+        let mut v: Vec<f64> = (0..29).map(|i| 14.0 + i as f64 / 14.0).collect();
+        v.push(1830.0);
+        let sum = stats::summarize(&mut v, 30, 0, 0, 0);
+        let mut t = mk(0.0);
+        for k in ["cached", "uncached", "tld"] {
+            t.stats.insert(k.into(), sum.clone());
+        }
+        let capped = v.iter().map(|x| x.min(sum.p90)).sum::<f64>() / 30.0;
+        assert!((composite(&t).unwrap() - capped).abs() < 1.0 && (composite(&t).unwrap() - 15.0).abs() < 1.0);
+        // Cached answers weigh most, then uncached, then TLD.
+        let with = |k: &str, w: f64| {
+            let mut t = mk(10.0);
+            t.stats.insert(k.into(), stats::Summary { wmean: w, ..Default::default() });
             composite(&t).unwrap()
         };
-        assert!((spread(4.0) - 19.0).abs() < 1e-9 && spread(8.0) > spread(4.0));
-        // A slightly slower median can win on steadiness.
-        assert!(composite(&mk(16.0, 17.0)).unwrap() < erratic);
-        // Cached answers weigh most, then uncached, then TLD.
-        let mut t = mk(10.0, 10.0);
-        t.stats.insert("cached".into(), stats::Summary { p50: 20.0, p95: 20.0, ..Default::default() });
-        let cached_slow = composite(&t).unwrap();
-        let mut u = mk(10.0, 10.0);
-        u.stats.insert("uncached".into(), stats::Summary { p50: 20.0, p95: 20.0, ..Default::default() });
-        let uncached_slow = composite(&u).unwrap();
-        let mut tld = mk(10.0, 10.0);
-        tld.stats.insert("tld".into(), stats::Summary { p50: 20.0, p95: 20.0, ..Default::default() });
-        let tld_slow = composite(&tld).unwrap();
+        let (cached_slow, uncached_slow, tld_slow) = (with("cached", 20.0), with("uncached", 20.0), with("tld", 20.0));
         assert!(cached_slow > uncached_slow && uncached_slow > tld_slow, "{cached_slow} {uncached_slow} {tld_slow}");
-        assert!((cached_slow - 14.0).abs() < 1e-9 && (tld_slow - 12.5).abs() < 1e-9);
+        assert!((cached_slow - 15.0).abs() < 1e-9 && (uncached_slow - 14.0).abs() < 1e-9 && (tld_slow - 11.0).abs() < 1e-9);
         // A test with no answers is left out rather than counted as zero.
-        let mut none = mk(12.0, 12.0);
-        none.stats.insert("tld".into(), stats::Summary { p50: f64::NAN, p95: f64::NAN, ..Default::default() });
+        let mut none = mk(12.0);
+        none.stats.insert("tld".into(), stats::Summary { wmean: f64::NAN, ..Default::default() });
         assert!((composite(&none).unwrap() - 12.0).abs() < 1e-9);
     }
 
@@ -2496,19 +2577,20 @@ mod tests {
         let r = crate::catalog::builtin().into_iter().find(|r| r.id == "cloudflare").unwrap();
         let mut t = TargetInfo::new(&r, Transport::Udp, false, r.primary(false).unwrap());
         for k in ["cached", "uncached", "tld"] {
-            t.stats.insert(k.into(), stats::Summary { sent: 100, p50: 10.0, p95: 10.0, ..Default::default() });
+            t.stats.insert(k.into(), stats::Summary { sent: 100, wmean: 10.0, ..Default::default() });
         }
         assert!((composite(&t).unwrap() - 10.0).abs() < 1e-9);
         // 3 timeouts in 300 queries: 1% of lookups wait a second more, 10 ms on average.
         t.stats.get_mut("uncached").unwrap().timeouts = 3;
         assert!((composite(&t).unwrap() - 20.0).abs() < 1e-9);
-        assert_eq!(timeout_cost_of(&TargetInfo::new(&r, Transport::Udp, false, r.primary(false).unwrap()).stats), 0.0);
+        assert_eq!(failure_cost_of(&TargetInfo::new(&r, Transport::Udp, false, r.primary(false).unwrap()).stats), 0.0);
     }
 
     #[test]
     fn answers_from_a_cache_are_left_out_of_uncached() {
         let zones: Vec<String> = vec!["a.test".into(), "b.test".into()];
-        let smp = |t: u16, i: u32, d: Option<u32>| Sample { t, k: TestKind::Uncached, i, us: 9_000, o: Outcome::Ok, at: 0, h: 0, d };
+        let smp =
+            |t: u16, i: u32, d: Option<u32>| Sample { t, k: TestKind::Uncached, i, us: 9_000, o: Outcome::Ok, at: 0, h: 0, d, x: false };
         let mut v = vec![
             // Target 0: zone a (even rounds) at 300, then one answer at 120; zone b (odd rounds) at 60 throughout.
             smp(0, 0, Some(300)),
@@ -2553,7 +2635,7 @@ mod tests {
             env: Value::Null,
             resolvers,
             targets,
-            samples: samples.iter().map(|&(t, k, i, o, at)| Sample { t, k, i, us: 15_000, o, at, h: 0, d: None }).collect(),
+            samples: samples.iter().map(|&(t, k, i, o, at)| Sample { t, k, i, us: 15_000, o, at, h: 0, d: None, x: false }).collect(),
             warm: vec![],
             probes: BTreeMap::new(),
             intel: BTreeMap::new(),
@@ -2594,6 +2676,7 @@ mod tests {
         assert_eq!((a.len(), a[0].answered, a[0].stopped, a[0].how), (1, 12, 6, "stopped answering"));
         assert_eq!(stall(then(ok(12), Outcome::Refused, 7))[0].how, "began refusing queries");
         assert_eq!(stall(then(ok(12), Outcome::Servfail, 5))[0].how, "began returning SERVFAIL");
+        assert_eq!(stall(then(ok(12), Outcome::Rcode, 5))[0].how, "began returning errors");
         // Not stalls: a short tail, too little before it, or a head that was already lossy.
         assert!(stall(then(ok(12), Outcome::Timeout, 4)).is_empty());
         assert!(stall(then(ok(4), Outcome::Timeout, 8)).is_empty());
@@ -2602,6 +2685,122 @@ mod tests {
         assert!(stall(then(lossy, Outcome::Timeout, 6)).is_empty());
         // An NXDOMAIN or a slow answer is not a refusal to answer.
         assert!(stall(then(ok(12), Outcome::Nxdomain, 8)).is_empty());
+    }
+
+    #[test]
+    fn a_tld_stall_is_limited_and_not_scored() {
+        // Target 0: 10 answers then 20 refusals in `stalled`; 30 answers in the other two tests.
+        let build = |stalled: TestKind| {
+            let mut v = Vec::new();
+            for k in [TestKind::Cached, TestKind::Uncached, TestKind::Tld] {
+                for i in 0..30u32 {
+                    let o = if k == stalled && i >= 10 { Outcome::Refused } else { Outcome::Ok };
+                    v.push((0u16, k, i, o, i * 20));
+                }
+            }
+            let mut s = run_with(&["google"], &v);
+            for k in TestKind::ALL {
+                let (ok, errors) = if k == stalled { (10, 20) } else { (30, 0) };
+                let mut ms = vec![15.0; ok];
+                s.targets[0].stats.insert(k.key().into(), stats::summarize(&mut ms, 30, 0, errors, 0));
+            }
+            mark_limited(&mut s, TestKind::Tld);
+            s
+        };
+        let s = build(TestKind::Tld);
+        assert!(s.targets[0].stats["tld"].limited);
+        assert!(!s.targets[0].stats["cached"].limited && !s.targets[0].stats["uncached"].limited);
+        let mut without = s.targets[0].stats.clone();
+        without.remove("tld");
+        assert_eq!(composite(&s.targets[0]), score(&without));
+        assert!(composite(&s.targets[0]).is_some());
+        assert_eq!(success(&s.targets[0]), 1.0);
+        let sel = s.resolvers.clone();
+        assert!(load_notes(&s, &sel).iter().any(|(t, _)| t.contains("left out of its score")));
+        // The same samples in Uncached stay a plain failure.
+        let s = build(TestKind::Uncached);
+        assert!(!s.targets[0].stats["uncached"].limited && !s.targets[0].stats["tld"].limited);
+        assert!(success(&s.targets[0]) < RELIABLE);
+        let sel = s.resolvers.clone();
+        assert!(!load_notes(&s, &sel).iter().any(|(t, _)| t.contains("left out of its score")));
+    }
+
+    #[test]
+    fn failed_answers_cost_like_timeouts() {
+        let build = |bad: Outcome| {
+            let v: Vec<_> = (0..30u32).map(|i| (0u16, TestKind::Cached, i, if i < 27 { Outcome::Ok } else { bad }, i * 20)).collect();
+            let mut s = run_with(&["google"], &v);
+            compute_stats_in(&mut s, TestKind::Cached);
+            s
+        };
+        let s = build(Outcome::Refused);
+        let sum = &s.targets[0].stats["cached"];
+        assert_eq!((sum.sent, sum.failures, sum.errors), (30, 3, 3));
+        assert!((composite(&s.targets[0]).unwrap() - (sum.wmean + 100.0)).abs() < 1.0);
+        let s = build(Outcome::Blocked);
+        let sum = &s.targets[0].stats["cached"];
+        assert_eq!((sum.failures, sum.errors), (0, 3));
+        assert!((composite(&s.targets[0]).unwrap() - sum.wmean).abs() < 1.0);
+        assert_eq!(success(&s.targets[0]), 0.9);
+    }
+
+    #[test]
+    fn a_blip_across_resolvers_is_excused() {
+        let one = |t: u16, at: u32| {
+            let mut v: Vec<_> = (0..29u32).map(|i| (t, TestKind::Cached, i, Outcome::Ok, i * 10)).collect();
+            v.push((t, TestKind::Cached, 29, Outcome::Timeout, at));
+            v
+        };
+        let excused = |s: &RunState| s.samples.iter().filter(|x| x.x).count();
+        let mut v = one(0, 5000);
+        v.extend(one(1, 5300));
+        v.extend(one(2, 5900));
+        let mut s = run_with(&["google", "quad9", "cloudflare"], &v);
+        compute_stats_in(&mut s, TestKind::Cached);
+        assert_eq!(excused(&s), 3);
+        for t in &s.targets {
+            let sum = &t.stats["cached"];
+            assert_eq!((sum.sent, sum.timeouts), (29, 0));
+            assert_eq!(failure_cost_of(&t.stats), 0.0);
+        }
+        let sel = s.resolvers.clone();
+        assert!(load_notes(&s, &sel).iter().any(|(t, _)| t.contains("excused")));
+        // Two resolvers in the bucket and the third elsewhere: nothing excused.
+        let mut v = one(0, 5000);
+        v.extend(one(1, 5300));
+        v.extend(one(2, 9000));
+        let mut s = run_with(&["google", "quad9", "cloudflare"], &v);
+        excuse_blips(&mut s);
+        assert_eq!(excused(&s), 0);
+        // Four transports of one resolver failing together are one resolver's limit, not a blip.
+        let v: Vec<_> = (0..4u16).flat_map(|t| one(t, 5000 + t as u32 * 100)).collect();
+        let mut s = run_with(&["google"], &v);
+        s.targets = (0..4).map(|i| TargetInfo { idx: i, ..s.targets[0].clone() }).collect();
+        excuse_blips(&mut s);
+        assert_eq!(excused(&s), 0);
+    }
+
+    #[test]
+    fn a_neterr_streak_is_a_tld_stall() {
+        let mut v = Vec::new();
+        for k in [TestKind::Cached, TestKind::Uncached, TestKind::Tld] {
+            for i in 0..30u32 {
+                let o = if k == TestKind::Tld && i >= 10 { Outcome::Neterr } else { Outcome::Ok };
+                v.push((0u16, k, i, o, i * 20));
+            }
+        }
+        let mut s = run_with(&["google"], &v);
+        for k in TestKind::ALL {
+            let (ok, bad) = if k == TestKind::Tld { (10, 20) } else { (30, 0) };
+            let mut ms = vec![15.0; ok];
+            s.targets[0].stats.insert(k.key().into(), stats::summarize(&mut ms, 30, 0, bad, bad));
+        }
+        mark_limited(&mut s, TestKind::Tld);
+        assert!(s.targets[0].stats["tld"].limited);
+        let mut without = s.targets[0].stats.clone();
+        without.remove("tld");
+        assert_eq!(composite(&s.targets[0]), score(&without));
+        assert_eq!(failure_cost_of(&s.targets[0].stats), 0.0);
     }
 
     #[test]
@@ -2633,7 +2832,7 @@ mod tests {
     #[test]
     fn a_local_system_resolver_is_a_baseline_not_a_pick() {
         let mut v = vec![10.0; 20];
-        let base = stats::summarize(&mut v, 20, 0, 0);
+        let base = stats::summarize(&mut v, 20, 0, 0, 0);
         let mut local = crate::catalog::system_entries(&["192.168.1.53".parse().unwrap()]).remove(0);
         local.forwarder = Some("Pi-hole (dnsmasq-pi-hole-v2.93)".into());
         let isp = crate::catalog::system_entries(&["203.0.113.9".parse().unwrap()]).remove(0);
@@ -2643,7 +2842,7 @@ mod tests {
             t.idx = idx;
             t.state = "ready".into();
             for k in ["cached", "uncached", "tld"] {
-                t.stats.insert(k.into(), stats::Summary { p50, p95: p50, ..base.clone() });
+                t.stats.insert(k.into(), stats::Summary { wmean: p50, ..base.clone() });
             }
             t
         };
@@ -2684,14 +2883,14 @@ mod tests {
     fn cdn_edges_dont_move_the_speed_order() {
         // One resolver answers fastest while another maps CDNs better. Each is a pick of its own.
         let mut v = vec![10.0; 20];
-        let base = stats::summarize(&mut v, 20, 0, 0);
+        let base = stats::summarize(&mut v, 20, 0, 0, 0);
         let target = |id: &str, p50: f64, idx: usize| {
             let r = crate::catalog::builtin().into_iter().find(|r| r.id == id).unwrap();
             let mut t = TargetInfo::new(&r, Transport::Udp, false, r.primary(false).unwrap());
             t.idx = idx;
             t.state = "ready".into();
             for k in ["cached", "uncached", "tld"] {
-                t.stats.insert(k.into(), stats::Summary { p50, ..base.clone() });
+                t.stats.insert(k.into(), stats::Summary { wmean: p50, ..base.clone() });
             }
             t
         };
@@ -2751,6 +2950,7 @@ mod tests {
                     at: i,
                     h: 0,
                     d: None,
+                    x: false,
                 })
                 .collect()
         };
@@ -2916,7 +3116,20 @@ mod tests {
                 .map(|(ti, x)| {
                     let tx = tx.clone();
                     sc.spawn(move || {
-                        measure_paced(ti, x.as_mut(), pacer, TestKind::Cached, samples, &[], fresh, Duration::from_secs(1), t0, cancel, tx)
+                        measure_paced(
+                            ti,
+                            x.as_mut(),
+                            pacer,
+                            None,
+                            TestKind::Cached,
+                            samples,
+                            &[],
+                            fresh,
+                            Duration::from_secs(1),
+                            t0,
+                            cancel,
+                            tx,
+                        )
                     })
                 })
                 .collect();
@@ -2927,6 +3140,37 @@ mod tests {
         let out: Vec<Sample> = rx.try_iter().collect();
         let sends = sends.lock().unwrap().clone();
         (out, dropped, sends, wall)
+    }
+
+    #[test]
+    fn tld_queries_to_one_resolver_are_spaced() {
+        // Two targets of one resolver, 5 samples each. Only the TLD test shares a per-resolver pacer.
+        let span = |test: TestKind| -> Duration {
+            let sends = Arc::new(Mutex::new(Vec::new()));
+            let mut xs: Vec<PaceStub> =
+                (0..2).map(|id| PaceStub { id, delay: Duration::from_millis(1), timeout: false, sends: sends.clone() }).collect();
+            let global = Pacer::new(Duration::from_millis(1));
+            let per = (test == TestKind::Tld).then(|| Pacer::new(Duration::from_millis(20)));
+            let fresh = Fresh::defaults();
+            let (tx, _rx) = mpsc::channel();
+            let t0 = Instant::now();
+            let cancel = AtomicBool::new(false);
+            let (global, per, fresh, cancel) = (&global, per.as_ref(), &fresh, &cancel);
+            std::thread::scope(|sc| {
+                for (ti, x) in xs.iter_mut().enumerate() {
+                    let tx = tx.clone();
+                    sc.spawn(move || measure_paced(ti, x, global, per, test, 5, &[], fresh, Duration::from_secs(1), t0, cancel, tx));
+                }
+            });
+            let mut at: Vec<Instant> = sends.lock().unwrap().iter().map(|s| s.1).collect();
+            assert_eq!(at.len(), 10);
+            at.sort();
+            *at.last().unwrap() - at[0]
+        };
+        // Stamps are taken after a thread wakes, so single pairs can land a few ms inside the gap; the reserved
+        // slots are exact, so the span of 10 sends cannot be shorter than 9 gaps (180 ms) less wake-up slack.
+        assert!(span(TestKind::Tld) + Duration::from_millis(5) >= Duration::from_millis(180), "{:?}", span(TestKind::Tld));
+        assert!(span(TestKind::Uncached) < Duration::from_millis(120), "{:?}", span(TestKind::Uncached));
     }
 
     #[test]
@@ -2999,7 +3243,9 @@ mod tests {
         let count = std::thread::scope(|sc| {
             for (ti, x) in xs.iter_mut().enumerate() {
                 let tx = tx.clone();
-                sc.spawn(move || measure_paced(ti, x, pacer, TestKind::Cached, 1000, &[], fresh, Duration::from_secs(1), t0, cancel, tx));
+                sc.spawn(move || {
+                    measure_paced(ti, x, pacer, None, TestKind::Cached, 1000, &[], fresh, Duration::from_secs(1), t0, cancel, tx)
+                });
             }
             drop(tx);
             rx.recv().unwrap();

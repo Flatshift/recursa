@@ -104,7 +104,7 @@
       {@const on = app.route.name === p.match || (p.match === 'resolvers' && app.route.name === 'resolver')}
       <li>
         <a href={p.href} class="item" class:on aria-current={on ? 'page' : undefined} onclick={(e) => go(e, p.href)} title={mobile ? undefined : `${p.label} (${shortcut(`cmd+${p.key}`)})`}>
-          <Icon name={p.icon} size={mobile ? 20 : 15} />
+          <span class="ic" data-place={p.match}><Icon name={p.icon} size={mobile ? 18 : 13} /></span>
           <span>{p.label}</span>
         </a>
       </li>
@@ -133,16 +133,16 @@
           <span class="rt">
             {#if live}<span class="dot" aria-hidden="true"></span>{/if}
             <span>{shortWhen(r.started_at)}</span>
-            {#if mobile && !live && r.summary.best}<span class="num score" title="Speed score">{ms(r.summary.best.composite_ms)}</span>{/if}
+            {#if mobile && !live && r.summary.best}<span class="num score chip" title="Speed score">{ms(r.summary.best.composite_ms)}</span>{/if}
           </span>
           <span class="rb">
             {#if live}
-              Measuring…
+              <span class="live">Measuring…</span>
             {:else if r.summary.best?.tied_with}
               <span class="who" title="Tied for fastest: too close for this run to call">{r.summary.best.label} or {r.summary.best.tied_with}</span>
             {:else if r.summary.best}
               <span class="who">{r.summary.best.label}</span>{#if !mobile}
-                <span class="num" title="Speed score">{ms(r.summary.best.composite_ms)}</span>{/if}
+                <span class="num chip" title="Speed score">{ms(r.summary.best.composite_ms)}</span>{/if}
             {:else}
               <span class="faint">{r.status === 'cancelled' ? 'Stopped' : 'No reliable pick'}</span>
             {/if}
@@ -180,7 +180,8 @@
     >
       <span class="dot" aria-hidden="true"></span>
       <span class="ml">
-        {#if monitoring?.enabled}Monitoring <span class="sub">{monitoring.interval_min} min</span>{:else}Monitoring <span class="sub">off</span>{/if}
+        <span class="mt">Monitoring</span>
+        <span class="sub">{#if monitoring?.enabled}Every {monitoring.interval_min} min{:else}Off{/if}</span>
       </span>
       <Icon name="chevron-right" size={mobile ? 16 : 12} />
     </a>
@@ -222,13 +223,13 @@
     padding: 0 8px;
   }
   .places {
-    padding-top: 2px;
+    padding: 4px 8px 6px;
   }
   .item {
     display: flex;
     align-items: center;
-    gap: 9px;
-    min-height: 28px;
+    gap: 10px;
+    min-height: 30px;
     padding: 0 10px;
     border-radius: var(--r-md);
     color: var(--ink);
@@ -248,14 +249,60 @@
   .item.on :global(svg) {
     color: var(--accent-text);
   }
+  /* Each place has a colored tile with a white glyph, as a Mac source list does. The hues are a navigation
+     vocabulary drawn from Recursa's own palette: the answer blue, TLD green and uncached rose of the icon's stops, the
+     TCP violet and slate, all at one lightness and chroma. None is the good, warning or serious color. */
+  .ic {
+    --tile-l: 0.58;
+    --tile-c: 0.15;
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--r-md);
+    background: var(--tile);
+  }
+  .ic :global(svg),
+  .item.on .ic :global(svg) {
+    color: #fff;
+  }
+  .ic[data-place='bench'] {
+    --tile: oklch(var(--tile-l) var(--tile-c) 258); /* --s-cached */
+  }
+  .ic[data-place='resolvers'] {
+    --tile: oklch(var(--tile-l) var(--tile-c) 162); /* --s-tld */
+  }
+  .ic[data-place='reliability'] {
+    --tile: oklch(var(--tile-l) var(--tile-c) 40); /* --s-uncached */
+  }
+  .ic[data-place='time'] {
+    --tile: oklch(var(--tile-l) var(--tile-c) 300);
+  }
+  .ic[data-place='method'] {
+    --tile: oklch(var(--tile-l) 0.035 285);
+  }
+  :global(html[data-theme='dark']) .ic {
+    --tile-l: 0.66;
+    --tile-c: 0.13;
+  }
+  @media (prefers-color-scheme: dark) {
+    :global(html:not([data-theme='light'])) .ic {
+      --tile-l: 0.66;
+      --tile-c: 0.13;
+    }
+  }
+  .places .item.on > span:not(.ic) {
+    font-weight: 600;
+  }
   .runs-h {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 14px 12px 2px 18px;
+    padding: 14px 12px 6px 18px;
     font-size: var(--t-xs);
     font-weight: 620;
-    color: var(--ink-3);
+    color: var(--ink-2);
   }
   .count {
     flex: 1;
@@ -289,7 +336,7 @@
   .acts {
     position: absolute;
     top: 4px;
-    right: 14px;
+    right: 10px;
     display: flex;
     gap: 1px;
     opacity: 0;
@@ -353,6 +400,11 @@
   :global(html.mobile) .item.on {
     background: var(--side-sel);
   }
+  :global(html.mobile) .ic {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+  }
   :global(html.mobile) .item:active {
     background: var(--side-sel);
   }
@@ -370,10 +422,19 @@
     background: none;
     color: var(--ink-3);
   }
+  :global(html.mobile) .runs {
+    max-height: calc(100% - 12px);
+    margin: 0 10px 12px;
+    padding: 4px;
+  }
   :global(html.mobile) .run {
     min-height: 56px;
     gap: 2px;
-    padding: 8px 100px 8px 12px;
+    padding: 8px 100px 8px 7px;
+  }
+  :global(html.mobile) .run.on,
+  :global(html.mobile) .run:active {
+    background: var(--sel);
   }
   :global(html.mobile) .rt {
     font-size: var(--t-sm);
@@ -395,7 +456,7 @@
     padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
   }
   :global(html.mobile) .mon {
-    height: 48px;
+    height: 56px;
     padding: 0 12px 0 14px;
     border-radius: var(--r-lg);
     font-size: var(--t-sm);
@@ -410,14 +471,28 @@
       transition: none;
     }
   }
+  /* Runs sit in a tray one surface step up, ringed by a hairline. It hugs its rows and scrolls only when it must. */
   .runs {
-    padding-bottom: 8px;
+    align-self: start;
+    max-height: calc(100% - 10px);
+    margin: 0 8px 10px;
+    padding: 3px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-lg);
   }
   .run {
     display: grid;
     gap: 0;
-    padding: 5px 10px;
+    padding: 5px 6px;
     line-height: 1.3;
+  }
+  /* On the tray's surface the selection is the on-surface step, not the sidebar's. */
+  .run:hover {
+    background: color-mix(in oklch, var(--sel) 60%, transparent);
+  }
+  .run.on {
+    background: var(--sel);
   }
   .rt {
     display: flex;
@@ -443,10 +518,19 @@
   }
   :global(html.mobile) .rt .score {
     margin-left: auto;
-    color: var(--ink-2);
   }
-  .rb .num {
-    color: var(--ink-2);
+  /* The speed score as a chip in the answer blue; a live run says so in the measuring orange. */
+  .chip {
+    padding: 0 5px;
+    border-radius: 999px;
+    background: color-mix(in oklch, var(--s-cached) 13%, transparent);
+    color: color-mix(in oklch, var(--s-cached) 78%, var(--ink));
+    font-size: var(--t-2xs);
+    line-height: 16px;
+  }
+  .live {
+    color: var(--s-uncached);
+    font-weight: 560;
   }
   .faint {
     color: var(--ink-3);
@@ -470,7 +554,7 @@
     }
   }
   .empty {
-    padding: 6px 10px;
+    padding: 6px 8px;
     font-size: var(--t-xs);
     color: var(--ink-3);
   }
@@ -479,7 +563,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 8px 10px 10px;
+    padding: 10px 10px 12px;
     border-top: 1px solid var(--rule);
   }
   /* A button, not a caption: a raised surface with a hairline, a status dot and a chevron that says it goes somewhere. */
@@ -489,7 +573,7 @@
     align-items: center;
     gap: 8px;
     min-width: 0;
-    height: 28px;
+    height: 38px;
     padding: 0 8px 0 10px;
     border: 1px solid var(--rule);
     border-radius: var(--r-md);
@@ -518,12 +602,17 @@
   .ml {
     flex: 1;
     min-width: 0;
-    overflow: hidden;
+    display: grid;
+    line-height: 1.2;
+  }
+  .mt {
+    font-weight: 600;
     white-space: nowrap;
+    overflow: hidden;
     text-overflow: ellipsis;
-    font-weight: 560;
   }
   .sub {
+    font-size: var(--t-2xs);
     font-weight: 400;
     color: var(--ink-2);
   }
@@ -536,6 +625,17 @@
   .mon.on .dot {
     background: var(--good);
     box-shadow: none;
+  }
+  /* Switched on, the card takes a wash of the good color. */
+  .mon.on {
+    border-color: color-mix(in oklch, var(--good) 40%, var(--rule));
+    background: color-mix(in oklch, var(--good) 9%, var(--surface));
+  }
+  .mon.on:hover {
+    background: color-mix(in oklch, var(--good) 15%, var(--surface));
+  }
+  .mon.on .sub {
+    color: color-mix(in oklch, var(--good) 75%, var(--ink));
   }
   @media (prefers-reduced-motion: reduce) {
     .mon {

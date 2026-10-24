@@ -2,7 +2,7 @@ import { api, confirmAction, desktop, mac, mobile, notifyDone, onDesktop, saveEx
 import type { Mix } from './verdict';
 import type { Bootstrap, Env, Outcome, Resolver, RunConfig, RunRow, RunState, Sample } from './types';
 
-export type Route =
+type Route =
   | { name: 'bench' }
   | { name: 'run'; id: string }
   | { name: 'resolvers' }

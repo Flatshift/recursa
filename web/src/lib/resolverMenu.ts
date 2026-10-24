@@ -6,7 +6,7 @@ import { menu, SEPARATOR } from './menu.svelte';
 import { label } from './format';
 import { blocker, run } from './checks.svelte';
 
-export function resolverMenu(e: MouseEvent, id: string) {
+function resolverMenu(e: MouseEvent, id: string) {
   const r = app.resolvers.find((x) => x.id === id) ?? app.run?.resolvers.find((x) => x.id === id);
   if (!r) return;
   const addr = r.ipv4[0] ?? r.ipv6[0] ?? r.doh ?? r.dot ?? '';

@@ -121,8 +121,7 @@
       </p>
       <p>
         <b>A noisy link.</b> Each answer crosses your own link first. If the link stops for a moment (a Wi-Fi scan, a busy channel),
-        all queries in that period are slow, to every resolver. The speed score uses the 95th percentile and the spread, so it
-        increases too.
+        all queries in that period are slow, to every resolver. The speed score is a mean, so it moves too, though one stall cannot move it far.
       </p>
       <p>
         To find this, Recursa pings the default gateway (usually your router) every 100 ms while a run measures. It times each reply
@@ -195,15 +194,20 @@
       <p>
         There is no single overall winner. Each goal (fastest answers, nearest CDN edges, protection, privacy, steadiness) has its
         own pick, and a pick must have answered at least 98%. The latency ranking and the fastest pick use a speed score in ms:
-        cached 40%, uncached 35%, TLD 25%. For each test, the score is the median moved halfway to the 95th percentile, plus a
-        quarter of the standard deviation, so a steady resolver beats an erratic one. Each timeout adds 1 s, about the time your
-        computer waits before it asks again, divided over all queries sent. If this run's own variation can cause a difference (the
+        cached 50%, uncached 40%, TLD 10%. The score is the mean of two halves, each a pick of its own: the cached test, and
+        the uncached and TLD tests at 0.8 and 0.2. For each test, the score is the mean of the answers after the slowest tenth are
+        pulled down to the 90th percentile, so one straggler cannot move it; the 95th percentile and the jitter are shown
+        beside it rather than folded in. A test in which a resolver began refusing or stopped answering (a rate limit, from
+        here) is left out of its score and its answered share and marked limited. Each timeout or failed answer (SERVFAIL,
+        REFUSED, a network error) adds 1 s, about the time your computer waits before it asks again, divided over all queries
+        sent. A failure that hits three or more resolvers within the same two seconds is a network blip from here, not any
+        resolver's fault; it is excused and counts as nothing. If this run's own variation can cause a difference (the
         answers resampled 200 times), the result is a tie, and no resolver is first.
       </p>
       <p>
         Per lookup puts the speed figures, the measured cache-hit rate and the CDN edge penalty in one number: what one lookup costs
         on average from this network, in ms, at the traffic mix set in Settings (80% of lookups answered from the resolver's cache
-        at home, 60% in an office, 40% in a lab). The cached figure is corrected for answers that were really fresh lookups, using
+        at home, 60% in an office, 50% in a lab). The cached figure is corrected for answers that were really fresh lookups, using
         the share of Cached answers the resolver gave from its cache. Uncached and TLD figures count for the rest, weighted as in
         the speed score. Timeouts add their cost, and so does the CDN edge penalty, 3 round trips on the half of lookups that open a
         new connection; without CDN mapping the number is DNS only. The Best from here pick ranks by it and may name a tie. At the

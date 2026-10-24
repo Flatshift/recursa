@@ -270,7 +270,7 @@ fn run_with(ex: &mut dyn Exchanger, transport: &str, timeout: Duration, ttl_wait
         }
     }
     let samples_ms = ok_ms.clone();
-    let latency_stats = stats::summarize(&mut ok_ms, REPEATS, 0, REPEATS - samples_ms.len() as u32);
+    let latency_stats = stats::summarize(&mut ok_ms, REPEATS, 0, REPEATS - samples_ms.len() as u32, 0);
 
     let warm_ms = hit.as_ref().filter(|a| a.msg.rcode == dns::RCODE_NOERROR).map(|a| a.rtt_ms);
     if let Some(a) = hit.as_ref().or(prime.as_ref()) {
@@ -401,7 +401,7 @@ pub struct LiveCategory {
 /// Whether live threat names may go to `r` over plain DNS: when the user allowed it, or to a system resolver on
 /// this network (a Pi-hole, the router), whose blocking is what the user most needs checked.
 fn live_over_plain(r: &Resolver, allow_plain: bool) -> bool {
-    allow_plain || (r.group == "system" && r.primary(false).or_else(|| r.primary(true)).is_some_and(|ip| on_local_network(&ip)))
+    allow_plain || (r.group == "system" && r.any_ip().is_some_and(|ip| on_local_network(&ip)))
 }
 
 /// Draw hosts from each feed and keep those an unfiltered resolver still resolves. The baseline is encrypted: a

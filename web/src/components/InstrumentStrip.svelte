@@ -10,8 +10,8 @@
   // The instrument describing itself: where it measures from and how precisely. The bar says only
   // what changes the reading of a result and grows louder when something is wrong; a click opens the
   // full conditions.
-  import type { Env, LinkCause, LinkStats, LinkUnavailable } from '../lib/types';
-  import { holder, us } from '../lib/format';
+  import type { Env, LinkCause, LinkStats, LinkUnavailable, RunState } from '../lib/types';
+  import { holder, score, us } from '../lib/format';
   import { isMac } from '../lib/keys';
   import { mobile } from '../lib/api';
   import Icon from './Icon.svelte';
@@ -20,8 +20,9 @@
     env,
     now = null,
     link,
-    frozen = false
-  }: { env: Env | null; now?: Env | null; link?: LinkStats | LinkUnavailable; frozen?: boolean } = $props();
+    frozen = false,
+    run = null
+  }: { env: Env | null; now?: Env | null; link?: LinkStats | LinkUnavailable; frozen?: boolean; run?: RunState | null } = $props();
   const v = $derived(env?.vantage ?? null);
   const cal = $derived(env?.calibration ?? null);
   const icpt = $derived(env?.interception ?? null);
@@ -41,7 +42,6 @@
     unknown: `Nothing else on this ${machine} explains the stalls: the Wi-Fi link itself.`
   };
   const cause = $derived(gw?.host?.cause ? causes[gw.host.cause] : null);
-  const ms = (x: number) => (x < 10 ? x.toFixed(1) : Math.round(x).toString());
   // A full-tunnel VPN carries the route to 1.1.1.1, so the link is a tunnel interface: the vantage and
   // the latencies are the VPN's, not this network's.
   const vpn = $derived(!!iface && /^(utun|ipsec|ppp|tun|tap|wg)\d/.test(iface.interface));
@@ -57,9 +57,26 @@
   });
   const stallPct = $derived(gw && gw.sent ? Math.max(1, Math.round((100 * gw.stalls) / gw.sent)) : 0);
 
-  // Phone: the strip takes screen only when it has something to warn about; the conditions open from a run's menu.
+  // After the latency rounds the run keeps working with no new samples to show: the path check, the capability
+  // probes, the CDN mapping and the network intel. The bar names the check under way in place of the vantage; the
+  // progress rail above carries the motion, so the two never disagree.
+  const WORK: Record<string, string> = {
+    path: 'Timing the network path to each resolver and checking for port 53 interception',
+    probes: 'Asking each resolver what it does: DNSSEC, ECS, QNAME minimisation, blocking',
+    cdn: 'Mapping CDN edges through every resolver and timing them',
+    intel: 'Looking up each resolver’s network: RPKI, ROV, where its queries leave',
+  };
+  const working = $derived.by(() => {
+    if (run?.status !== 'running' || !WORK[run.phase]) return '';
+    // The probes and intel report per resolver; the path check and CDN mapping report only at the end.
+    const count = (run.phase === 'probes' || run.phase === 'intel') && run.done > 0 && run.total > 0 ? ` · ${run.done} of ${run.total} resolvers` : '';
+    return `Latency measured. ${WORK[run.phase]}${count}`;
+  });
+
+  // Phone: the strip takes screen only when it has something to warn about or a run is still working; the conditions
+  // open from a run's menu.
   const loud = $derived(caught || noisy || vpn || elsewhere);
-  const shown = $derived(!mobile || loud);
+  const shown = $derived(!mobile || loud || !!working);
   $effect(() => {
     document.documentElement.classList.toggle('strip-on', shown);
   });
@@ -96,14 +113,18 @@
     aria-label="Measurement conditions{frozen ? ', recorded with this run' : ''}"
   >
     {#if frozen}<span class="mark">Recorded</span>{/if}
-    <span class="where">
-      {#if v}
-        <span>{v.ipv4 ?? v.ipv6 ?? 'unknown'}</span>
-        {#if v.network?.asn}<span class="dim net">AS{v.network.asn} <span class="name">{holder(v.network.holder)}</span></span>{/if}
-      {:else}
-        <span class="dim">Finding vantage…</span>
-      {/if}
-    </span>
+    {#if working}
+      <span class="work">{working}</span>
+    {:else}
+      <span class="where">
+        {#if v}
+          <span>{v.ipv4 ?? v.ipv6 ?? 'unknown'}</span>
+          {#if v.network?.asn}<span class="dim net">AS{v.network.asn} <span class="name">{holder(v.network.holder)}</span></span>{/if}
+        {:else}
+          <span class="dim">Finding vantage…</span>
+        {/if}
+      </span>
+    {/if}
     <span class="checks">
       {#if elsewhere}<span class="check flag"><span class="wide">Not your current network</span><span class="tight">Other network</span></span>{/if}
       {#if vpn}<span class="check flag">VPN <span class="dim wide">{iface?.interface}</span></span>{/if}
@@ -187,7 +208,7 @@
       {#if iface}{vpn ? 'VPN' : kind} <span class="mono dim">{iface.interface}</span>{/if}
       {#if vpn}<small class="note">Traffic leaves through a VPN tunnel: the vantage and the latencies are the VPN's, not this network's.</small>{/if}
       {#if gw}
-        {iface ? ' · ' : ''}router <span class="mono">{ms(gw.p50)} ms</span>, p95 <span class="mono">{ms(gw.p95)} ms</span>
+        {iface ? ' · ' : ''}router <span class="mono">{score(gw.p50)} ms</span>, p95 <span class="mono">{score(gw.p95)} ms</span>
         <small>
           Pinged {gw.gateway} every 100 ms during the run: {gw.stalls} of {gw.sent} stalled.{noisy
             ? ' Stalls on this link inflate the speed scores.'
@@ -266,6 +287,13 @@
     flex-shrink: 1;
     min-width: 7ch;
     overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Working: one line that gives way before the checks do. */
+  .work {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
     text-overflow: ellipsis;
   }
   /* Trust: pushed to the right edge, and never clipped. */
