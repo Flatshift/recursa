@@ -1,8 +1,8 @@
 <script lang="ts">
   // The Time page's "Over time" view: a light background check of a few time servers, kept for weeks, so what one run
   // can't show comes through: how steady each server is, whether it drops out, and whether this computer's clock wanders.
-  import { api, confirmAction } from '../lib/api';
   import { app } from '../lib/store.svelte';
+  import { monitor } from '../lib/monitor.svelte';
   import type { NtpEntry, NtpMonitorConfig, NtpMonitorPoint, NtpMonitorResp, NtpMonitorServer } from '../lib/types';
   import { ago, ms, signedMs, when } from '../lib/format';
   import { MAX_CUSTOM, idMap, nameOf } from '../lib/ntp';
@@ -14,79 +14,31 @@
   const W = 240;
 
   let days = $state(7);
-  let mon = $state<NtpMonitorResp | null>(null);
-  let cfg = $state<NtpMonitorConfig | null>(null);
-  let saving = $state(false);
   let customText = $state('');
 
-  let loadSeq = 0;
-  async function load() {
-    const seq = ++loadSeq;
-    try {
-      const r = await api.get<NtpMonitorResp>(`/api/ntp/monitor?days=${days}`);
-      if (seq !== loadSeq) return; // a newer request superseded this one
-      mon = r;
-      if (!cfg) cfg = $state.snapshot(r.config);
-    } catch (e) {
-      app.notify((e as Error).message, 'error');
-    }
-  }
-  $effect(() => {
-    days;
-    load();
+  const mon = monitor<NtpMonitorConfig, NtpMonitorResp>({
+    endpoint: '/api/ntp/monitor',
+    query: () => `days=${days}`,
+    saved: (c) => (c.enabled ? `Checking ${c.servers.length} time servers every ${c.interval_min} min while Recursa runs.` : 'Time monitoring paused.'),
+    clearPrompt: 'Delete all time monitoring history? This can’t be undone.',
   });
-  $effect(() => {
-    // Refetch the history only when a cycle has been recorded since.
-    const t = setInterval(async () => {
-      if (document.hidden) return;
-      try {
-        const { last } = await api.get<{ last: number | null }>('/api/ntp/monitor/last');
-        if (last !== mon?.last) load();
-      } catch {
-        /* the next tick tries again */
-      }
-    }, 60_000);
-    return () => clearInterval(t);
-  });
-
-  async function save(next: NtpMonitorConfig) {
-    saving = true;
-    try {
-      cfg = await api.put<NtpMonitorConfig>('/api/ntp/monitor', next);
-      app.notify(cfg.enabled ? `Checking ${cfg.servers.length} time servers every ${cfg.interval_min} min while Recursa runs.` : 'Time monitoring paused.');
-      load();
-    } catch (e) {
-      app.notify((e as Error).message, 'error');
-    } finally {
-      saving = false;
-    }
-  }
-  async function clearHistory() {
-    if (!(await confirmAction('Delete all time monitoring history? This can’t be undone.', 'Delete History'))) return;
-    try {
-      await api.del('/api/ntp/monitor/history');
-    } catch (e) {
-      app.notify((e as Error).message, 'error');
-    }
-    load();
-  }
 
   const choices = $derived(catalog.filter((e) => e.kind !== 'pool' && !e.nts_only));
   const byId = $derived(idMap(catalog));
-  const typed = $derived((cfg?.servers ?? []).filter((s) => !byId.has(s)));
+  const typed = $derived((mon.cfg?.servers ?? []).filter((s) => !byId.has(s)));
 
   function toggle(id: string) {
-    if (!cfg) return;
-    const on = cfg.servers.includes(id);
-    if (!on && cfg.servers.length >= MAX_SERVERS) return app.notify(`At most ${MAX_SERVERS} servers are watched.`);
-    save({ ...cfg, servers: on ? cfg.servers.filter((x) => x !== id) : [...cfg.servers, id] });
+    if (!mon.cfg) return;
+    const on = mon.cfg.servers.includes(id);
+    if (!on && mon.cfg.servers.length >= MAX_SERVERS) return app.notify(`At most ${MAX_SERVERS} servers are watched.`);
+    mon.save({ ...mon.cfg, servers: on ? mon.cfg.servers.filter((x) => x !== id) : [...mon.cfg.servers, id] });
   }
   function addTyped() {
     const t = customText.trim();
-    if (!cfg || !t) return;
+    if (!mon.cfg || !t) return;
     if (typed.length >= MAX_CUSTOM) return app.notify(`At most ${MAX_CUSTOM} servers of your own.`);
-    if (cfg.servers.length >= MAX_SERVERS) return app.notify(`At most ${MAX_SERVERS} servers are watched.`);
-    if (!cfg.servers.includes(t)) save({ ...cfg, servers: [...cfg.servers, t] });
+    if (mon.cfg.servers.length >= MAX_SERVERS) return app.notify(`At most ${MAX_SERVERS} servers are watched.`);
+    if (!mon.cfg.servers.includes(t)) mon.save({ ...mon.cfg, servers: [...mon.cfg.servers, t] });
     customText = '';
   }
 
@@ -146,7 +98,7 @@
   }
   const hourMax = (s: NtpMonitorServer) => Math.max(1, ...s.stats.delay_by_hour.map((d) => d ?? 0));
 
-  const h = $derived(mon?.history);
+  const h = $derived(mon.data?.history);
   const clock = $derived(h?.clock);
   const clockChart = $derived.by(() => {
     if (!h || !clock || clock.points.length < 2) return null;
@@ -164,44 +116,44 @@
 </script>
 
 <div class="content scroll wrap">
-  {#if cfg}
+  {#if mon.cfg}
     <div class="mcfg panel">
       <label class="toggle">
-        <input type="checkbox" aria-label="Watch these time servers in the background" checked={cfg.enabled} disabled={saving} onchange={(e) => save({ ...cfg!, enabled: (e.currentTarget as HTMLInputElement).checked })} />
+        <input type="checkbox" aria-label="Watch these time servers in the background" checked={mon.cfg.enabled} disabled={mon.saving} onchange={(e) => mon.save({ ...mon.cfg!, enabled: (e.currentTarget as HTMLInputElement).checked })} />
         <span><b>Watch in the background</b> while Recursa is running</span>
       </label>
       <label class="inline">
         Every
-        <select value={cfg.interval_min} onchange={(e) => save({ ...cfg!, interval_min: Number((e.currentTarget as HTMLSelectElement).value) })}>
+        <select value={mon.cfg.interval_min} onchange={(e) => mon.save({ ...mon.cfg!, interval_min: Number((e.currentTarget as HTMLSelectElement).value) })}>
           {#each [15, 30, 60, 120, 360] as m}<option value={m}>{m < 60 ? `${m} min` : `${m / 60} h`}</option>{/each}
         </select>
       </label>
       <label class="inline">
         Keep
-        <select value={cfg.retention_days} onchange={(e) => save({ ...cfg!, retention_days: Number((e.currentTarget as HTMLSelectElement).value) })}>
+        <select value={mon.cfg.retention_days} onchange={(e) => mon.save({ ...mon.cfg!, retention_days: Number((e.currentTarget as HTMLSelectElement).value) })}>
           {#each [7, 30, 90, 365] as d}<option value={d}>{d} days</option>{/each}
         </select>
       </label>
       <details class="pickers">
-        <summary>{cfg.servers.length} server{cfg.servers.length === 1 ? '' : 's'} watched</summary>
+        <summary>{mon.cfg.servers.length} server{mon.cfg.servers.length === 1 ? '' : 's'} watched</summary>
         <div class="chips">
           {#each choices as e (e.id)}
-            {@const on = cfg.servers.includes(e.id)}
-            <button class="chip" class:on aria-pressed={on} disabled={saving} onclick={() => toggle(e.id)}>{e.name}</button>
+            {@const on = mon.cfg.servers.includes(e.id)}
+            <button class="chip" class:on aria-pressed={on} disabled={mon.saving} onclick={() => toggle(e.id)}>{e.name}</button>
           {/each}
           {#each typed as t (t)}
-            <button class="chip on" aria-pressed="true" disabled={saving} title="A server you typed. Click to stop watching it." onclick={() => toggle(t)}>{t} ×</button>
+            <button class="chip on" aria-pressed="true" disabled={mon.saving} title="A server you typed. Click to stop watching it." onclick={() => toggle(t)}>{t} ×</button>
           {/each}
         </div>
         <form class="custom" onsubmit={(ev) => (ev.preventDefault(), addTyped())}>
           <input bind:value={customText} placeholder="Your own server: host or host:port" aria-label="A time server of your own" spellcheck="false" autocapitalize="off" autocomplete="off" />
-          <button class="btn sm" type="submit" disabled={saving || !customText.trim()}>Add</button>
+          <button class="btn sm" type="submit" disabled={mon.saving || !customText.trim()}>Add</button>
         </form>
       </details>
     </div>
     <p class="hint">
       Each check sends one packet to each address of each server, never more often than every 15 minutes, through the same
-      record of who was asked as a run: a server that asked us to stop is left alone here too. It pauses during manual runs{mon?.last ? `; last check ${ago(mon.last)}` : ''}.
+      record of who was asked as a run: a server that asked us to stop is left alone here too. It pauses during manual runs{mon.data?.last ? `; last check ${ago(mon.data.last)}` : ''}.
     </p>
   {/if}
 
@@ -212,7 +164,7 @@
       {/each}
     </div>
     {#if h && h.cycles}
-      <button class="btn ghost sm danger" onclick={clearHistory}><Icon name="trash" size={13} />Clear history</button>
+      <button class="btn ghost sm danger" onclick={mon.clearHistory}><Icon name="trash" size={13} />Clear history</button>
     {/if}
   </div>
 
@@ -220,7 +172,7 @@
     <div class="empty">
       <p><b>Nothing recorded {days === 1 ? 'in the last 24 hours' : `in the last ${days} days`}.</b></p>
       <p class="ink-2">
-        {#if cfg?.enabled}The first check runs within a few seconds of the interval; this page updates when it has.{:else}Switch on “Watch in the background” above. Recursa checks while it is open, so a long record needs it left running.{/if}
+        {#if mon.cfg?.enabled}The first check runs within a few seconds of the interval; this page updates when it has.{:else}Switch on “Watch in the background” above. Recursa checks while it is open, so a long record needs it left running.{/if}
       </p>
     </div>
   {:else if h && clock}

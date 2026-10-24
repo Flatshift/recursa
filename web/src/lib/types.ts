@@ -544,6 +544,13 @@ export interface MonitorHistory {
   resolvers: MonitorHist[];
 }
 
+export interface MonitorResp {
+  config: MonitorConfig;
+  last: number | null;
+  paused: boolean;
+  history: MonitorHistory;
+}
+
 /** What this build can do: one row of `crates/engine/src/caps.rs`, also in `docs/PLATFORMS.md`. */
 export interface Caps {
   export: boolean;
