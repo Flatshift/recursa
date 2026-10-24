@@ -1,22 +1,16 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { app } from '../lib/store.svelte';
-  import { api, confirmAction, mobile } from '../lib/api';
+  import { mobile } from '../lib/api';
   import { status, stateLabel, stateGlyph, localNote } from '../lib/status.svelte';
-  import type { MonitorConfig, MonitorHist, MonitorHistory } from '../lib/types';
+  import { resolverMonitor } from '../lib/monitor.svelte';
+  import type { MonitorHist } from '../lib/types';
   import { ago, day, documented, label, list, ms, pct, plural, when } from '../lib/format';
   import Glyph from '../components/Glyph.svelte';
   import Icon from '../components/Icon.svelte';
   import Toolbar from '../components/Toolbar.svelte';
   import Info from '../components/Info.svelte';
   import Record, { type Mark } from '../components/Record.svelte';
-
-  interface MonitorResp {
-    config: MonitorConfig;
-    last: number | null;
-    paused: boolean;
-    history: MonitorHistory;
-  }
 
   const RANGES: [number, string, string][] = [
     [24, '24 h', 'the last 24 hours'],
@@ -26,75 +20,28 @@
   ];
 
   let hours = $state(72);
-  let mon = $state<MonitorResp | null>(null);
-  let cfg = $state<MonitorConfig | null>(null);
-  let saving = $state(false);
   let refreshing = $state(false);
   let cursor = $state<number | null>(null);
 
-  async function loadMonitor() {
-    try {
-      mon = await api.get<MonitorResp>(`/api/monitor?hours=${hours}`);
-      if (!cfg) cfg = $state.snapshot(mon.config);
-    } catch (e) {
-      app.notify((e as Error).message, 'error');
-    }
-  }
-  $effect(() => {
-    hours;
-    loadMonitor();
+  const mon = resolverMonitor({
+    query: () => `hours=${hours}`,
+    saved: (c) => (c.enabled ? `Monitoring every ${c.interval_min} min while Recursa runs.` : 'Monitoring paused.'),
+    clearPrompt: 'Delete all monitoring history? This can’t be undone.',
   });
   // Monitoring was switched from the menu bar: take its config as the new baseline.
   $effect(() => {
     if (!app.monitorRev) return;
-    untrack(() => {
-      cfg = null;
-      loadMonitor();
-    });
+    untrack(() => mon.reset());
   });
   $effect(() => {
     status.load();
-    // Refetch the history only when a monitoring cycle has been recorded since.
-    const t = setInterval(async () => {
-      if (document.hidden) return;
-      try {
-        const { last } = await api.get<{ last: number | null }>('/api/monitor/last');
-        if (last !== mon?.last) loadMonitor();
-      } catch {
-        /* the next tick tries again */
-      }
-    }, 60_000);
-    return () => clearInterval(t);
   });
 
-  async function save(next: MonitorConfig) {
-    saving = true;
-    try {
-      cfg = await api.put<MonitorConfig>('/api/monitor', next);
-      if (app.boot) app.boot = { ...app.boot, monitor: cfg };
-      app.notify(cfg.enabled ? `Monitoring every ${cfg.interval_min} min while Recursa runs.` : 'Monitoring paused.');
-      loadMonitor();
-    } catch (e) {
-      app.notify((e as Error).message, 'error');
-    } finally {
-      saving = false;
-    }
-  }
   async function refresh() {
     refreshing = true;
     await status.load(true);
     refreshing = false;
   }
-  async function clearHistory() {
-    if (!(await confirmAction('Delete all monitoring history? This can’t be undone.', 'Delete History'))) return;
-    try {
-      await api.del('/api/monitor/history');
-      loadMonitor();
-    } catch (e) {
-      app.notify((e as Error).message, 'error');
-    }
-  }
-
   const resolvers = $derived(app.resolvers);
   const nameOf = (id: string) => {
     const r = resolvers.find((x) => x.id === id);
@@ -115,9 +62,9 @@
   }
 
   // ---- The verdict: what the record says, in one sentence, then the evidence. ----
-  const interval = $derived(cfg?.interval_min ?? mon?.config.interval_min ?? 5);
+  const interval = $derived(mon.cfg?.interval_min ?? mon.data?.config.interval_min ?? 5);
   const rangeText = $derived(RANGES.find((r) => r[0] === hours)?.[2] ?? `the last ${hours} hours`);
-  const recorded = $derived((mon?.history.resolvers ?? []).filter((h) => h.cycles > 0));
+  const recorded = $derived((mon.data?.history.resolvers ?? []).filter((h) => h.cycles > 0));
   // A bound, so round up: "up to 32 min", not "31 m 37 s".
   const mins = (t: number) => (t < 90 * 60_000 ? `${Math.ceil(t / 60_000)} min` : `${Math.ceil(t / 3_600_000)} h`);
   const times = (n: number) => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
@@ -135,7 +82,7 @@
       sentence = `${down.length === recorded.length ? 'Every resolver you monitor' : list(down.map((h) => nameOf(h.resolver_id)))} stopped answering at some point in ${rangeText}${rest ? `; ${rest === 1 ? 'the other' : 'the others'} never did` : ''}.`;
 
     // Cells with no checks before now: Recursa wasn't running (or monitoring was off).
-    const h = mon!.history;
+    const h = mon.data!.history;
     const elapsed = Math.min(Math.ceil(h.hours / (h.cell / 3_600_000)), Math.ceil((Date.now() - h.since) / h.cell));
     const seen = new Set(recorded.flatMap((r) => r.buckets.filter((c) => c[1] > 0).map((c) => c[0])));
     const blankH = Math.round(((elapsed - seen.size) * h.cell) / 3_600_000);
@@ -171,9 +118,9 @@
   // ---- Outages, longest first. A cycle only sees the moments it checks, so a span is bounded: from just after the
   // last answered check to the first one answered again. ----
   const outages = $derived.by(() => {
-    if (!mon) return [];
+    if (!mon.data) return [];
     const now = Date.now();
-    return mon.history.resolvers
+    return mon.data.history.resolvers
       .flatMap((h: MonitorHist) =>
         h.outages.map((o) => ({
           id: h.resolver_id,
@@ -182,7 +129,7 @@
           cycles: o.cycles,
           ongoing: o.recovered == null,
           upTo: (o.recovered ?? now) - o.start + interval * 60_000,
-          cell: Math.floor((o.start - mon!.history.since) / mon!.history.cell),
+          cell: Math.floor((o.start - mon.data!.history.since) / mon.data!.history.cell),
         })),
       )
       .sort((a, b) => b.upTo - a.upTo);
@@ -233,10 +180,10 @@
     <div class="content scroll wrap">
       <section class="verdict" aria-labelledby="rv-h">
         <div class="lead">
-          <h2 id="rv-h">{verdict?.sentence ?? (mon ? 'No record from this network yet.' : '')}</h2>
+          <h2 id="rv-h">{verdict?.sentence ?? (mon.data ? 'No record from this network yet.' : '')}</h2>
           {#if verdict}
             <p class="detail">{verdict.detail}</p>
-          {:else if mon}
+          {:else if mon.data}
             <p class="detail">
               Turn on background monitoring and leave Recursa running. Every few minutes it checks each resolver from this network
               and records whether it answered and how fast. Over days that becomes an uptime record no status page can give you.
@@ -255,44 +202,44 @@
         {/if}
       </section>
 
-      {#if cfg}
+      {#if mon.cfg}
         <div class="mcfg">
           <label class="toggle">
-            <input type="checkbox" checked={cfg.enabled} disabled={saving} onchange={(e) => save({ ...cfg!, enabled: (e.currentTarget as HTMLInputElement).checked })} />
+            <input type="checkbox" checked={mon.cfg.enabled} disabled={mon.saving} onchange={(e) => mon.save({ ...mon.cfg!, enabled: (e.currentTarget as HTMLInputElement).checked })} />
             <span>Monitor in the background while Recursa runs</span>
           </label>
           <label class="inline">
             every
-            <select value={cfg.interval_min} onchange={(e) => save({ ...cfg!, interval_min: Number((e.currentTarget as HTMLSelectElement).value) })}>
+            <select value={mon.cfg.interval_min} onchange={(e) => mon.save({ ...mon.cfg!, interval_min: Number((e.currentTarget as HTMLSelectElement).value) })}>
               {#each [1, 5, 10, 15, 30, 60] as m}<option value={m}>{m} min</option>{/each}
             </select>
           </label>
           <label class="inline">
             keep
-            <select value={cfg.retention_days} onchange={(e) => save({ ...cfg!, retention_days: Number((e.currentTarget as HTMLSelectElement).value) })}>
+            <select value={mon.cfg.retention_days} onchange={(e) => mon.save({ ...mon.cfg!, retention_days: Number((e.currentTarget as HTMLSelectElement).value) })}>
               {#each [7, 30, 90, 365] as d}<option value={d}>{d} days</option>{/each}
             </select>
           </label>
           <details class="pickers">
-            <summary><Icon name="chevron-right" size={12} />{plural(cfg.resolvers.length, 'resolver')} {cfg.enabled ? 'monitored' : 'selected'}</summary>
+            <summary><Icon name="chevron-right" size={12} />{plural(mon.cfg.resolvers.length, 'resolver')} {mon.cfg.enabled ? 'monitored' : 'selected'}</summary>
             <div class="chips">
               {#each resolvers.filter((r) => r.group !== 'legacy') as r (r.id)}
-                {@const on = cfg.resolvers.includes(r.id)}
+                {@const on = mon.cfg.resolvers.includes(r.id)}
                 <button
                   class="chip"
                   class:on
                   aria-pressed={on}
-                  onclick={() => save({ ...cfg!, resolvers: on ? cfg!.resolvers.filter((x) => x !== r.id) : [...cfg!.resolvers, r.id] })}
+                  onclick={() => mon.save({ ...mon.cfg!, resolvers: on ? mon.cfg!.resolvers.filter((x) => x !== r.id) : [...mon.cfg!.resolvers, r.id] })}
                   >{#if on}<Icon name="check" size={11} />{/if}{r.provider} {r.variant}</button
                 >
               {/each}
             </div>
           </details>
-          {#if mon?.last}<span class="last">Last check {ago(mon.last)}</span>{/if}
+          {#if mon.data?.last}<span class="last">Last check {ago(mon.data.last)}</span>{/if}
         </div>
       {/if}
 
-      {#if mon && mon.history.resolvers.length}
+      {#if mon.data && mon.data.history.resolvers.length}
         <section class="sheet" aria-labelledby="rec-h">
           <div class="bh">
             <div class="ht">
@@ -304,7 +251,7 @@
                   neither server answers anything. Monitoring pauses during manual runs.
                 </p>
                 <p>
-                  Each column is {mon.history.cell === 3_600_000 ? 'an hour' : `${mon.history.cell / 3_600_000} hours`}. Its shading is
+                  Each column is {mon.data.history.cell === 3_600_000 ? 'an hour' : `${mon.data.history.cell / 3_600_000} hours`}. Its shading is
                   where that time's answers landed on the log scale at the right, darkest where most did, so a resolver that answers
                   from cache and from the internet shows two bands. The line is the median; the bars beneath are the share left
                   unanswered.
@@ -312,9 +259,9 @@
                 {#if app.env?.interception?.verdict === 'intercepted'}<p>While port 53 is intercepted on this network, resolvers that offer DoT or DoH are monitored over encrypted DNS instead, which has one endpoint.</p>{/if}
               </Info>
             </div>
-            <button class="btn ghost sm" onclick={clearHistory}><Icon name="trash" size={13} />Clear history</button>
+            <button class="btn ghost sm" onclick={mon.clearHistory}><Icon name="trash" size={13} />Clear history</button>
           </div>
-          <Record history={mon.history} intervalMin={interval} {nameOf} {marks} bind:cursor />
+          <Record history={mon.data.history} intervalMin={interval} {nameOf} {marks} bind:cursor />
           <p class="legend" aria-hidden="true">
             <span><i class="sw-heat"></i>Where answers landed</span>
             <span><i class="sw-med"></i>Median</span>

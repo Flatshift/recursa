@@ -4,6 +4,7 @@
   import { api, mobile, loginItem, shell } from '../lib/api';
   import type { ComponentProps } from 'svelte';
   import type { Housekeeping, MonitorConfig, RpkiStatus } from '../lib/types';
+  import { resolverMonitor } from '../lib/monitor.svelte';
   import { ago, pct, plural } from '../lib/format';
   import { HIT_SHARE, MIX_LABEL, type Mix } from '../lib/verdict';
   import Toolbar from '../components/Toolbar.svelte';
@@ -28,17 +29,10 @@
     if (canLogin) loginItem.get().then((v) => (login = v), () => (login = null));
   });
 
-  async function saveMonitor(next: MonitorConfig) {
-    saving = true;
+  const monitor = resolverMonitor({ onerror: (m) => (error = m) });
+  function saveMonitor(next: MonitorConfig) {
     error = null;
-    try {
-      const saved = await api.put<MonitorConfig>('/api/monitor', next);
-      if (app.boot) app.boot = { ...app.boot, monitor: saved };
-    } catch (e) {
-      error = (e as Error).message;
-    } finally {
-      saving = false;
-    }
+    return monitor.save(next);
   }
 
   // Automatic cleanup of unsaved runs. The engine applies it at start and after each run.
@@ -255,7 +249,7 @@
             <input
               type="checkbox"
               checked={cfg.enabled}
-              disabled={saving}
+              disabled={monitor.saving}
               onchange={(e) => saveMonitor({ ...cfg!, enabled: (e.currentTarget as HTMLInputElement).checked })}
             />
             <span>Check resolvers in the background while Recursa is running</span>
@@ -265,7 +259,7 @@
             <select
               id="interval"
               value={cfg.interval_min}
-              disabled={saving}
+              disabled={monitor.saving}
               onchange={(e) => saveMonitor({ ...cfg!, interval_min: Number((e.currentTarget as HTMLSelectElement).value) })}
             >
               {#each [1, 5, 10, 15, 30, 60] as m}<option value={m}>{m} min</option>{/each}
@@ -276,7 +270,7 @@
             <select
               id="keep"
               value={cfg.retention_days}
-              disabled={saving}
+              disabled={monitor.saving}
               onchange={(e) => saveMonitor({ ...cfg!, retention_days: Number((e.currentTarget as HTMLSelectElement).value) })}
             >
               {#each [7, 30, 90, 365] as d}<option value={d}>{d} days</option>{/each}
