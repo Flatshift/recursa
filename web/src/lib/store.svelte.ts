@@ -19,8 +19,7 @@ export type RunView = (typeof RUN_VIEWS)[number];
 function parse(path: string): Route {
   const m = path.match(/^\/run\/([\w-]+)/);
   if (m) return { name: 'run', id: m[1] };
-  // `/deep-dive/:id` was the resolver page's old address.
-  const d = path.match(/^\/(?:resolver|deep-dive)\/([\w-]+)/);
+  const d = path.match(/^\/resolver\/([\w-]+)/);
   if (d) return { name: 'resolver', id: d[1] };
   if (path.startsWith('/resolvers')) return { name: 'resolvers' };
   if (path.startsWith('/reliability')) return { name: 'reliability' };
@@ -256,7 +255,6 @@ class AppState {
     if (r.name === 'run') {
       if (this.run?.id !== r.id) this.openRun(r.id);
     } else if (r.name === 'resolver') {
-      if (location.pathname.startsWith('/deep-dive/')) history.replaceState(null, '', `/resolver/${r.id}`);
       this.inspect = null;
     } else if (r.name !== 'resolvers') {
       this.inspect = null;
