@@ -23,3 +23,12 @@ By submitting a contribution (a pull request, patch or other material), you agre
    under the GPL.
 
 You keep the copyright in your contribution.
+
+## Environment switches
+
+Besides `RECURSA_SMOKE=1` (README), the code reads a few switches for development and testing:
+
+- `RECURSA_NO_LINK=1` turns the link check off, for comparing runs with and without it.
+- `RECURSA_WRITE_PLATFORMS=1 cargo test -p recursa-engine caps` rewrites `docs/PLATFORMS.md` from the capability table.
+- `RECURSA_TEST_NTP=<host>`, `RECURSA_TEST_NTS=<host>` and `RECURSA_TEST_DNSMASQ=<ip>` enable the network halves of the
+  NTP, NTS and interception tests, which are otherwise skipped.
