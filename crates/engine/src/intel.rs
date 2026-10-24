@@ -11,7 +11,7 @@
 use crate::cymru;
 use crate::dns::{self, QuerySpec};
 use crate::lock;
-use crate::net::{Exchanger, UdpX};
+use crate::net::UdpX;
 use crate::regions::{self, Client, Places};
 use crate::resolve::Resolve;
 use crate::store::Store;
@@ -411,9 +411,7 @@ impl Intel {
             tokio::task::spawn_blocking(move || -> Option<IpAddr> {
                 let addr: SocketAddr = server.parse().ok()?;
                 let mut x = UdpX::connect(addr).ok()?;
-                let q = dns::encode_query(dns::new_id(), &QuerySpec::new("myip.opendns.com", qtype)).ok()?;
-                let r = x.exchange(&q, Duration::from_millis(1500)).ok()?;
-                let m = dns::parse(&r.bytes).ok()?;
+                let m = dns::ask(&mut x, &QuerySpec::new("myip.opendns.com", qtype), Duration::from_millis(1500)).ok()?.msg;
                 if qtype == dns::TYPE_A {
                     m.ipv4_answers().first().map(|a| IpAddr::V4(*a))
                 } else {
