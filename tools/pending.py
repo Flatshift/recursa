@@ -97,18 +97,24 @@ def quick_xml(lock, plan):
 
 def tauri_crates(lock, plan):
     names = ["paste", "proc-macro-error", "rustls-pemfile", "zvariant", "zvariant_derive", "zbus_names"]
-    left = [n for n in names if n in lock] + [f"glib {v}" for v in lock.get("glib", []) if ver(v) < (0, 19)]
+    # RUSTSEC-2024-0429 is patched in glib 0.20.0: 0.19 is still unsound.
+    glib_fixed = (0, 20)
+    left = [n for n in names if n in lock] + [f"glib {v}" for v in lock.get("glib", []) if ver(v) < glib_fixed]
     if not left:
         return "resolved", "none of them is in Cargo.lock any more"
     def removed(n):
         # "glib 0.18.5" is gone only when that version is: removing some other glib proves nothing.
         name, _, v = n.partition(" ")
         version = re.escape(v) + r"(?![\w.])" if v else ""
-        return re.search(rf"Removing {re.escape(name)} v{version}", plan)
+        if re.search(rf"Removing {re.escape(name)} v{version}", plan):
+            return True
+        # A flagged glib can also be moved past the fix rather than removed ("Updating glib v0.18.5 -> v0.20.0").
+        m = v and re.search(rf"Updating {re.escape(name)} v{version} -> v(\S+)", plan)
+        return bool(m) and ver(m.group(1)) >= glib_fixed
 
     gone = [n for n in left if removed(n)]
     if gone:
-        return "available", f"cargo update removes {', '.join(gone)}"
+        return "available", f"cargo update removes or fixes {', '.join(gone)}"
     return "pending", f"still in Cargo.lock: {', '.join(left)}"
 
 

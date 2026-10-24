@@ -198,12 +198,13 @@ pub fn is_local_or_special(ip: &IpAddr) -> bool {
 }
 
 /// [`is_local_or_special`] with CGNAT let through, for answers that can really live there: Tailscale's resolver
-/// (100.100.100.100), a carrier's CDN edge. On IPv6, only loopback and [`is_special`].
+/// (100.100.100.100), a carrier's CDN edge. On IPv6, loopback, link-local (fe80::/10, like 169.254/16 on IPv4) and
+/// [`is_special`]; unique local addresses stay allowed.
 pub fn is_local_or_special_but_cgnat(ip: &IpAddr) -> bool {
     is_special(ip)
         || match ip.to_canonical() {
             IpAddr::V4(v) => v.is_loopback() || v.is_private() || v.is_link_local(),
-            IpAddr::V6(v) => v.is_loopback(),
+            IpAddr::V6(v) => v.is_loopback() || (v.segments()[0] & 0xffc0) == 0xfe80,
         }
 }
 
@@ -227,6 +228,7 @@ mod tests {
         }
         assert!(!is_local_or_special(&ip("::ffff:1.1.1.1")));
         assert!(is_local_or_special(&ip("100.100.100.100")) && !is_local_or_special_but_cgnat(&ip("100.100.100.100")));
+        assert!(is_local_or_special_but_cgnat(&ip("fe80::1")) && !is_local_or_special_but_cgnat(&ip("fd7a:115c:a1e0::53")));
     }
 
     fn find(id: &str) -> Resolver {
