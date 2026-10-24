@@ -20,12 +20,12 @@ pub const TYPE_AAAA: u16 = 28;
 pub const TYPE_NSEC: u16 = 47;
 pub const TYPE_DNSKEY: u16 = 48;
 pub const TYPE_NSEC3: u16 = 50;
-pub const TYPE_OPT: u16 = 41;
+pub(crate) const TYPE_OPT: u16 = 41;
 
 const CLASS_IN: u16 = 1;
 const CLASS_CH: u16 = 3;
 
-pub const OPT_NSID: u16 = 3;
+pub(crate) const OPT_NSID: u16 = 3;
 pub const OPT_COOKIE: u16 = 10;
 const OPT_EDE: u16 = 15;
 

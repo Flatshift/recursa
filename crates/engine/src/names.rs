@@ -16,7 +16,7 @@ pub fn defaults() -> Vec<String> {
 
 /// One name as a lower-case host name without a trailing dot, or why it can't be used. A pasted URL gives
 /// its host; an address, a name with one label, or one with characters DNS doesn't carry is refused.
-pub fn normalize(input: &str) -> Result<String, String> {
+pub(crate) fn normalize(input: &str) -> Result<String, String> {
     let mut t = input.trim().trim_matches(|c| c == '"' || c == '\'' || c == '<' || c == '>').to_ascii_lowercase();
     if let Some((_, rest)) = t.split_once("://") {
         t = rest.to_string();

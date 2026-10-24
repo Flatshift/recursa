@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// Hard cap on queries for the whole report.
-pub const MAX_QUERIES: u32 = 24;
+pub(crate) const MAX_QUERIES: u32 = 24;
 /// Identical repeats of the popular name for the latency distribution.
 const REPEATS: u32 = 12;
 /// Unique-label names that force a cache miss (one per wildcard zone).

@@ -154,7 +154,7 @@ struct MonitorResp<C, H> {
 
 /// Automatic cleanup of unsaved runs. `None` switches a rule off; saved runs are never counted or removed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Housekeeping {
+pub(crate) struct Housekeeping {
     /// Keep this many of the newest unsaved runs.
     pub keep_runs: Option<u32>,
     /// Keep unsaved runs started within this many days.
