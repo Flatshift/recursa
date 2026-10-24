@@ -21,6 +21,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Commit hygiene
+        # Every commit carries a DCO sign-off and names a person, not a tool.
+        run: |
+          if git log --format='%an <%ae> %cn <%ce>' | grep -iE 'claude|anthropic'; then exit 1; fi
+          if git log --format=%B | grep -iE '^co-authored-by:.*(claude|anthropic)|^claude-session:'; then exit 1; fi
+          for c in $(git rev-list HEAD); do
+            git log -1 --format=%B "$c" | grep -q '^Signed-off-by: ' || { echo "missing sign-off: $c"; exit 1; }
+          done
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
