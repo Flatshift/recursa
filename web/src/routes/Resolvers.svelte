@@ -108,13 +108,8 @@
   </Toolbar>
 
   <div class="view-body" bind:clientWidth={bodyW}>
-    {#if split && open}
-      <div class="split">
-        <Shortlist groups={picks} selected={app.inspect} back="All resolvers" collapsed={narrow} onselect={(id) => (app.inspect = id)} onback={() => (app.inspect = null)} />
-        {#key open.id}
-          <Inspector resolver={open} run={last && inLast(open) ? last : null} rows={last && inLast(open) ? lastRows : []} onclose={() => (app.inspect = null)} />
-        {/key}
-      </div>
+    {#if split}
+      <Shortlist groups={picks} selected={app.inspect} back="All resolvers" collapsed={narrow} onselect={(id) => (app.inspect = id)} onback={() => (app.inspect = null)} />
     {:else}
       <!-- svelte-ignore a11y_no_static_element_interactions (right-click menu for the rows inside) -->
       <div class="content scroll" oncontextmenu={onResolverContext}>
@@ -210,7 +205,8 @@
       </div>
 
     {/if}
-    {#if open && mobile}
+    <!-- One mount for both layouts: beside the shortlist on the desktop, a sheet over the list on the phone. -->
+    {#if open}
       {#key open.id}
         <Inspector resolver={open} run={last && inLast(open) ? last : null} rows={last && inLast(open) ? lastRows : []} onclose={() => (app.inspect = null)} />
       {/key}
@@ -235,11 +231,6 @@
     height: 28px;
     padding-left: 26px;
     font-size: var(--t-xs);
-  }
-  .split {
-    flex: 1;
-    display: flex;
-    min-height: 0;
   }
   .tablewrap {
     overflow-x: auto;
