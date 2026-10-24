@@ -209,9 +209,10 @@ type Vet<'a> = dyn FnMut(&[u8], u64) -> Result<(), NtpError> + 'a;
 
 /// One exchange on a socket already connected to the server: sends what `make` builds from the transmit stamp, and
 /// takes the first reply that answers it. `vet` gets the whole reply (header and extension fields) and the stamp sent,
-/// Kiss-o'-Death and unsynchronized replies included, and can reject it. A `Bad` rejection is a stray packet and an `Nts` one a reply that
-/// doesn't verify: both keep waiting (RFC 8915 §5.7), so a forged packet can't end an authenticated exchange, and the
-/// last `Nts` rejection is the result if nothing verifies in time. Anything else ends the exchange.
+/// Kiss-o'-Death and unsynchronized replies included, and can reject it. A `Bad` rejection is a stray packet and an
+/// `Nts` one a reply that doesn't verify: both keep waiting (RFC 8915 §5.7), so a forged packet can't end an
+/// authenticated exchange, and the last `Nts` rejection is the result if nothing verifies in time. Anything else ends
+/// the exchange.
 fn exchange(sock: &UdpSocket, timeout: Duration, make: &dyn Fn(u64) -> Vec<u8>, vet: &mut Vet) -> Result<Sample, NtpError> {
     // The low 16 bits of the transmit time are random, so a reply can be matched to this request alone (RFC 5905 §8).
     let t1_wall = unix_ns_now();

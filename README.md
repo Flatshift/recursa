@@ -157,9 +157,10 @@ too. The opened link stops working after two minutes if no page used it.
 ### Data
 
 A SQLite database lives in the OS application-data directory (`~/Library/Application Support/Recursa/recursa.db` on
-macOS), shared by the app and the CLI. Use `--db` to put it somewhere else. Only one process measures at a time: a
-run waits briefly for a monitoring cycle in another process and refuses if another run is in progress, and only one
-process records monitoring for a given database.
+macOS), shared by the app and the CLI. Use `--db` to put it somewhere else. On macOS and Linux the folders Recursa
+creates for it are private to your user (0700), and the default folder is made private if an older version left it
+open. Only one process measures at a time: a run waits briefly for a monitoring cycle in another process and refuses
+if another run is in progress, and only one process records monitoring for a given database.
 
 ## Limits
 
