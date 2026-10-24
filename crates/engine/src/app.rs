@@ -80,6 +80,10 @@ impl Drop for FlagGuard {
     }
 }
 
+/// What a measurement holds until it ends: the `measuring` flag, this process's run slot and the machine-wide
+/// measure lock (see [`AppState::claim_measuring`]).
+type Held = (FlagGuard, FlagGuard, lock::Guard);
+
 /// Sets the flag when dropped: work given the flag stops once the one waiting on it is gone.
 pub(crate) struct StopOnDrop(pub Arc<AtomicBool>);
 
@@ -331,16 +335,11 @@ impl AppState {
         }
         let (entries, added) = crate::ntp::with_references(entries);
         let samples = req.samples.clamp(2, crate::ntp::MAX_SAMPLES);
-        let Some(claim) = FlagGuard::claim(&self.run_active) else {
-            return Err(ApiError::new(409, "A run is already in progress."));
-        };
-        let Some(measure) = lock::wait(&lock::measure_path(), Duration::from_secs(10)).await else {
-            return Err(ApiError::new(409, BUSY));
-        };
+        let held = self.claim_measuring().await?;
         // Servers asked a few minutes ago, or that said stop, are left alone; if that is all of them, there is nothing to do.
         let (entries, skipped) = self.ntp_guard(&entries);
         if entries.is_empty() {
-            drop(measure);
+            drop(held);
             let wait = skipped.iter().map(|s| s.until).min().unwrap_or(0).saturating_sub(bench::now_ms()).max(0) / 60_000 + 1;
             return Err(ApiError::new(
                 409,
@@ -369,10 +368,9 @@ impl AppState {
         };
         *self.ntp.lock().unwrap() = Some(run);
         let app = self.clone();
-        let measuring = FlagGuard::set(&self.measuring);
         std::thread::spawn(move || {
             // Held until the run ends, however it ends.
-            let _held = (measuring, claim, measure);
+            let _held = held;
             let plan = crate::ntp::Plan { samples, ..Default::default() };
             let app2 = app.clone();
             let (results, consensus) = crate::ntp::run(&entries, &plan, req.nts, &cancel, &move |r| {
@@ -459,13 +457,8 @@ impl AppState {
         if !unknown.is_empty() {
             return Err(ApiError::new(400, format!("Unknown resolver: {}.", unknown.join(", "))));
         }
-        let Some(claim) = FlagGuard::claim(&self.run_active) else {
-            return Err(ApiError::new(409, "A run is already in progress."));
-        };
-        // Wait out a monitoring cycle (seconds at most); refuse if another process is running a benchmark.
-        let Some(measure) = lock::wait(&lock::measure_path(), Duration::from_secs(10)).await else {
-            return Err(ApiError::new(409, BUSY));
-        };
+        // The run's thread sets `measuring` itself, only while it times.
+        let (claim, measure) = self.claim_run().await?;
         let app = self.clone();
         let deps = bench::Deps {
             resolvers,
@@ -725,97 +718,98 @@ impl AppState {
         }
     }
 
-    /// A short, fixed look at one resolver (see [`crate::deepdive`]). Holds the same claim a run does, so it
-    /// never overlaps a benchmark or a monitoring cycle.
-    async fn deep_dive(&self, id: &str) -> Result<crate::deepdive::DeepDive, ApiError> {
-        let r = self
-            .resolvers()
-            .into_iter()
-            .find(|r| r.id == id || r.custom_id.as_deref() == Some(id) || r.aliases.iter().any(|a| a == id))
-            .ok_or_else(|| ApiError::new(404, "No such resolver."))?;
+    /// Claim this process's one run slot, then the machine-wide measure lock: a 409 if either is taken. Waits out a
+    /// monitoring cycle (seconds at most); refuses if another process is running a benchmark. Both guards must be
+    /// held, or handed off, for as long as the work runs.
+    async fn claim_run(&self) -> Result<(FlagGuard, lock::Guard), ApiError> {
         let Some(claim) = FlagGuard::claim(&self.run_active) else {
-            return Err(ApiError::new(409, "Wait for the current run to finish."));
+            return Err(ApiError::new(409, RUN_ACTIVE));
         };
         let Some(measure) = lock::wait(&lock::measure_path(), Duration::from_secs(10)).await else {
             return Err(ApiError::new(409, BUSY));
         };
-        let label = r.label();
-        let held = (FlagGuard::set(&self.measuring), claim, measure);
-        // If the request is dropped mid-look (the window closed), the look stops at its next query.
+        Ok((claim, measure))
+    }
+
+    /// [`AppState::claim_run`] plus the `measuring` flag, for work that times from the start. The tuple is held
+    /// until the work ends: move it into the thread that does it.
+    async fn claim_measuring(&self) -> Result<Held, ApiError> {
+        let (claim, measure) = self.claim_run().await?;
+        Ok((FlagGuard::set(&self.measuring), claim, measure))
+    }
+
+    /// Run `f` off the async threads with the measurement claimed (see [`AppState::claim_measuring`]). `f` gets a
+    /// stop flag, set if the request is dropped first (the window closed), so the work stops at its next step.
+    async fn measure_blocking<T: Send + 'static>(&self, f: impl FnOnce(&AtomicBool) -> T + Send + 'static) -> Result<T, ApiError> {
+        let held = self.claim_measuring().await?;
         let cancel = Arc::new(AtomicBool::new(false));
         let _stop = StopOnDrop(cancel.clone());
-        let out = tokio::task::spawn_blocking(move || {
-            // Held until the look ends, even if the request that asked for it is gone.
+        tokio::task::spawn_blocking(move || {
+            // Held until the work ends, even if the request that asked for it is gone.
             let _held = held;
-            let timeout = Duration::from_millis(2000);
-            let (mut ex, transport) = crate::endpoints::open_best(&r, &[], timeout, false)?;
-            Some(crate::deepdive::run(ex.as_mut(), transport, timeout, &cancel))
+            f(&cancel)
         })
-        .await;
-        out.map_err(|e| ApiError::new(500, e.to_string()))?
-            .ok_or_else(|| ApiError::new(502, format!("Couldn't open a connection to {label}.")))
+        .await
+        .map_err(|e| ApiError::new(500, e.to_string()))
+    }
+
+    /// The resolver with this id, or that a custom entry or alias of this id folded into.
+    fn find_resolver(&self, id: &str) -> Result<Resolver, ApiError> {
+        self.resolvers()
+            .into_iter()
+            .find(|r| r.id == id || r.custom_id.as_deref() == Some(id) || r.aliases.iter().any(|a| a == id))
+            .ok_or_else(|| ApiError::new(404, "No such resolver."))
+    }
+
+    /// A short, fixed look at one resolver (see [`crate::deepdive`]). Holds the same claim a run does, so it
+    /// never overlaps a benchmark or a monitoring cycle.
+    async fn deep_dive(&self, id: &str) -> Result<crate::deepdive::DeepDive, ApiError> {
+        let r = self.find_resolver(id)?;
+        let label = r.label();
+        let out = self
+            .measure_blocking(move |cancel| {
+                let timeout = Duration::from_millis(2000);
+                let (mut ex, transport) = crate::endpoints::open_best(&r, &[], timeout, false)?;
+                Some(crate::deepdive::run(ex.as_mut(), transport, timeout, cancel))
+            })
+            .await?;
+        out.ok_or_else(|| ApiError::new(502, format!("Couldn't open a connection to {label}.")))
     }
 
     /// A route trace to the resolver's first IPv4 address (see [`crate::trace`]). Holds the same claim a run does.
     async fn trace(&self, id: &str) -> Result<crate::trace::Trace, ApiError> {
-        let r = self
-            .resolvers()
-            .into_iter()
-            .find(|r| r.id == id || r.custom_id.as_deref() == Some(id) || r.aliases.iter().any(|a| a == id))
-            .ok_or_else(|| ApiError::new(404, "No such resolver."))?;
+        let r = self.find_resolver(id)?;
         if crate::trace::available() != crate::trace::TraceCap::Ok {
             return Err(ApiError::new(501, "Trace route is not available here."));
         }
         let ip: IpAddr =
             r.ipv4.first().and_then(|a| a.parse().ok()).ok_or_else(|| ApiError::new(422, "This resolver has no IPv4 address."))?;
-        let Some(claim) = FlagGuard::claim(&self.run_active) else {
-            return Err(ApiError::new(409, "Wait for the current run to finish."));
-        };
-        let Some(measure) = lock::wait(&lock::measure_path(), Duration::from_secs(10)).await else {
-            return Err(ApiError::new(409, BUSY));
-        };
-        let held = (FlagGuard::set(&self.measuring), claim, measure);
         let res = Resolve::new(self.system.read().unwrap().clone());
-        let cancel = Arc::new(AtomicBool::new(false));
-        let _stop = StopOnDrop(cancel.clone());
-        let out = tokio::task::spawn_blocking(move || {
-            let _held = held;
-            let mut t = crate::trace::run(ip, &cancel)?;
-            crate::trace::enrich(&mut t.hops, &res);
-            Ok::<_, String>(t)
-        })
-        .await;
-        out.map_err(|e| ApiError::new(500, e.to_string()))?.map_err(|e| ApiError::new(502, e))
+        let out = self
+            .measure_blocking(move |cancel| {
+                let mut t = crate::trace::run(ip, cancel)?;
+                crate::trace::enrich(&mut t.hops, &res);
+                Ok::<_, String>(t)
+            })
+            .await?;
+        out.map_err(|e| ApiError::new(502, e))
     }
 
     /// The Deep Dive's opt-in blocking check with live malware and phishing hosts (see
     /// [`crate::deepdive::live_blocking`]). Holds the run claim like the dive itself.
     async fn live_blocking(&self, id: &str, opts: LiveBlockingOpts) -> Result<crate::deepdive::LiveBlocking, ApiError> {
-        let r = self
-            .resolvers()
-            .into_iter()
-            .find(|r| r.id == id || r.custom_id.as_deref() == Some(id) || r.aliases.iter().any(|a| a == id))
-            .ok_or_else(|| ApiError::new(404, "No such resolver."))?;
+        let r = self.find_resolver(id)?;
         // Resolvers checked within a while of each other share one sample of live hosts.
         let prior =
             self.live_sample.lock().unwrap().clone().filter(|s| crate::bench::now_ms() - s.taken_at < crate::deepdive::LIVE_SAMPLE_TTL_MS);
         // Download the feeds first: the intel cache doesn't fetch while measuring.
         let feeds = if prior.is_none() { self.intel.threat_feeds().await } else { Default::default() };
-        let Some(claim) = FlagGuard::claim(&self.run_active) else {
-            return Err(ApiError::new(409, "Wait for the current run to finish."));
-        };
-        let Some(measure) = lock::wait(&lock::measure_path(), Duration::from_secs(10)).await else {
-            return Err(ApiError::new(409, BUSY));
-        };
-        let held = (FlagGuard::set(&self.measuring), claim, measure);
-        let cancel = Arc::new(AtomicBool::new(false));
-        let _stop = StopOnDrop(cancel.clone());
-        let out = tokio::task::spawn_blocking(move || {
-            let _held = held;
-            crate::deepdive::live_blocking(&r, prior, feeds, opts.plain, Duration::from_millis(2000), &cancel)
-        })
-        .await;
-        let (result, sample) = out.map_err(|e| ApiError::new(500, e.to_string()))?.map_err(|m| ApiError::new(502, m))?;
+        let out = self
+            .measure_blocking(move |cancel| {
+                crate::deepdive::live_blocking(&r, prior, feeds, opts.plain, Duration::from_millis(2000), cancel)
+            })
+            .await?;
+        let (result, sample) = out.map_err(|m| ApiError::new(502, m))?;
         if sample.categories.values().any(|c| !c.hosts.is_empty()) {
             *self.live_sample.lock().unwrap() = Some(sample);
         }
@@ -824,31 +818,14 @@ impl AppState {
 
     /// The Deep Dive's further checks (see [`crate::deepdive::deep_checks`]). Holds the run claim like the dive itself.
     async fn deep_checks(&self, id: &str) -> Result<crate::deepdive::DeepChecks, ApiError> {
-        let r = self
-            .resolvers()
-            .into_iter()
-            .find(|r| r.id == id || r.custom_id.as_deref() == Some(id) || r.aliases.iter().any(|a| a == id))
-            .ok_or_else(|| ApiError::new(404, "No such resolver."))?;
-        let Some(claim) = FlagGuard::claim(&self.run_active) else {
-            return Err(ApiError::new(409, "Wait for the current run to finish."));
-        };
-        let Some(measure) = lock::wait(&lock::measure_path(), Duration::from_secs(10)).await else {
-            return Err(ApiError::new(409, BUSY));
-        };
-        let held = (FlagGuard::set(&self.measuring), claim, measure);
-        let cancel = Arc::new(AtomicBool::new(false));
-        let _stop = StopOnDrop(cancel.clone());
-        let out = tokio::task::spawn_blocking(move || {
-            let _held = held;
-            crate::deepdive::deep_checks(&r, Duration::from_millis(2000), &cancel)
-        })
-        .await;
-        out.map_err(|e| ApiError::new(500, e.to_string()))?.map_err(|m| ApiError::new(502, m))
+        let r = self.find_resolver(id)?;
+        let out = self.measure_blocking(move |cancel| crate::deepdive::deep_checks(&r, Duration::from_millis(2000), cancel)).await?;
+        out.map_err(|m| ApiError::new(502, m))
     }
 
     fn idle(&self) -> Result<(), ApiError> {
         if self.run_active.load(Ordering::SeqCst) {
-            return Err(ApiError::new(409, "Wait for the current run to finish."));
+            return Err(ApiError::new(409, RUN_ACTIVE));
         }
         Ok(())
     }
@@ -1076,7 +1053,9 @@ struct ParseNames {
     text: String,
 }
 
-/// The 409 body for every write that needs the measuring lock.
+/// The 409 body when this process already has a run, look or trace going.
+const RUN_ACTIVE: &str = "Wait for the current run to finish.";
+/// The 409 body when another process holds the machine-wide measure lock.
 const BUSY: &str = "Another Recursa window or terminal is measuring right now. Try again when it finishes.";
 
 /// Saved lists kept, and the longest text that is read as one.
