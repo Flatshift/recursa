@@ -5,8 +5,10 @@
 //! Extended DNS Errors (8914). Queries are encoded once and only the ID is patched
 //! on the hot path.
 
+use crate::net::{Exchanger, Reply, XErr};
 use std::fmt::Write as _;
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::time::Duration;
 
 pub const TYPE_A: u16 = 1;
 pub const TYPE_NS: u16 = 2;
@@ -412,6 +414,27 @@ pub fn parse(b: &[u8]) -> Result<Message, ParseError> {
     }
     let rcode = (ext_rcode_hi << 4) | (flags & 0x000F);
     Ok(Message { flags, rcode, qname, answers, authority, opt })
+}
+
+/// A reply that decoded: the transport's measurements and the message in it.
+#[derive(Debug)]
+pub struct Answer {
+    pub reply: Reply,
+    pub msg: Message,
+}
+
+/// Encode `spec` under a fresh ID, send it through `x` and decode the reply. Encoding and
+/// decoding failures come back as [`XErr::Io`], like any other reason there is no answer.
+pub(crate) fn ask(x: &mut dyn Exchanger, spec: &QuerySpec, timeout: Duration) -> Result<Answer, XErr> {
+    let q = encode_query(new_id(), spec).map_err(|e| XErr::Io(e.to_string()))?;
+    ask_wire(x, &q, timeout)
+}
+
+/// [`ask`] for a query already encoded, so a timed caller can build it outside its window.
+pub(crate) fn ask_wire(x: &mut dyn Exchanger, query: &[u8], timeout: Duration) -> Result<Answer, XErr> {
+    let reply = x.exchange(query, timeout)?;
+    let msg = parse(&reply.bytes).map_err(|e| XErr::Io(format!("unparseable response: {e}")))?;
+    Ok(Answer { reply, msg })
 }
 
 impl Message {

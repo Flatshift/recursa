@@ -741,8 +741,7 @@ fn open_targets(set: Setup, h: &RunHandle, plan: &[(TargetInfo, Option<Endpoint>
 
 /// Whether `x` answers `name` with at least one address.
 fn resolves(x: &mut dyn Exchanger, name: &str, timeout: Duration) -> bool {
-    let Ok(q) = dns::encode_query(dns::new_id(), &QuerySpec::new(name, dns::TYPE_A)) else { return false };
-    x.exchange(&q, timeout).ok().and_then(|r| dns::parse(&r.bytes).ok()).is_some_and(|m| !m.ipv4_answers().is_empty())
+    dns::ask(x, &QuerySpec::new(name, dns::TYPE_A), timeout).is_ok_and(|a| !a.msg.ipv4_answers().is_empty())
 }
 
 /// The names the Cached test will ask. The default list is known to resolve. A list you changed is checked
@@ -789,9 +788,7 @@ fn effective_cached_names(h: &RunHandle, set: Setup, cfg: &RunConfig, selected: 
 
 /// One query through `x`, parsed.
 fn ask(x: &mut dyn Exchanger, name: &str, qtype: u16, rd: bool, timeout: Duration) -> Option<dns::Message> {
-    let spec = QuerySpec { rd, ..QuerySpec::new(name, qtype) };
-    let q = dns::encode_query(dns::new_id(), &spec).ok()?;
-    x.exchange(&q, timeout).ok().and_then(|r| dns::parse(&r.bytes).ok())
+    dns::ask(x, &QuerySpec { rd, ..QuerySpec::new(name, qtype) }, timeout).ok().map(|a| a.msg)
 }
 
 /// The setup checks before the measured phases: when they stop, and whether they may use plain DNS. A run on
@@ -930,10 +927,7 @@ fn effective_tlds(h: &RunHandle, set: Setup, cfg: &RunConfig, selected: &[Resolv
         }
         let spec = QuerySpec::new(format!("ub{}.{t}", rand_label(14)), dns::TYPE_A).with_edns(|e| e.dnssec_ok = true);
         let Ok(q) = dns::encode_query(dns::new_id(), &spec) else { continue };
-        let seen = asks.iter_mut().find_map(|x| {
-            let m = x.exchange(&q, timeout).ok().and_then(|r| dns::parse(&r.bytes).ok())?;
-            denial(&m, t)
-        });
+        let seen = asks.iter_mut().find_map(|x| denial(&dns::ask_wire(x.as_mut(), &q, timeout).ok()?.msg, t));
         match seen {
             Some(Denial::Reusable) => changed.push(format!(".{t} (its proofs that a name doesn't exist can now answer other names)")),
             _ => keep.push(t.clone()),
@@ -1383,9 +1377,9 @@ fn warm_up(set: Setup, h: &RunHandle, xs: &mut [Option<Box<dyn Exchanger>>], tim
                             });
                             continue;
                         };
-                        let r = x.exchange(&q, timeout);
+                        let r = dns::ask_wire(x.as_mut(), &q, timeout);
                         let sample =
-                            r.as_ref().ok().map(|r| WarmSample { t: i as u16, k, us: (r.rtt_ns / 1000).min(u32::MAX as u64) as u32 });
+                            r.as_ref().ok().map(|a| WarmSample { t: i as u16, k, us: (a.reply.rtt_ns / 1000).min(u32::MAX as u64) as u32 });
                         h.publish(|s| {
                             s.warm.extend(sample);
                             s.done += 1;
@@ -1928,8 +1922,7 @@ fn probe_resolver(
     let quick = timeout.min(Duration::from_millis(2500));
     let try_ep = |ep: &Endpoint| -> Result<f64, XErr> {
         let mut x = net::open(ep, quick)?;
-        let q = dns::encode_query(dns::new_id(), &QuerySpec::new("example.com", dns::TYPE_A)).map_err(|e| XErr::Io(e.to_string()))?;
-        Ok(x.exchange(&q, quick)?.rtt_ns as f64 / 1e6)
+        Ok(dns::ask(x.as_mut(), &QuerySpec::new("example.com", dns::TYPE_A), quick)?.reply.rtt_ns as f64 / 1e6)
     };
 
     rep.checks.push(match (measured(Transport::Tcp), endpoints::plain(r, Transport::Tcp, false).filter(|_| r.udp)) {
@@ -1985,8 +1978,8 @@ fn probe_resolver(
 fn plain_dns_stopped() -> bool {
     let ask = |t: Transport, ip: &str| {
         let ep = Endpoint { transport: t, addr: SocketAddr::new(ip.parse().unwrap(), 53), host: None, url: None };
-        let q = dns::encode_query(dns::new_id(), &QuerySpec::new("www.google.com", dns::TYPE_A)).ok()?;
-        net::open(&ep, Duration::from_millis(1500)).ok()?.exchange(&q, Duration::from_millis(1500)).ok()
+        let mut x = net::open(&ep, Duration::from_millis(1500)).ok()?;
+        dns::ask(x.as_mut(), &QuerySpec::new("www.google.com", dns::TYPE_A), Duration::from_millis(1500)).ok()
     };
     let udp_dead = ["1.1.1.1", "8.8.8.8"].iter().all(|ip| ask(Transport::Udp, ip).is_none());
     udp_dead && ask(Transport::Tcp, "1.1.1.1").is_some()
