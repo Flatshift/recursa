@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 use tokio::sync::watch;
 
@@ -111,6 +111,12 @@ pub struct Export {
     pub filename: String,
     pub mime: &'static str,
     pub body: String,
+}
+
+/// The built-in catalog, parsed once: [`catalog::builtin`] is pure, so every call would give the same entries.
+fn builtin() -> &'static [Resolver] {
+    static BUILTIN: OnceLock<Vec<Resolver>> = OnceLock::new();
+    BUILTIN.get_or_init(catalog::builtin)
 }
 
 /// The monitoring setting as saved, if there is one and it parses.
@@ -262,7 +268,7 @@ impl AppState {
         // A custom entry for an address the catalog lists (Cogent's two, added by hand before
         // they were listed) is that catalog entry: same servers, so it is measured once. Saved
         // selections keep it through the alias; it is not a default just because it was added by hand.
-        let mut builtin = catalog::builtin();
+        let mut builtin = builtin().to_vec();
         custom.retain(|c| {
             let Some(b) = builtin.iter_mut().find(|b| b.ipv4.contains(&c.name) || b.ipv6.contains(&c.name)) else { return true };
             b.aliases.push(c.id.clone());
@@ -868,7 +874,7 @@ impl AppState {
             return Err(ApiError::new(400, "That's not a server address (it's unspecified, broadcast or multicast)."));
         }
         // A second copy of a catalog entry would be measured twice under two names.
-        if let Some(known) = catalog::builtin().into_iter().find(|r| r.ipv4.iter().chain(&r.ipv6).any(|a| *a == ip.to_string())) {
+        if let Some(known) = builtin().iter().find(|r| r.ipv4.iter().chain(&r.ipv6).any(|a| *a == ip.to_string())) {
             return Err(ApiError::new(400, format!("That's {}, already in the list.", known.label())));
         }
         let clean = |s: Option<String>| s.map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
