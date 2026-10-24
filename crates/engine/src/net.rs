@@ -691,7 +691,7 @@ fn exchange_stream<X: StreamX>(x: &mut X, query: &[u8], timeout: Duration) -> Re
     }
 }
 
-pub struct TcpX {
+pub(crate) struct TcpX {
     addr: SocketAddr,
     stream: Option<Bounded>,
     setup_ns: Option<u64>,
@@ -747,7 +747,7 @@ fn tls_config(alpn_h2: bool) -> Arc<rustls::ClientConfig> {
     .clone()
 }
 
-pub struct DotX {
+pub(crate) struct DotX {
     addr: SocketAddr,
     name: rustls::pki_types::ServerName<'static>,
     stream: Option<rustls::StreamOwned<rustls::ClientConnection, Bounded>>,
@@ -806,7 +806,7 @@ impl Exchanger for DotX {
 // DoH (RFC 8484) over HTTP/2, driven by a private single-threaded runtime
 // ---------------------------------------------------------------------------------------
 
-pub struct DohX {
+pub(crate) struct DohX {
     addr: SocketAddr,
     uri: http::Uri,
     name: rustls::pki_types::ServerName<'static>,

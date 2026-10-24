@@ -39,7 +39,7 @@ pub struct Server {
 
 /// 32 bytes from the system's secure random source, as hex: a launch code or a session token. A guessable one
 /// would let any local page with the port drive the API.
-pub fn secret() -> String {
+fn secret() -> String {
     recursa_engine::unpredictable::<32>().iter().map(|b| format!("{b:02x}")).collect()
 }
 

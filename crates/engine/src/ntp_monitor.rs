@@ -18,9 +18,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// The shortest time between cycles.
-pub const MIN_INTERVAL_MIN: u32 = 15;
+pub(crate) const MIN_INTERVAL_MIN: u32 = 15;
 /// Most servers one cycle asks.
-pub const MAX_SERVERS: usize = 8;
+pub(crate) const MAX_SERVERS: usize = 8;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]

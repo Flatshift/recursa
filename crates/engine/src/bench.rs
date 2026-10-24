@@ -68,15 +68,15 @@ impl Fresh {
 
 /// What a timeout or a failed answer costs, in ms, when the composite counts it: a stub resolver waits about a
 /// second before it asks again, and the user is without an answer either way. The UI mirrors this.
-pub const TIMEOUT_COST_MS: f64 = 1000.0;
+pub(crate) const TIMEOUT_COST_MS: f64 = 1000.0;
 /// Failures from this many distinct resolvers inside one window of this length are a network blip from here (mirrors the UI).
-pub const BLIP_WINDOW_MS: u32 = 2000;
-pub const BLIP_RESOLVERS: usize = 3;
+pub(crate) const BLIP_WINDOW_MS: u32 = 2000;
+pub(crate) const BLIP_RESOLVERS: usize = 3;
 
 /// Consecutive timeouts after which a target is dropped from the rest of the run.
 const DROP_AFTER: u32 = 6;
 /// Share of reliable answers needed to rank (mirrors the UI).
-pub const RELIABLE: f64 = 0.98;
+pub(crate) const RELIABLE: f64 = 0.98;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -2268,7 +2268,7 @@ fn infer_forwarder(h: &RunHandle) {
 /// What each test counts for in the overall latency. Cached answers are most of what people get; uncached lookups
 /// (cache misses) are the delays they notice; TLD lookups (NXDOMAIN) are a small share of real traffic, so they count
 /// least. The UI mirrors this.
-pub const TEST_WEIGHTS: [(&str, f64); 3] = [("cached", 0.50), ("uncached", 0.40), ("tld", 0.10)];
+pub(crate) const TEST_WEIGHTS: [(&str, f64); 3] = [("cached", 0.50), ("uncached", 0.40), ("tld", 0.10)];
 
 /// One test's cost: its winsorised mean (the mean after the slowest tenth is pulled down to the 90th percentile), so
 /// one straggler cannot move it. Tail and jitter stay visible as the p95 and Jitter columns; they are not folded in.
@@ -2279,7 +2279,7 @@ fn cost(s: &stats::Summary) -> Option<f64> {
 /// The speed score the fastest pick ranks by, in ms: each test's cost ([`cost`]), weighted by [`TEST_WEIGHTS`], plus
 /// what its timeouts and failed answers cost on average ([`TIMEOUT_COST_MS`] for each one, spread over every query sent). A limited test
 /// is left out of both.
-pub fn composite(t: &TargetInfo) -> Option<f64> {
+pub(crate) fn composite(t: &TargetInfo) -> Option<f64> {
     score(&t.stats)
 }
 
@@ -2351,7 +2351,7 @@ pub fn ranked(s: &RunState) -> Vec<Ranked<'_>> {
 /// Whether `behind` trails `ahead` by less than this run can tell apart: both speed scores redrawn 200 times from
 /// their own queries (timeouts, failed answers and other errors drawn as such), and the 95% interval of the difference reaches zero.
 /// Mirrors `tiedWith` in the UI step for step, seed included, so the run list and the verdict agree.
-pub fn tied(s: &RunState, ahead: &TargetInfo, behind: &TargetInfo) -> bool {
+pub(crate) fn tied(s: &RunState, ahead: &TargetInfo, behind: &TargetInfo) -> bool {
     // Per test: answered round trips (ms, sorted), timeouts, failures, queries counted.
     type Draws = Vec<(&'static str, Vec<f64>, u32, u32, u32)>;
     let collect = |t: &TargetInfo| -> Draws {

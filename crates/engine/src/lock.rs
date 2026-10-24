@@ -57,7 +57,7 @@ pub fn try_lock(path: &Path) -> Option<Guard> {
 }
 
 /// Whether another process holds the lock at `path`. Not this one: its holds are known in-process.
-pub fn busy_at(path: &Path) -> bool {
+pub(crate) fn busy_at(path: &Path) -> bool {
     let here = HERE.lock().unwrap();
     !here.iter().any(|p| p == path) && take(path).is_none()
 }

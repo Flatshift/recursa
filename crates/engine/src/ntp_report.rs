@@ -120,7 +120,7 @@ fn rank(state: u8) -> u8 {
 
 /// How far the server's clock is from ours *beyond what one round trip can hide*: |offset| less its path bound. A
 /// reading of 40 ms ± 38 ms may be 2 ms, so it is judged as 2.
-pub fn excess_ms(offset_ms: f64, bound_ms: f64) -> f64 {
+pub(crate) fn excess_ms(offset_ms: f64, bound_ms: f64) -> f64 {
     (offset_ms.abs() - bound_ms.max(0.0)).max(0.0)
 }
 
