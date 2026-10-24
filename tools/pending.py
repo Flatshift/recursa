@@ -81,13 +81,23 @@ def accepts_major(peer, major):
     return False
 
 
+def cleared(name, v, plan, fixed=None):
+    """Does `cargo update` remove this exact locked version, or (with `fixed`) move it to `fixed` or later? Several
+    versions of a crate can be locked at once: a line about some other one proves nothing."""
+    version = re.escape(v) + r"(?![\w.])"
+    if re.search(rf"Removing {re.escape(name)} v{version}", plan):
+        return True
+    m = fixed and re.search(rf"Updating {re.escape(name)} v{version} -> v(\S+)", plan)
+    return bool(m) and ver(m.group(1)) >= fixed
+
+
 def quick_xml(lock, plan):
-    have = [v for v in lock.get("quick-xml", []) if ver(v) < (0, 41)]
+    fixed = (0, 41)
+    have = [v for v in lock.get("quick-xml", []) if ver(v) < fixed]
     if not have:
         return "resolved", "quick-xml is 0.41 or later: remove the two ignores in .cargo/audit.toml"
-    m = re.search(r"Updating quick-xml v0\.(\d+)\.\d+ -> v(\S+)", plan)
-    if m and ver(m.group(2)) >= (0, 41):
-        return "available", f"cargo update moves quick-xml to {m.group(2)}"
+    if all(cleared("quick-xml", v, plan, fixed) for v in have):
+        return "available", f"cargo update moves quick-xml {', '.join(have)} to 0.41 or later"
     rout = lock.get("routinator", ["0"])[0]
     latest = fetch_json("https://crates.io/api/v1/crates/routinator")["crate"]["max_stable_version"]
     if ver(latest) > ver(rout):
@@ -99,23 +109,16 @@ def tauri_crates(lock, plan):
     names = ["paste", "proc-macro-error", "rustls-pemfile", "zvariant", "zvariant_derive", "zbus_names"]
     # RUSTSEC-2024-0429 is patched in glib 0.20.0: 0.19 is still unsound.
     glib_fixed = (0, 20)
-    left = [n for n in names if n in lock] + [f"glib {v}" for v in lock.get("glib", []) if ver(v) < glib_fixed]
+    # Each locked version on its own: an unmaintained crate is gone only when removed, a flagged glib also when moved
+    # past the fix ("Updating glib v0.18.5 -> v0.20.0").
+    left = [(n, v, None) for n in names for v in lock.get(n, [])]
+    left += [("glib", v, glib_fixed) for v in lock.get("glib", []) if ver(v) < glib_fixed]
     if not left:
         return "resolved", "none of them is in Cargo.lock any more"
-    def removed(n):
-        # "glib 0.18.5" is gone only when that version is: removing some other glib proves nothing.
-        name, _, v = n.partition(" ")
-        version = re.escape(v) + r"(?![\w.])" if v else ""
-        if re.search(rf"Removing {re.escape(name)} v{version}", plan):
-            return True
-        # A flagged glib can also be moved past the fix rather than removed ("Updating glib v0.18.5 -> v0.20.0").
-        m = v and re.search(rf"Updating {re.escape(name)} v{version} -> v(\S+)", plan)
-        return bool(m) and ver(m.group(1)) >= glib_fixed
-
-    gone = [n for n in left if removed(n)]
+    gone = [f"{n} {v}" for n, v, fixed in left if cleared(n, v, plan, fixed)]
     if gone:
         return "available", f"cargo update removes or fixes {', '.join(gone)}"
-    return "pending", f"still in Cargo.lock: {', '.join(left)}"
+    return "pending", f"still in Cargo.lock: {', '.join(f'{n} {v}' for n, v, _ in left)}"
 
 
 def typescript(lock, plan):
