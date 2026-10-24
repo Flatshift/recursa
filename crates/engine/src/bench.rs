@@ -986,7 +986,12 @@ fn authority_ttl(x: &mut dyn Exchanger, name: &str, timeout: Duration) -> Option
         (!ns.is_empty()).then_some(ns)
     })?;
     for ns in servers.iter().take(2) {
-        let Some(ip) = ask(x, ns, dns::TYPE_A, true, timeout).and_then(|m| m.ipv4_answers().first().copied()) else { continue };
+        // The resolver under test picks this address: never one on this computer or its network.
+        let Some(ip) = ask(x, ns, dns::TYPE_A, true, timeout)
+            .and_then(|m| m.ipv4_answers().into_iter().find(|a| !crate::catalog::is_local_or_special(&IpAddr::V4(*a))))
+        else {
+            continue;
+        };
         let Ok(mut auth) = UdpX::connect(SocketAddr::new(IpAddr::V4(ip), 53)) else { continue };
         let Some(m) = ask(&mut auth, name, dns::TYPE_A, false, timeout) else { continue };
         if !m.aa() {
