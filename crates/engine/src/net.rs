@@ -575,6 +575,20 @@ fn read_frame<R: Read>(r: &mut R) -> io::Result<Vec<u8>> {
     Ok(body)
 }
 
+/// One query as a frame on an armed stream (TCP or DoT), then the frame that answers it. Replies to other queries are
+/// skipped; the stream's deadline ends the wait.
+fn framed_exchange<S: Read + Write>(s: &mut S, query: &[u8], scratch: &mut Vec<u8>) -> Result<Reply, XErr> {
+    let t0 = clock::now_ns();
+    write_frame(s, query, scratch).map_err(io_err)?;
+    loop {
+        let body = read_frame(s).map_err(io_err)?;
+        let rtt_ns = clock::since(t0);
+        if dns::is_response_to(&body, query) {
+            return Ok(Reply { bytes: body, rtt_ns, user_rtt_ns: rtt_ns, kernel_stamp: false, ttl: None });
+        }
+    }
+}
+
 /// A TCP stream that refuses to read or write once its deadline has passed, however slowly the peer sends.
 ///
 /// Two ways to hold the deadline. A measuring stream ([`Bounded::new`], [`Bounded::arm`]) keeps one socket timeout
@@ -664,22 +678,7 @@ impl TcpX {
     fn once(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
         let s = self.stream.as_mut().expect("connected");
         s.arm(timeout).map_err(io_err)?;
-        let t0 = clock::now_ns();
-        write_frame(s, query, &mut self.buf).map_err(io_err)?;
-        // Replies to other queries are skipped; the stream's deadline ends the wait.
-        loop {
-            let body = read_frame(s).map_err(io_err)?;
-            let t1 = clock::now_ns();
-            if dns::is_response_to(&body, query) {
-                return Ok(Reply {
-                    bytes: body,
-                    rtt_ns: t1.saturating_sub(t0),
-                    user_rtt_ns: t1.saturating_sub(t0),
-                    kernel_stamp: false,
-                    ttl: None,
-                });
-            }
-        }
+        framed_exchange(s, query, &mut self.buf)
     }
 }
 
@@ -764,22 +763,7 @@ impl DotX {
     fn once(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
         let s = self.stream.as_mut().expect("connected");
         s.sock.arm(timeout).map_err(io_err)?;
-        let t0 = clock::now_ns();
-        write_frame(s, query, &mut self.buf).map_err(io_err)?;
-        // Replies to other queries are skipped; the stream's deadline ends the wait.
-        loop {
-            let body = read_frame(s).map_err(io_err)?;
-            let t1 = clock::now_ns();
-            if dns::is_response_to(&body, query) {
-                return Ok(Reply {
-                    bytes: body,
-                    rtt_ns: t1.saturating_sub(t0),
-                    user_rtt_ns: t1.saturating_sub(t0),
-                    kernel_stamp: false,
-                    ttl: None,
-                });
-            }
-        }
+        framed_exchange(s, query, &mut self.buf)
     }
 }
 
