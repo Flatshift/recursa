@@ -663,6 +663,34 @@ fn connect_tcp(addr: SocketAddr, timeout: Duration) -> Result<TcpStream, XErr> {
     Ok(s)
 }
 
+/// A connection-oriented exchanger: `ensure` connects if needed, `once` runs one framed exchange.
+trait StreamX {
+    fn ensure(&mut self, timeout: Duration) -> Result<(), XErr>;
+    fn once(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr>;
+    fn drop_stream(&mut self);
+}
+
+fn exchange_stream<X: StreamX>(x: &mut X, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
+    x.ensure(timeout)?;
+    match x.once(query, timeout) {
+        Ok(r) => Ok(r),
+        Err(XErr::Timeout) => {
+            x.drop_stream();
+            Err(XErr::Timeout)
+        }
+        Err(_) => {
+            // Servers close idle connections; reconnect once and retry.
+            x.drop_stream();
+            x.ensure(timeout)?;
+            let r = x.once(query, timeout);
+            if r.is_err() {
+                x.drop_stream();
+            }
+            r
+        }
+    }
+}
+
 pub struct TcpX {
     addr: SocketAddr,
     stream: Option<Bounded>,
@@ -670,7 +698,7 @@ pub struct TcpX {
     buf: Vec<u8>,
 }
 
-impl TcpX {
+impl StreamX for TcpX {
     fn ensure(&mut self, timeout: Duration) -> Result<(), XErr> {
         if self.stream.is_none() {
             let t = clock::now_ns();
@@ -685,28 +713,15 @@ impl TcpX {
         s.arm(timeout).map_err(io_err)?;
         framed_exchange(s, query, &mut self.buf)
     }
+
+    fn drop_stream(&mut self) {
+        self.stream = None;
+    }
 }
 
 impl Exchanger for TcpX {
     fn exchange(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
-        self.ensure(timeout)?;
-        match self.once(query, timeout) {
-            Ok(r) => Ok(r),
-            Err(XErr::Timeout) => {
-                self.stream = None;
-                Err(XErr::Timeout)
-            }
-            Err(_) => {
-                // Servers close idle connections; reconnect once and retry.
-                self.stream = None;
-                self.ensure(timeout)?;
-                let r = self.once(query, timeout);
-                if r.is_err() {
-                    self.stream = None;
-                }
-                r
-            }
-        }
+        exchange_stream(self, query, timeout)
     }
     fn setup_ns(&self) -> Option<u64> {
         self.setup_ns
@@ -745,7 +760,9 @@ impl DotX {
         let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|e| XErr::Tls(e.to_string()))?;
         Ok(DotX { addr, name, stream: None, setup_ns: None, buf: Vec::with_capacity(4096) })
     }
+}
 
+impl StreamX for DotX {
     fn ensure(&mut self, timeout: Duration) -> Result<(), XErr> {
         if self.stream.is_some() {
             return Ok(());
@@ -770,27 +787,15 @@ impl DotX {
         s.sock.arm(timeout).map_err(io_err)?;
         framed_exchange(s, query, &mut self.buf)
     }
+
+    fn drop_stream(&mut self) {
+        self.stream = None;
+    }
 }
 
 impl Exchanger for DotX {
     fn exchange(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
-        self.ensure(timeout)?;
-        match self.once(query, timeout) {
-            Ok(r) => Ok(r),
-            Err(XErr::Timeout) => {
-                self.stream = None;
-                Err(XErr::Timeout)
-            }
-            Err(_) => {
-                self.stream = None;
-                self.ensure(timeout)?;
-                let r = self.once(query, timeout);
-                if r.is_err() {
-                    self.stream = None;
-                }
-                r
-            }
-        }
+        exchange_stream(self, query, timeout)
     }
     fn setup_ns(&self) -> Option<u64> {
         self.setup_ns
