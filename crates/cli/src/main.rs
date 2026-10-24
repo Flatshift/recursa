@@ -579,12 +579,16 @@ async fn serve(cli: Cli) {
     let app = open_state(&cli, true);
     app.start_background();
     // Two launch links: one to open now (unless told not to), one to print for another browser. Each opens once.
-    // A browser that didn't open leaves the printed link as the only one, so it is labelled that way.
+    // Launching the opener can succeed with no browser to show the page (no display, over SSH), so the printed link's
+    // label never claims a browser opened.
     let mut sessions = server::Sessions::default();
     let opened = !cli.no_open && open::that_detached(sessions.link(port)).is_ok();
     let printed = sessions.link(port);
     eprintln!("Recursa is running on 127.0.0.1, port {port}.");
-    eprintln!("{} {printed}", if opened { "Another browser (the link works once):" } else { "Open (the link works once):" });
+    eprintln!(
+        "{} {printed}",
+        if opened { "If no browser opened, or for another one (the link works once):" } else { "Open (the link works once):" }
+    );
     eprintln!("Data: {}", app.store.path.display());
     if let Some(c) = app.calibration.read().unwrap().as_ref() {
         eprintln!(
