@@ -8,7 +8,7 @@ use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 const PUT_HOUR: &str = "INSERT OR REPLACE INTO monitor_hour(hour, resolver_id, n, ok, cycles, up, first_ts, last_ts, lat)
      VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)";
@@ -319,10 +319,15 @@ impl Store {
         }
     }
 
+    /// The connection for a long read: the read-only one, else `conn`.
+    fn rd(&self) -> MutexGuard<'_, Connection> {
+        self.reader.as_ref().unwrap_or(&self.conn).lock().unwrap()
+    }
+
     /// Hand the hourly rollups from `since` on to `f`, in hour order, on the read-only
     /// connection.
     pub fn monitor_rollups(&self, since: i64, mut f: impl FnMut(RollupRow<'_>)) {
-        let c = self.reader.as_ref().unwrap_or(&self.conn).lock().unwrap();
+        let c = self.rd();
         // Primary-key order: no sort.
         let Ok(mut st) = c.prepare(
             "SELECT hour, resolver_id, n, ok, cycles, up, first_ts, last_ts, lat FROM monitor_hour WHERE hour >= ?1 ORDER BY hour, resolver_id",
@@ -352,20 +357,20 @@ impl Store {
 
     /// Resolvers that have any monitoring history kept, i.e. a record of their own from this network.
     pub fn monitor_recorded(&self) -> Vec<String> {
-        let c = self.reader.as_ref().unwrap_or(&self.conn).lock().unwrap();
+        let c = self.rd();
         let Ok(mut q) = c.prepare("SELECT DISTINCT resolver_id FROM monitor_hour ORDER BY resolver_id") else { return Vec::new() };
         q.query_map([], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
     }
 
     /// When the newest monitoring sample was recorded, by this process or any other.
     pub fn monitor_latest(&self) -> Option<i64> {
-        let c = self.reader.as_ref().unwrap_or(&self.conn).lock().unwrap();
+        let c = self.rd();
         c.query_row("SELECT MAX(ts) FROM monitor", [], |r| r.get(0)).ok().flatten()
     }
 
     /// Outages with a failed cycle at or after `since`: (resolver, outage).
     pub fn monitor_outages(&self, since: i64) -> Vec<(String, Outage)> {
-        let c = self.reader.as_ref().unwrap_or(&self.conn).lock().unwrap();
+        let c = self.rd();
         let Ok(mut st) = c.prepare(
             "SELECT resolver_id, started, ended, cycles, recovered FROM monitor_outage WHERE ended >= ?1 ORDER BY resolver_id, started",
         ) else {
@@ -435,7 +440,7 @@ impl Store {
 
     /// Samples and clock verdicts from `since` on, oldest first.
     pub fn ntp_history(&self, since: i64) -> (Vec<NtpRow>, Vec<NtpClockRow>) {
-        let c = self.reader.as_ref().unwrap_or(&self.conn).lock().unwrap();
+        let c = self.rd();
         let rows = c
             .prepare("SELECT ts, server, offset_ms, bound_ms, delay_ms, stratum, ok, kind, sel FROM ntp_sample WHERE ts >= ?1 ORDER BY ts, server")
             .and_then(|mut q| {
@@ -469,7 +474,7 @@ impl Store {
 
     /// When the newest NTP monitoring sample was recorded, by this process or any other.
     pub fn ntp_latest(&self) -> Option<i64> {
-        let c = self.reader.as_ref().unwrap_or(&self.conn).lock().unwrap();
+        let c = self.rd();
         c.query_row("SELECT MAX(ts) FROM ntp_sample", [], |r| r.get(0)).ok().flatten()
     }
 
