@@ -115,7 +115,35 @@ pub struct Export {
 
 /// The monitoring setting as saved, if there is one and it parses.
 fn stored_monitor(store: &Store) -> Option<MonitorConfig> {
-    store.setting("monitor").and_then(|v| serde_json::from_value(v).ok())
+    store.get("monitor")
+}
+
+impl MonitorConfig {
+    /// Within sane bounds, as [`NtpMonitorConfig::clamped`]: a resolver at most once, at most 24 of them.
+    fn clamped(mut self) -> Self {
+        self.interval_min = self.interval_min.clamp(1, 1440);
+        self.retention_days = self.retention_days.clamp(1, 365);
+        let mut seen = std::collections::HashSet::new();
+        self.resolvers.retain(|id| seen.insert(id.clone()));
+        self.resolvers.truncate(24);
+        self
+    }
+}
+
+/// Apply a setting another process saved, when it was readable and differs from what subscribers have.
+fn reload<T: Clone + PartialEq>(tx: &watch::Sender<T>, saved: Option<T>) {
+    if let Some(new) = saved {
+        tx.send_if_modified(|c| std::mem::replace(c, new.clone()) != new);
+    }
+}
+
+/// What GET `/monitor` and GET `/ntp/monitor` answer.
+#[derive(Serialize)]
+struct MonitorResp<C, H> {
+    config: C,
+    last: Option<i64>,
+    paused: bool,
+    history: H,
 }
 
 /// Automatic cleanup of unsaved runs. `None` switches a rule off; saved runs are never counted or removed.
@@ -145,15 +173,11 @@ impl Housekeeping {
 
 /// The housekeeping setting as saved, else the default.
 fn stored_housekeeping(store: &Store) -> Housekeeping {
-    store
-        .setting("housekeeping")
-        .and_then(|v| serde_json::from_value::<Housekeeping>(v).ok())
-        .map(Housekeeping::clamped)
-        .unwrap_or_default()
+    store.get::<Housekeeping>("housekeeping").map(Housekeeping::clamped).unwrap_or_default()
 }
 
 fn stored_ntp_monitor(store: &Store) -> Option<NtpMonitorConfig> {
-    store.setting("ntp_monitor").and_then(|v| serde_json::from_value::<NtpMonitorConfig>(v).ok()).map(NtpMonitorConfig::clamped)
+    store.get::<NtpMonitorConfig>("ntp_monitor").map(NtpMonitorConfig::clamped)
 }
 
 impl AppState {
@@ -283,12 +307,12 @@ impl AppState {
     fn ntp_state(&self) -> Option<Value> {
         match &*self.ntp.lock().unwrap() {
             Some(r) => serde_json::to_value(r).ok(),
-            None => self.store.setting("ntp_last"),
+            None => self.store.get("ntp_last"),
         }
     }
 
     fn ntp_ledger(&self) -> crate::ntp::Ledger {
-        self.store.setting("ntp_asked").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
+        self.store.get("ntp_asked").unwrap_or_default()
     }
 
     /// Which of these servers may be asked now, and which are being left alone (asked in the last ten minutes, or told us
@@ -298,7 +322,7 @@ impl AppState {
         let mut ledger = self.ntp_ledger();
         let (ask, skipped) = crate::ntp::guard(entries, &ledger, now);
         crate::ntp::stamp(&mut ledger, &ask, now);
-        self.store.set_setting("ntp_asked", &json!(ledger));
+        self.store.put("ntp_asked", &ledger);
         (ask, skipped)
     }
 
@@ -306,7 +330,7 @@ impl AppState {
     pub fn ntp_finished(&self, results: &[crate::ntp::ServerResult]) {
         let mut ledger = self.ntp_ledger();
         crate::ntp::remember_kisses(&mut ledger, results, bench::now_ms());
-        self.store.set_setting("ntp_asked", &json!(ledger));
+        self.store.put("ntp_asked", &ledger);
     }
 
     /// Start an NTP run: servers from the catalog, asked in parallel, eight seconds apart. Shares the one measurement
@@ -392,7 +416,7 @@ impl AppState {
             };
             app.ntp_finished(&results_for_ledger);
             if let Some(v) = state {
-                app.store.set_setting("ntp_last", &v);
+                app.store.put("ntp_last", &v);
             }
         });
         self.ntp_state().ok_or_else(|| ApiError::new(500, "The run didn't start."))
@@ -400,7 +424,7 @@ impl AppState {
 
     /// The saved lists of Cached-test names, in the order they were saved.
     fn cached_lists(&self) -> Vec<NameList> {
-        self.store.setting("cached_lists").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
+        self.store.get("cached_lists").unwrap_or_default()
     }
 
     /// Check and store the saved lists: a name and a valid list each, no repeated names of lists.
@@ -420,7 +444,7 @@ impl AppState {
             let names = crate::names::validate(l.names).map_err(|e| ApiError::new(400, format!("{name}: {e}")))?;
             out.push(NameList { name, names });
         }
-        self.store.set_setting("cached_lists", &json!(out));
+        self.store.put("cached_lists", &out);
         Ok(out)
     }
 
@@ -580,7 +604,7 @@ impl AppState {
                 cfg.keep_runs = rule("keep_runs", cfg.keep_runs)?;
                 cfg.keep_days = rule("keep_days", cfg.keep_days)?;
                 let cfg = cfg.clamped();
-                self.store.set_setting("housekeeping", &serde_json::to_value(&cfg).unwrap());
+                self.store.put("housekeeping", &cfg);
                 ok(json!(cfg))
             }
             ("POST", ["runs", id, "cancel"]) => {
@@ -645,31 +669,14 @@ impl AppState {
             ("GET", ["monitor"]) => {
                 let hours = param("hours").and_then(|h| h.parse::<i64>().ok()).unwrap_or(72).clamp(1, 24 * 90);
                 let (since, cell) = monitor::window(hours, bench::now_ms());
-                // From the hourly rollups (at most 24 × 2,160 rows), off the async threads.
-                let store = self.store.clone();
-                let history = tokio::task::spawn_blocking(move || {
+                let config = self.monitor.borrow().clone();
+                // From the hourly rollups (at most 24 × 2,160 rows).
+                self.monitor_resp(config, Store::monitor_latest, move |store| {
                     let mut b = monitor::HistoryBuilder::new(cell);
                     store.monitor_rollups(since, |r| b.push(&r));
                     b.finish(hours, since, store.monitor_outages(since))
                 })
                 .await
-                .map_err(|e| ApiError::new(500, e.to_string()))?;
-                #[derive(Serialize)]
-                struct Resp {
-                    config: MonitorConfig,
-                    last: Option<i64>,
-                    paused: bool,
-                    history: monitor::History,
-                }
-                let resp = Resp {
-                    config: self.monitor.borrow().clone(),
-                    // From the database, so it counts cycles any Recursa process recorded.
-                    last: self.store.monitor_latest(),
-                    paused: self.run_active.load(Ordering::SeqCst),
-                    history,
-                };
-                // Straight to text: no intermediate JSON tree for thousands of hourly cells.
-                serde_json::to_string(&resp).map_err(|e| ApiError::new(500, e.to_string()))
             }
             ("GET", ["monitor", "recorded"]) => ok(json!(self.store.monitor_recorded())),
             // Cheap enough to poll: the page refetches the history only when a cycle has run.
@@ -683,27 +690,12 @@ impl AppState {
                 let days = param("days").and_then(|h| h.parse::<i64>().ok()).unwrap_or(7).clamp(1, 365);
                 let until = bench::now_ms();
                 let since = until - days * 86_400_000;
-                let store = self.store.clone();
-                let history = tokio::task::spawn_blocking(move || {
+                let config = self.ntp_monitor.borrow().clone();
+                self.monitor_resp(config, Store::ntp_latest, move |store| {
                     let (rows, clock) = store.ntp_history(since);
                     ntp_monitor::history(&rows, &clock, since, until)
                 })
                 .await
-                .map_err(|e| ApiError::new(500, e.to_string()))?;
-                #[derive(Serialize)]
-                struct Resp {
-                    config: NtpMonitorConfig,
-                    last: Option<i64>,
-                    paused: bool,
-                    history: ntp_monitor::History,
-                }
-                let resp = Resp {
-                    config: self.ntp_monitor.borrow().clone(),
-                    last: self.store.ntp_latest(),
-                    paused: self.run_active.load(Ordering::SeqCst),
-                    history,
-                };
-                serde_json::to_string(&resp).map_err(|e| ApiError::new(500, e.to_string()))
             }
             ("GET", ["ntp", "monitor", "last"]) => ok(json!({ "last": self.store.ntp_latest() })),
             ("PUT", ["ntp", "monitor"]) => ok(json!(self.set_ntp_monitor(parse(body)?)?)),
@@ -759,6 +751,22 @@ impl AppState {
             .into_iter()
             .find(|r| r.id == id || r.custom_id.as_deref() == Some(id) || r.aliases.iter().any(|a| a == id))
             .ok_or_else(|| ApiError::new(404, "No such resolver."))
+    }
+
+    /// Answer a monitor page: `history` built off the async threads, `last` read from the database so it
+    /// counts cycles any Recursa process recorded. Straight to text: no intermediate JSON tree for
+    /// thousands of hourly cells.
+    async fn monitor_resp<C: Serialize, H: Serialize + Send + 'static>(
+        &self,
+        config: C,
+        last: fn(&Store) -> Option<i64>,
+        history: impl FnOnce(&Store) -> H + Send + 'static,
+    ) -> Result<String, ApiError> {
+        let store = self.store.clone();
+        let (history, last) =
+            tokio::task::spawn_blocking(move || (history(&store), last(&store))).await.map_err(|e| ApiError::new(500, e.to_string()))?;
+        let resp = MonitorResp { config, last, paused: self.run_active.load(Ordering::SeqCst), history };
+        serde_json::to_string(&resp).map_err(|e| ApiError::new(500, e.to_string()))
     }
 
     /// A short, fixed look at one resolver (see [`crate::deepdive`]). Holds the same claim a run does, so it
@@ -887,9 +895,7 @@ impl AppState {
 
     /// Picks up monitoring settings another process saved to this database. Unreadable ones are ignored.
     pub fn reload_monitors(&self) {
-        if let Some(new) = stored_monitor(&self.store) {
-            self.monitor.send_if_modified(|c| std::mem::replace(c, new.clone()) != new);
-        }
+        reload(&self.monitor, stored_monitor(&self.store));
     }
 
     /// Delete old unsaved runs by the saved housekeeping setting (read fresh, so another
@@ -908,19 +914,13 @@ impl AppState {
 
     /// As [`AppState::reload_monitors`], for the NTP monitor.
     pub fn reload_ntp_monitor(&self) {
-        if let Some(new) = stored_ntp_monitor(&self.store) {
-            self.ntp_monitor.send_if_modified(|c| std::mem::replace(c, new.clone()) != new);
-        }
+        reload(&self.ntp_monitor, stored_ntp_monitor(&self.store));
     }
 
     /// Save and apply a monitoring configuration, within sane bounds, and tell subscribers.
-    pub fn set_monitor(&self, mut cfg: MonitorConfig) -> MonitorConfig {
-        cfg.interval_min = cfg.interval_min.clamp(1, 1440);
-        cfg.retention_days = cfg.retention_days.clamp(1, 365);
-        let mut seen = std::collections::HashSet::new();
-        cfg.resolvers.retain(|id| seen.insert(id.clone()));
-        cfg.resolvers.truncate(24);
-        self.store.set_setting("monitor", &serde_json::to_value(&cfg).unwrap());
+    pub fn set_monitor(&self, cfg: MonitorConfig) -> MonitorConfig {
+        let cfg = cfg.clamped();
+        self.store.put("monitor", &cfg);
         self.monitor.send_replace(cfg.clone());
         cfg
     }
@@ -937,7 +937,7 @@ impl AppState {
         if cfg.enabled && cfg.entries().is_empty() {
             return Err(ApiError::new(400, "Pick at least one time server to watch."));
         }
-        self.store.set_setting("ntp_monitor", &serde_json::to_value(&cfg).unwrap());
+        self.store.put("ntp_monitor", &cfg);
         if !cfg.enabled {
             self.ntp_epoch.fetch_add(1, Ordering::SeqCst);
         }

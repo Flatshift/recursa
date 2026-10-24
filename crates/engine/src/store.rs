@@ -293,6 +293,18 @@ impl Store {
         let _ = c.execute("INSERT OR REPLACE INTO settings(key, body) VALUES(?1, ?2)", params![key, v.to_string()]);
     }
 
+    /// The setting at `key` as a `T`; `None` when there is none or it doesn't parse.
+    pub fn get<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
+        self.setting(key).and_then(|v| serde_json::from_value(v).ok())
+    }
+
+    /// Save `v` as the setting at `key`.
+    pub fn put<T: Serialize>(&self, key: &str, v: &T) {
+        if let Ok(v) = serde_json::to_value(v) {
+            self.set_setting(key, &v);
+        }
+    }
+
     /// Record one monitoring cycle: the raw samples, the rollup of each hour they fall in
     /// (rebuilt from that hour's samples), and outages opened, extended or ended. One
     /// transaction, so the three never disagree.
