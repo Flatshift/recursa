@@ -46,6 +46,13 @@ fn pct(v: &mut [f64], q: f64) -> f64 {
     v[((v.len() - 1) as f64 * q).round() as usize]
 }
 
+/// Samples for the calibration at startup and in the background when none is stored.
+pub const STARTUP_SAMPLES: u32 = 200;
+/// Samples for a re-check requested from the UI.
+pub const RECHECK_SAMPLES: u32 = 300;
+/// Samples for the CLI `calibrate` command's full run.
+pub const CLI_SAMPLES: u32 = 1000;
+
 pub fn run(samples: u32) -> std::io::Result<Calibration> {
     let echo = UdpSocket::bind("127.0.0.1:0")?;
     echo.set_nonblocking(true)?;

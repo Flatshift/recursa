@@ -1475,7 +1475,7 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
         if h.cancelled() {
             break;
         }
-        run_phase(h, test, &mut xs, cfg, &cached, &fresh, timeout, gap, TLD_RESOLVER_GAP, t0);
+        run_phase(h, test, &mut xs, cfg, &PhaseInputs { cached: &cached, fresh: &fresh, timeout, gap, t0 });
         match test {
             TestKind::Uncached => flag_cached_answers(h, &fresh.zones),
             TestKind::Cached => cache_hit_rates(h, &cached, &auth, cached != crate::names::defaults()),
@@ -1525,7 +1525,7 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
     // ---- Capability probes.
     if cfg.probes && !h.cancelled() {
         h.phase("probes", selected.len() as u32);
-        run_probes(h, selected, &plan, &sets, timeout, deps.client_v6, &intercepted, set.plain);
+        run_probes(h, selected, &intercepted, &ProbeCtx { plan: &plan, sets: &sets, timeout, client_v6: deps.client_v6, plain: set.plain });
     }
 
     // ---- Health check: if plain DNS stopped answering during the probes (a security
@@ -1578,19 +1578,29 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_phase(
-    h: &RunHandle,
-    test: TestKind,
-    xs: &mut [Option<Box<dyn Exchanger>>],
-    cfg: &RunConfig,
-    cached: &[String],
-    fresh: &Fresh,
+/// What `run_phase` needs from the run beyond the handle, the test and the transports.
+struct PhaseInputs<'a> {
+    cached: &'a [String],
+    fresh: &'a Fresh,
     timeout: Duration,
     gap: Duration,
-    resolver_gap: Duration,
     t0: Instant,
-) {
+}
+
+/// The values every measuring thread of one phase shares; `tx` is that thread's own sender.
+struct PhaseCtx<'a> {
+    test: TestKind,
+    samples: u32,
+    cached: &'a [String],
+    fresh: &'a Fresh,
+    timeout: Duration,
+    t0: Instant,
+    cancel: &'a AtomicBool,
+    tx: mpsc::Sender<Sample>,
+}
+
+fn run_phase(h: &RunHandle, test: TestKind, xs: &mut [Option<Box<dyn Exchanger>>], cfg: &RunConfig, inputs: &PhaseInputs) {
+    let PhaseInputs { cached, fresh, timeout, gap, t0 } = *inputs;
     let mut active: Vec<usize> = (0..xs.len()).filter(|i| xs[*i].is_some()).collect();
     if active.is_empty() {
         return;
@@ -1620,7 +1630,7 @@ fn run_phase(
     let mut by_resolver: BTreeMap<&str, Pacer> = BTreeMap::new();
     if test == TestKind::Tld {
         for &i in &active {
-            by_resolver.entry(resolver_ids[i].as_str()).or_insert_with(|| Pacer::new(resolver_gap));
+            by_resolver.entry(resolver_ids[i].as_str()).or_insert_with(|| Pacer::new(TLD_RESOLVER_GAP));
         }
     }
     let mut per_target: Vec<Option<&Pacer>> = vec![None; xs.len()];
@@ -1632,15 +1642,13 @@ fn run_phase(
         let workers: Vec<_> = groups
             .iter_mut()
             .map(|g| {
-                let stx = stx.clone();
+                let ctx = PhaseCtx { test, samples, cached, fresh, timeout, t0, cancel, tx: stx.clone() };
                 sc.spawn(move || {
                     if accurate {
                         let (ti, x) = &mut g[0];
-                        measure_paced(*ti, x.as_mut(), pacer, per_target[*ti], test, samples, cached, fresh, timeout, t0, cancel, stx)
-                            .into_iter()
-                            .collect()
+                        measure_paced(*ti, x.as_mut(), pacer, per_target[*ti], &ctx).into_iter().collect()
                     } else {
-                        measure(g, per_target, test, samples, cached, fresh, timeout, gap, t0, cancel, stx)
+                        measure(g, per_target, gap, &ctx)
                     }
                 })
             })
@@ -1686,19 +1694,9 @@ fn run_phase(
 
 /// One measured query: encode, exchange, classify, update the target's timeout streak and send the sample.
 /// Returns whether the target is now dead (`DROP_AFTER` consecutive timeouts).
-#[allow(clippy::too_many_arguments)]
-fn query_once(
-    x: &mut dyn Exchanger,
-    ti: usize,
-    test: TestKind,
-    round: u32,
-    cached: &[String],
-    fresh: &Fresh,
-    timeout: Duration,
-    t0: Instant,
-    tx: &mpsc::Sender<Sample>,
-    streak: &mut u32,
-) -> bool {
+fn query_once(x: &mut dyn Exchanger, ti: usize, round: u32, ctx: &PhaseCtx, streak: &mut u32) -> bool {
+    let PhaseCtx { test, cached, fresh, timeout, t0, tx, .. } = ctx;
+    let (test, timeout) = (*test, *timeout);
     // Encoding happens before the send stamp, outside the measured interval.
     let Ok(q) = dns::encode_query(dns::new_id(), &QuerySpec::new(query_name_in(test, round, cached, fresh), dns::TYPE_A)) else {
         return false;
@@ -1744,60 +1742,33 @@ impl Pacer {
 
 /// Accurate mode: one target, one query in flight, every send reserved through the shared pacer.
 /// Returns the target index if it was dropped.
-#[allow(clippy::too_many_arguments)]
-fn measure_paced(
-    ti: usize,
-    x: &mut dyn Exchanger,
-    pacer: &Pacer,
-    per: Option<&Pacer>,
-    test: TestKind,
-    samples: u32,
-    cached: &[String],
-    fresh: &Fresh,
-    timeout: Duration,
-    t0: Instant,
-    cancel: &AtomicBool,
-    tx: mpsc::Sender<Sample>,
-) -> Option<usize> {
+fn measure_paced(ti: usize, x: &mut dyn Exchanger, pacer: &Pacer, per: Option<&Pacer>, ctx: &PhaseCtx) -> Option<usize> {
     clock::prioritize_thread();
     let mut streak = 0u32;
-    for round in 0..samples {
-        if cancel.load(Ordering::Relaxed) {
+    for round in 0..ctx.samples {
+        if ctx.cancel.load(Ordering::Relaxed) {
             break;
         }
         if let Some(p) = per {
             p.wait();
         }
         pacer.wait();
-        if query_once(x, ti, test, round, cached, fresh, timeout, t0, &tx, &mut streak) {
+        if query_once(x, ti, round, ctx, &mut streak) {
             return Some(ti);
         }
     }
     None
 }
 
-#[allow(clippy::too_many_arguments)]
-fn measure(
-    g: &mut [(usize, Box<dyn Exchanger>)],
-    per: &[Option<&Pacer>],
-    test: TestKind,
-    samples: u32,
-    cached: &[String],
-    fresh: &Fresh,
-    timeout: Duration,
-    gap: Duration,
-    t0: Instant,
-    cancel: &AtomicBool,
-    tx: mpsc::Sender<Sample>,
-) -> Vec<usize> {
+fn measure(g: &mut [(usize, Box<dyn Exchanger>)], per: &[Option<&Pacer>], gap: Duration, ctx: &PhaseCtx) -> Vec<usize> {
     clock::prioritize_thread();
     let mut streak = vec![0u32; g.len()];
     let mut dead = vec![false; g.len()];
     let mut order: Vec<usize> = (0..g.len()).collect();
-    'rounds: for round in 0..samples {
+    'rounds: for round in 0..ctx.samples {
         fastrand::shuffle(&mut order);
         for &j in &order {
-            if cancel.load(Ordering::Relaxed) {
+            if ctx.cancel.load(Ordering::Relaxed) {
                 break 'rounds;
             }
             if dead[j] {
@@ -1807,7 +1778,7 @@ fn measure(
             if let Some(p) = per[*ti] {
                 p.wait();
             }
-            dead[j] = query_once(x.as_mut(), *ti, test, round, cached, fresh, timeout, t0, &tx, &mut streak[j]);
+            dead[j] = query_once(x.as_mut(), *ti, round, ctx, &mut streak[j]);
             std::thread::sleep(gap);
         }
     }
@@ -1848,17 +1819,16 @@ fn compute_stats_in(s: &mut RunState, test: TestKind) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_probes(
-    h: &RunHandle,
-    selected: &[Resolver],
-    plan: &[(TargetInfo, Option<Endpoint>)],
-    sets: &probes::FilterSets,
+/// The values every resolver probe of one run shares.
+struct ProbeCtx<'a> {
+    plan: &'a [(TargetInfo, Option<Endpoint>)],
+    sets: &'a probes::FilterSets,
     timeout: Duration,
     client_v6: bool,
-    intercepted: &[String],
     plain: bool,
-) {
+}
+
+fn run_probes(h: &RunHandle, selected: &[Resolver], intercepted: &[String], ctx: &ProbeCtx) {
     let targets = h.with(|s| s.targets.clone());
     // Eight resolvers at a time, each worker taking the next as soon as it finishes, so one slow resolver
     // doesn't hold up the rest.
@@ -1870,7 +1840,7 @@ fn run_probes(
                     let Some(r) = selected.get(next.fetch_add(1, Ordering::Relaxed)) else { break };
                     let avoid_udp = intercepted.contains(&r.id);
                     // A probe that panics loses only its own report, as when each had a thread of its own.
-                    let probe = || probe_resolver(r, plan, &targets, sets, timeout, client_v6, avoid_udp, plain);
+                    let probe = || probe_resolver(r, &targets, avoid_udp, ctx);
                     let Some(rep) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(probe)).ok().flatten() else {
                         continue;
                     };
@@ -1895,17 +1865,8 @@ pub(crate) fn on_local_network(ip: &IpAddr) -> bool {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn probe_resolver(
-    r: &Resolver,
-    plan: &[(TargetInfo, Option<Endpoint>)],
-    targets: &[TargetInfo],
-    sets: &probes::FilterSets,
-    timeout: Duration,
-    client_v6: bool,
-    avoid_udp: bool,
-    plain: bool,
-) -> Option<probes::ProbeReport> {
+fn probe_resolver(r: &Resolver, targets: &[TargetInfo], avoid_udp: bool, ctx: &ProbeCtx) -> Option<probes::ProbeReport> {
+    let ProbeCtx { plan, sets, timeout, client_v6, plain } = *ctx;
     use probes::Status::{Fail, Info, Pass, Unknown};
     let planned = planned_for(plan, &r.id);
     let (mut ex, via) = open_for_run(r, &planned, timeout, avoid_udp, plain)?;
@@ -2100,7 +2061,7 @@ fn run_cdn(
                 let planned = planned_for(plan, &r.id);
                 sc.spawn(move || {
                     let (mut ex, _) = open_for_run(r, &planned, timeout, avoid_udp, plain)?;
-                    Some((r.id.clone(), cdn::resolve_all(ex.as_mut(), timeout, 2)))
+                    Some((r.id.clone(), cdn::resolve_all(ex.as_mut(), timeout)))
                 })
             })
             .collect();
@@ -3109,20 +3070,17 @@ mod tests {
                 .map(|(ti, x)| {
                     let tx = tx.clone();
                     sc.spawn(move || {
-                        measure_paced(
-                            ti,
-                            x.as_mut(),
-                            pacer,
-                            None,
-                            TestKind::Cached,
+                        let ctx = PhaseCtx {
+                            test: TestKind::Cached,
                             samples,
-                            &[],
+                            cached: &[],
                             fresh,
-                            Duration::from_secs(1),
+                            timeout: Duration::from_secs(1),
                             t0,
                             cancel,
                             tx,
-                        )
+                        };
+                        measure_paced(ti, x.as_mut(), pacer, None, &ctx)
                     })
                 })
                 .collect();
@@ -3152,7 +3110,10 @@ mod tests {
             std::thread::scope(|sc| {
                 for (ti, x) in xs.iter_mut().enumerate() {
                     let tx = tx.clone();
-                    sc.spawn(move || measure_paced(ti, x, global, per, test, 5, &[], fresh, Duration::from_secs(1), t0, cancel, tx));
+                    sc.spawn(move || {
+                        let ctx = PhaseCtx { test, samples: 5, cached: &[], fresh, timeout: Duration::from_secs(1), t0, cancel, tx };
+                        measure_paced(ti, x, global, per, &ctx)
+                    });
                 }
             });
             let mut at: Vec<Instant> = sends.lock().unwrap().iter().map(|s| s.1).collect();
@@ -3237,7 +3198,17 @@ mod tests {
             for (ti, x) in xs.iter_mut().enumerate() {
                 let tx = tx.clone();
                 sc.spawn(move || {
-                    measure_paced(ti, x, pacer, None, TestKind::Cached, 1000, &[], fresh, Duration::from_secs(1), t0, cancel, tx)
+                    let ctx = PhaseCtx {
+                        test: TestKind::Cached,
+                        samples: 1000,
+                        cached: &[],
+                        fresh,
+                        timeout: Duration::from_secs(1),
+                        t0,
+                        cancel,
+                        tx,
+                    };
+                    measure_paced(ti, x, pacer, None, &ctx)
                 });
             }
             drop(tx);

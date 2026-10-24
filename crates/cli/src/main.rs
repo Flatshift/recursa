@@ -192,7 +192,7 @@ async fn main() {
     match cli.cmd {
         None | Some(Cmd::Serve) => serve(cli).await,
         Some(Cmd::Calibrate) => {
-            let c = tokio::task::spawn_blocking(|| calibrate::run(1000)).await.unwrap().expect("calibration");
+            let c = tokio::task::spawn_blocking(|| calibrate::run(calibrate::CLI_SAMPLES)).await.unwrap().expect("calibration");
             println!("clock            {}", c.clock);
             let stamps = match (c.kernel_rx, c.stamped) {
                 (false, _) if cfg!(windows) => {
