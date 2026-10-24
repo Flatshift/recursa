@@ -462,6 +462,31 @@ input[type='checkbox']:focus-visible {
   background: var(--s-tld);
 }
 
+/* A chart's pointer tooltip (Ladder, Floor, Route, Record): fixed at the pointer and lifted above it, with a header,
+   a value and a sub line. A chart keeps a scoped rule only for what differs. */
+.chart-tip {
+  position: fixed;
+  z-index: var(--z-tooltip);
+  transform: translate(-50%, calc(-100% - 8px));
+  pointer-events: none;
+  background: var(--surface);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+  padding: 7px 10px;
+  font-size: var(--t-xs);
+  white-space: nowrap;
+}
+.chart-tip .tt-h {
+  color: var(--ink-2);
+}
+.chart-tip .tt-v {
+  font-size: var(--t-md);
+  font-weight: 620;
+}
+.chart-tip .tt-s {
+  color: var(--ink-3);
+}
+
 .muted {
   color: var(--ink-3);
 }

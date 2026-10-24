@@ -121,7 +121,7 @@
   </figure>
 {/if}
 {#if tip}
-  <div class="tip" style:left="{tipX}px" style:top="{tip.y}px" role="tooltip" bind:clientWidth={tipW}>
+  <div class="chart-tip" style:left="{tipX}px" style:top="{tip.y}px" role="tooltip" bind:clientWidth={tipW}>
     <div class="tt-h">{tip.label ? `${tip.label} · ` : ''}TCP handshake to port {path.port}</div>
     <div class="tt-v num">{path.samples.map((v: number) => ms(v, false)).join(' · ')} ms</div>
     <div class="tt-s">
@@ -207,27 +207,5 @@
   }
   .unc-k {
     background: var(--ink);
-  }
-  .tip {
-    position: fixed;
-    z-index: var(--z-tooltip);
-    transform: translate(-50%, calc(-100% - 8px));
-    pointer-events: none;
-    background: var(--surface);
-    border-radius: var(--r-md);
-    box-shadow: var(--shadow-pop);
-    padding: 7px 10px;
-    font-size: var(--t-xs);
-    white-space: nowrap;
-  }
-  .tt-h {
-    color: var(--ink-2);
-  }
-  .tt-v {
-    font-size: var(--t-md);
-    font-weight: 620;
-  }
-  .tt-s {
-    color: var(--ink-3);
   }
 </style>
