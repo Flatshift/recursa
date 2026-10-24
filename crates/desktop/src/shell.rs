@@ -206,9 +206,20 @@ pub fn show_settings(app: &AppHandle, section: Option<&str>) {
         .resizable(true)
         .minimizable(false)
         .maximizable(false)
+        // Its outside links (the GPL, the RPKI agreement) open in the default browser, as the main window's do.
         .on_navigation({
             let dev = dev_url(app);
-            move |url| is_internal(url, dev.as_ref())
+            move |url| {
+                let internal = is_internal(url, dev.as_ref());
+                if !internal {
+                    open_external(url);
+                }
+                internal
+            }
+        })
+        .on_new_window(|url, _| {
+            open_external(&url);
+            NewWindowResponse::Deny
         })
         .build();
     match built {
