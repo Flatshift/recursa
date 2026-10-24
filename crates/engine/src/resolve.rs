@@ -1,7 +1,7 @@
 //! Plain DNS questions through the system resolvers, using the engine's own DNS code.
 
 use crate::dns::{self, QuerySpec};
-use crate::net::{self, Endpoint, Exchanger, Transport, UdpX};
+use crate::net::{self, Endpoint, Transport, UdpX};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
@@ -26,15 +26,13 @@ impl Resolve {
             for s in &self.servers {
                 let attempt = || -> Result<dns::Message, String> {
                     let mut x = UdpX::connect(SocketAddr::new(*s, 53)).map_err(|e| e.to_string())?;
-                    let q = dns::encode_query(dns::new_id(), &QuerySpec::new(name, qtype)).map_err(|e| e.to_string())?;
-                    let r = x.exchange(&q, Duration::from_millis(1500)).map_err(|e| e.to_string())?;
-                    let m = dns::parse(&r.bytes).map_err(|e| e.to_string())?;
+                    let spec = QuerySpec::new(name, qtype);
+                    let m = dns::ask(&mut x, &spec, Duration::from_millis(1500)).map_err(|e| e.to_string())?.msg;
                     // A truncated UDP answer is asked again over TCP.
                     if m.tc() {
                         let ep = Endpoint { transport: Transport::Tcp, addr: SocketAddr::new(*s, 53), host: None, url: None };
                         let mut t = net::open(&ep, Duration::from_millis(1500)).map_err(|e| e.to_string())?;
-                        let r = t.exchange(&q, Duration::from_millis(1500)).map_err(|e| e.to_string())?;
-                        return dns::parse(&r.bytes).map_err(|e| e.to_string());
+                        return dns::ask(t.as_mut(), &spec, Duration::from_millis(1500)).map(|a| a.msg).map_err(|e| e.to_string());
                     }
                     Ok(m)
                 };

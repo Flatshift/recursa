@@ -33,10 +33,7 @@ pub fn bootstrap(host: &str, want_v6: bool, r: &Resolver, timeout: Duration, pla
     let short = timeout.min(Duration::from_millis(1500));
     for (ep, via) in lookup_servers(r, plain) {
         let Ok(mut x) = net::open(&ep, short) else { continue };
-        let Ok(q) = dns::encode_query(dns::new_id(), &QuerySpec::new(host, qtype)) else { continue };
-        let Ok(m) = x.exchange(&q, short).and_then(|rep| dns::parse(&rep.bytes).map_err(|e| net::XErr::Io(e.to_string()))) else {
-            continue;
-        };
+        let Ok(dns::Answer { msg: m, .. }) = dns::ask(x.as_mut(), &QuerySpec::new(host, qtype), short) else { continue };
         // CGNAT stays allowed: some resolvers live there (Tailscale's 100.100.100.100).
         let found = if want_v6 {
             m.ipv6_answers().into_iter().map(IpAddr::V6).find(|ip| !crate::catalog::is_local_or_special_but_cgnat(ip))
