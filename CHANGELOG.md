@@ -4,6 +4,9 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 
 ## 0.3.13 (2026-10-24)
 
+- **Blocking tests.** Malware and phishing now show whether blocking was confirmed on the services' own test names; Check live feeds shows how much a resolver blocks. AdGuard and DNS4EU block pages are recognised.
+- **Path tab.** A run keeps the path check as its own tab, with the traced route and handshake time to each resolver.
+- **Probe board.** Resolvers are listed fastest cached lookup first, with a status tile per capability check, coloured by group, and pass counts per check.
 - **Pick sheet.** The Overview picks are one row per goal: resolver, deciding figure, a short note and the graph the
   goal was decided on, with the full sentence on hover. Best from here closes the sheet as the total with the terms it
   adds up; a finished run's Overview no longer repeats the ranking, and a tall, wide window adds a query timeline.

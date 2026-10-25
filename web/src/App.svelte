@@ -181,7 +181,7 @@
           <Settings />
         {/if}
       </main>
-      <InstrumentStrip env={stripEnv} now={app.env} link={onRun ? app.run!.link : undefined} frozen={!!onRun && app.run?.status !== 'running'} run={onRun ? app.run : null} />
+      <InstrumentStrip env={stripEnv} now={app.env} link={onRun ? app.run!.link : undefined} frozen={!!onRun && app.run?.status !== 'running'} />
     </div>
   </div>
 {/if}

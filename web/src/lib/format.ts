@@ -86,9 +86,17 @@ export function runEstimateMs(
     const conc = Math.min(8, Math.max(1, targets));
     msTotal = (queries * 35) / conc + 4000;
   }
-  if (c.probes) msTotal += Math.ceil(resolvers / 8) * 2500 + 3000;
-  if (c.cdn) msTotal += 6000;
-  return msTotal;
+  return msTotal + Object.values(checkMs(resolvers, c)).reduce((a, b) => a + b, 0);
+}
+
+/** How long each check after the latency rounds should take, in run order: the yardstick once the checks begin. */
+export function checkMs(resolvers: number, c: { probes: boolean; cdn: boolean }): Record<string, number> {
+  return {
+    path: 1500,
+    ...(c.probes ? { probes: Math.ceil(resolvers / 8) * 2500 + 3000 } : {}),
+    ...(c.cdn ? { cdn: 5000 + resolvers * 300 } : {}),
+    intel: 2000,
+  };
 }
 
 /** Resolvers the catalog documents, so published claims apply. */

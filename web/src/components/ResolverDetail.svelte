@@ -142,15 +142,14 @@
   const filt = $derived(Object.entries(probe?.filtering ?? {}));
   const blockSum = $derived.by(() => {
     if (filt.length) {
-      const b = filt.reduce((n, [, f]) => n + f.blocked, 0);
-      const t = filt.reduce((n, [, f]) => n + f.tested, 0);
-      return `${b} of ${t} test names blocked`;
+      const seen = filt.filter(([, f]) => f.blocked > 0).map(([cat]) => cat);
+      return seen.length ? `Blocking confirmed for ${list(seen)}` : 'No blocking seen';
     }
     return resolver.published.filtering.length ? `Publishes ${list(resolver.published.filtering)} blocking` : 'No blocking published';
   });
   const blockBad = $derived.by(() => {
     const claims = (cat: string) => expectsBlock(resolver, cat);
-    if (filt.some(([cat, f]) => claims(cat) && f.tested && f.blocked / f.tested < 0.5)) return true;
+    if (filt.some(([cat, f]) => claims(cat) && f.tested && (cat === 'ads' ? f.blocked / f.tested < 0.5 : f.blocked === 0))) return true;
     return Object.entries(live?.categories ?? {}).some(([cat, f]) => claims(cat) && f.tested && f.blocked / f.tested < 0.5);
   });
   const relSum = $derived(feed ? stateLabel(feed) : resolver.group === 'public' ? 'No status feed' : '');
@@ -479,13 +478,17 @@
         {#snippet action()}{@render check('live', { plain: allowPlain })}{/snippet}
         {#if filt.length}
           <h4>Test names</h4>
+          <p class="muted small">
+            Filtering services publish harmless names for testing their own blocking, and each mostly blocks only its own. A
+            blocked name confirms the filter works; how much it catches is what Check live feeds measures.
+          </p>
           {#if probe?.block_style}<p class="small">Blocks by answering <b class="mono">{probe.block_style}</b>.</p>{/if}
           {#each filt as [cat, f]}
             <div class="fcat">
               <button class="fhead" aria-expanded={!!openFilter[cat]} onclick={() => (openFilter[cat] = !openFilter[cat])}>
                 <Icon name={openFilter[cat] ? 'chevron-down' : 'chevron-right'} size={13} />
                 <span class="cap-l">{cat[0].toUpperCase() + cat.slice(1)}</span>
-                <span class="num">{f.blocked}/{f.tested} blocked</span>
+                <span class="num">{cat === 'ads' ? `${f.blocked}/${f.tested} blocked` : f.blocked ? 'Confirmed' : 'Not seen'}</span>
                 <span class="muted small">{f.source}</span>
               </button>
               {#if openFilter[cat]}

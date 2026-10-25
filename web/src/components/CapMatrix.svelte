@@ -71,7 +71,15 @@
     ['protocol', 'Protocol', [cap('ede'), cap('edns_version'), cap('cookies'), cap('tcp'), cap('dot'), cap('doh')]],
   ]);
 
-  type Built = { line: Line; cells: C[]; same: boolean; blank: boolean };
+  // While the run works, a cell its check hasn't reached yet is a skeleton: the probes fill a resolver's column, the CDN
+  // mapping and the network intel fill the routing rows. Lines stay apart until the end, so nothing collapses mid-run.
+  const running = $derived(run.status === 'running');
+  const INTEL = new Set(['roa', 'rov', 'egress']);
+  const waits = (key: string, r: Resolver) =>
+    running && (key === 'cdn' ? !!run.config.cdn && !run.cdn : INTEL.has(key) ? !run.intel?.[r.id] : run.config.probes !== false && !run.probes[r.id]);
+  const busy = (key: string) => running && (key === 'cdn' ? run.phase === 'cdn' : INTEL.has(key) && run.phase === 'intel');
+
+  type Built = { line: Line; cells: C[]; wait: boolean[]; same: boolean; blank: boolean };
   const isBlank = (c: C) => c.prov === 'unknown' && (c.text === '—' || c.text === '');
   const built = $derived(
     groups.map(([k, title, lines]) => ({
@@ -79,31 +87,33 @@
       title,
       lines: lines.map((line): Built => {
         const cells = resolvers.map(line.cell);
+        const wait = resolvers.map((r) => waits(line.key, r));
         const blank = cells.every(isBlank);
-        const same = resolvers.length > 1 && !blank && cells.every((c) => c.text === cells[0].text && c.status === cells[0].status && c.prov === cells[0].prov);
-        return { line, cells, same, blank };
+        const same = !running && resolvers.length > 1 && !blank && cells.every((c) => c.text === cells[0].text && c.status === cells[0].status && c.prov === cells[0].prov);
+        return { line, cells, wait, same, blank };
       }),
     })),
   );
   const shown = $derived(view === 'all' ? built : built.filter((g) => g.k === view));
 
-  // Blocking reads as a share of the hosts tried, so it gets a bar as well as the count.
+  // Ad blocking reads as a share of the common ad hosts tried, so it gets a bar as well as the count. The other
+  // categories use vendors' own test names, which only confirm that blocking happens.
   const share = (key: string, r: Resolver) => {
-    if (!key.startsWith('filter_')) return null;
+    if (key !== 'filter_ads') return null;
     const f = run.probes[r.id]?.filtering?.[key.slice(7)];
     return f && f.tested ? f : null;
   };
 
   // Phone: each capability lists its values, with the resolvers that share each one, in ranking order.
-  const bucket = (l: { line: Line; cells: C[] }) => {
-    const out = new Map<string, { c: C; s: ReturnType<typeof share>; names: string[] }>();
+  const bucket = (l: { line: Line; cells: C[]; wait: boolean[] }) => {
+    const out = new Map<string, { c: C; s: ReturnType<typeof share>; wait: boolean; names: string[] }>();
     resolvers.forEach((r, i) => {
       const c = l.cells[i];
       const s = share(l.line.key, r);
-      const k = `${c.status}|${c.text}|${c.prov}|${s ? `${s.blocked}/${s.tested}` : ''}`;
+      const k = l.wait[i] ? 'wait' : `${c.status}|${c.text}|${c.prov}|${s ? `${s.blocked}/${s.tested}` : ''}`;
       const b = out.get(k);
       if (b) b.names.push(short(r));
-      else out.set(k, { c, s, names: [short(r)] });
+      else out.set(k, { c, s, wait: l.wait[i], names: [short(r)] });
     });
     return [...out.values()];
   };
@@ -121,6 +131,16 @@
 
   // The verdict: the two picks that are about capabilities, then what this run found to differ.
   const head = $derived.by(() => {
+    if (running && run.config.probes !== false) {
+      const p = run.phase;
+      if (p === 'cdn' || p === 'intel')
+        return { sentence: 'Probes are done.', detail: 'The routing rows fill in after the CDN mapping and network intel.', picks: [] };
+      return {
+        sentence: 'Capabilities are probed after the latency tests.',
+        detail: 'Probing waits so it never disturbs the timing. Each resolver’s column fills in as it answers.',
+        picks: [],
+      };
+    }
     if (!v) return null;
     const all = built.flatMap((g) => g.lines).filter((l) => !l.blank);
     if (!probed) {
@@ -208,7 +228,7 @@
   </section>
 {/if}
 
-{#if mobile && !probed}
+{#if mobile && !probed && !running}
   <!-- Phone: without probes the matrix only repeats what operators publish, which the resolver sheet shows too. -->
   <button class="btn" onclick={withProbes}>New run with probes</button>
 {:else}
@@ -234,8 +254,10 @@
             <p class="mval"><Cell c={l.cells[0]} sheet /><span class="who">every resolver</span></p>
           {:else}
             {#each bucket(l) as b}
-              <p class="mval">
-                {#if b.s}
+              <p class="mval" class:arrive={running && !b.wait}>
+                {#if b.wait}
+                  <span class="skel" class:now={busy(l.line.key)}></span>
+                {:else if b.s}
                   <span class="blk">
                     <Glyph status={b.c.status} size={13} />
                     <span class="track" aria-hidden="true"><span style:width="{(b.s.blocked / b.s.tested) * 100}%"></span></span>
@@ -285,8 +307,10 @@
             {:else}
               {#each resolvers as r, i (r.id)}
                 {@const s = share(l.line.key, r)}
-                <td class:sel={app.inspect === r.id}>
-                  {#if s}
+                <td class:sel={app.inspect === r.id} class:arrive={running && !l.wait[i]}>
+                  {#if l.wait[i]}
+                    <span class="skel" class:now={busy(l.line.key)}></span>
+                  {:else if s}
                     {@const c = l.cells[i]}
                     <span class="blk" title={c.evidence ? `${c.text}: ${c.evidence}` : c.text}>
                       <Glyph status={c.status} size={13} />

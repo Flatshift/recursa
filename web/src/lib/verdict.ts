@@ -3,7 +3,7 @@
 // ranking can always be explained in one sentence.
 
 import type { Check, Outcome, Resolver, RunState, Target, TestKind } from './types';
-import { TRANSPORT_LABEL, label, ms, pct } from './format';
+import { TRANSPORT_LABEL, label, list, ms, pct } from './format';
 
 export const TESTS: TestKind[] = ['cached', 'uncached', 'tld'];
 /** What each test counts for in the speed score (mirrors `TEST_WEIGHTS` in bench.rs): cached answers are most of
@@ -477,8 +477,6 @@ export type PickGraph =
   | { kind: 'edges'; cands: { name: string; v: number }[] }
   /** Each candidate's answer-time spread on one axis from zero, winner first; nearer zero wins. */
   | { kind: 'spread'; cands: { name: string; v: number; ok: number }[] }
-  /** One square per malware test domain, filled where it was blocked. */
-  | { kind: 'units'; items: { name: string; on: boolean }[] }
   /** The terms a figure adds up, as one bar; labels match the pick's parts. */
   | { kind: 'stack'; terms: { label: string; v: number; c: 'cached' | 'uncached' | 'neutral' | 'tld' }[] }
   /** Each probed resolver a column, each privacy property a row, filled where it holds; the winner's column first. */
@@ -664,24 +662,15 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
     .filter((id) => check(run, id, 'filter_malware')?.status === 'pass' && check(run, id, 'dnssec')?.present === true)
     .sort(ownFirst);
   if (protective[0]) {
-    const mal = run.probes[protective[0]]?.filtering?.malware;
+    const hit = run.probes[protective[0]]?.filtering?.malware?.samples.filter((s) => s.blocked).map((s) => s.domain) ?? [];
     picks.push({
       goal: 'Best protection',
       resolverId: protective[0],
       name: nameOfRow(rowOf(protective[0])),
-      figure: mal ? `${mal.blocked} of ${mal.tested} blocked` : 'blocks malware',
-      note: `${yoursShort(protective[0])}${mal ? 'malware domains, ' : ''}DNSSEC`,
-      evidence: `${yours(protective[0])}blocked ${mal ? `${mal.blocked} of ${mal.tested}` : 'most'} malware test domains; validates DNSSEC`,
+      figure: 'blocks malware',
+      note: `${yoursShort(protective[0])}malware blocking, DNSSEC`,
+      evidence: `${yours(protective[0])}blocked ${hit.length ? list(hit) : 'a malware test name'}; validates DNSSEC`,
       verified: true,
-      graph:
-        mal && mal.tested
-          ? {
-              kind: 'units',
-              items: mal.samples.length
-                ? mal.samples.filter((s) => s.blocked != null).map((s) => ({ name: s.domain, on: s.blocked! }))
-                : Array.from({ length: mal.tested }, (_, i) => ({ name: `Test domain ${i + 1}`, on: i < mal.blocked })),
-            }
-          : undefined,
     });
   }
 

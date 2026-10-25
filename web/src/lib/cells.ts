@@ -18,7 +18,7 @@ export function capCell(run: RunState | null, r: Resolver, key: string): Cell {
   if (c && c.status !== 'unknown') {
     // Not blocking isn't a failure for a resolver that never claimed to filter.
     if (key.startsWith('filter_') && c.status === 'fail' && !r.published.filtering.includes(key.slice(7))) {
-      return { status: 'info', text: `None · ${c.value.replace(' blocked', '')}`, prov: 'verified', evidence: c.evidence };
+      return { status: 'info', text: c.value.endsWith(' blocked') ? `None · ${c.value.replace(' blocked', '')}` : 'None', prov: 'verified', evidence: c.evidence };
     }
     return { status: c.status, text: c.value, prov: 'verified', evidence: c.evidence };
   }

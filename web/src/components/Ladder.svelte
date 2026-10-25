@@ -392,7 +392,7 @@
               <line class="grid" x1={x(t)} x2={x(t)} y1="0" y2={rowH} in:fade={tickFade()} out:fade={tickFade()} />
             {/each}
             {#if m && floors[r.target.resolver_id] != null}
-              <line class="floor" x1={x(floors[r.target.resolver_id])} x2={x(floors[r.target.resolver_id])} y1="3" y2={rowH - 3} />
+              <line class="floor" class:enter={live} x1={x(floors[r.target.resolver_id])} x2={x(floors[r.target.resolver_id])} y1="3" y2={rowH - 3} />
             {/if}
             {#each lanes as k}
               {@const d = r.dist[k]}
@@ -669,6 +669,23 @@
     stroke: var(--ink-3);
     stroke-width: 1;
     stroke-linecap: round;
+  }
+  /* The path check reporting during a live run: each floor draws down its row. */
+  .floor.enter {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: floor-in 480ms var(--ease-out) both;
+  }
+  @keyframes floor-in {
+    from {
+      transform: scaleY(0);
+      opacity: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .floor.enter {
+      animation: none;
+    }
   }
   /* Global: a finished run's dots are inserted as markup, which carries no scoping class. */
   .pcol :global(.dot) {
