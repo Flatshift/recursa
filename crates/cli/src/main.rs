@@ -285,17 +285,19 @@ async fn main() {
                 std::process::exit(1);
             }
             if !plugin {
-                let spacing = if entries.iter().all(|e| e.kind == "custom") {
-                    format!("{}", recursa_engine::ntp::CUSTOM_SPACING.as_secs())
+                let custom = recursa_engine::ntp::CUSTOM_SPACING.as_secs();
+                let spacing = if entries.iter().all(|e| e.kind == "custom") { custom } else { recursa_engine::ntp::MIN_SPACING.as_secs() };
+                let yours = if entries.iter().any(|e| e.kind == "custom") && spacing != custom {
+                    format!(" (yours: {custom})")
                 } else {
-                    format!("{}", recursa_engine::ntp::MIN_SPACING.as_secs())
+                    String::new()
                 };
                 eprintln!(
                     "Asking {} servers, {} queries each, {} seconds apart{}, at most {} packets in all…",
                     entries.len(),
                     plan.samples,
                     spacing,
-                    if entries.iter().any(|e| e.kind == "custom") && spacing != "2" { " (yours: 2)" } else { "" },
+                    yours,
                     recursa_engine::ntp::most_packets(entries.len(), plan.samples)
                 );
             }

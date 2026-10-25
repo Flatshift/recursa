@@ -12,7 +12,6 @@
     | 'sun'
     | 'moon'
     | 'monitor'
-    | 'download'
     | 'plus'
     | 'trash'
     | 'chevron-down'
@@ -69,8 +68,6 @@
     <path d="M13 9.6A5.5 5.5 0 016.4 3a5.5 5.5 0 106.6 6.6z" />
   {:else if name === 'monitor'}
     <rect x="2" y="3" width="12" height="8" rx="1.2" /><path d="M6 13.5h4M8 11v2.5" />
-  {:else if name === 'download'}
-    <path d="M8 2.5v8M4.5 7.5L8 11l3.5-3.5M3 13.5h10" />
   {:else if name === 'plus'}
     <path d="M8 3.5v9M3.5 8h9" />
   {:else if name === 'bookmark'}

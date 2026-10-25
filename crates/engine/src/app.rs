@@ -409,7 +409,7 @@ impl AppState {
                     run.done += 1;
                 }
             });
-            let results_for_ledger = results.clone();
+            app.ntp_finished(&results);
             let state = {
                 let mut g = app.ntp.lock().unwrap();
                 if let Some(run) = g.as_mut() {
@@ -420,7 +420,6 @@ impl AppState {
                 }
                 g.as_ref().and_then(|r| serde_json::to_value(r).ok())
             };
-            app.ntp_finished(&results_for_ledger);
             if let Some(v) = state {
                 app.store.put("ntp_last", &v);
             }
@@ -1057,9 +1056,9 @@ struct ParseNames {
     text: String,
 }
 
-/// The 409 body when this process already has a run, look or trace going.
 /// Per-query timeout for the deep-dive checks.
 const DEEP_DIVE_TIMEOUT: Duration = Duration::from_millis(2000);
+/// The 409 body when this process already has a run, look or trace going.
 const RUN_ACTIVE: &str = "Wait for the current run to finish.";
 /// The 409 body when another process holds the machine-wide measure lock.
 const BUSY: &str = "Another Recursa window or terminal is measuring right now. Try again when it finishes.";

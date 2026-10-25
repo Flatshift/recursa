@@ -40,7 +40,6 @@
     warm?: WarmSample[];
     /** The run used several transports, so a resolver can have several rows. */
     multi?: boolean;
-    /** The chart has a pane to itself: taller lanes and bigger dots, so the scatter reads. */
     /** What the run is doing before its first answer, shown in place of the axis. */
     waiting?: string;
     /** Ghost rows to draw while the run hasn't listed its targets yet. */

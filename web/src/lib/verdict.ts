@@ -300,7 +300,7 @@ export function compositeOf(dist: Record<TestKind, Dist>, tests: TestKind[], wei
 
 /** The terms behind a per-lookup figure: what a cached and a fresh lookup cost, what timeouts and failed answers add,
  *  and the CDN edge penalty, with their sum. */
-export interface PerLookupTerms {
+interface PerLookupTerms {
   /** The cached figure corrected for answers that were really fresh lookups; null when the cached test did not run. */
   hit: number | null;
   /** The uncached and TLD figures blended by their weights; null when neither test ran. */
@@ -315,7 +315,7 @@ export interface PerLookupTerms {
 /** What one lookup costs on average at a traffic mix: the cached figure, corrected
  *  for answers that were really fresh lookups when the cache-hit rate is known, and the uncached and TLD figures for the
  *  rest, plus the cost of timeouts and failed answers and the CDN edge penalty on the lookups that open a new connection. */
-export function perLookupTerms(dist: Record<TestKind, Dist>, tests: TestKind[], cacheHits: number | null, cdn: number | null, hitShare: number): PerLookupTerms | null {
+function perLookupTerms(dist: Record<TestKind, Dist>, tests: TestKind[], cacheHits: number | null, cdn: number | null, hitShare: number): PerLookupTerms | null {
   const typ = (k: TestKind) => (tests.includes(k) ? cost(dist[k]) : null);
   let msum = 0;
   let mw = 0;
