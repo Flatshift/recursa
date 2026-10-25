@@ -58,7 +58,6 @@ class AppState {
   /** The run on screen. Raw: replaced wholesale on every event batch. */
   run = $state.raw<RunState | null>(null);
   runError = $state<string | null>(null);
-  live = $state(false);
   /** Resolver shown in the inspector pane (null: the inspector is closed). */
   inspect = $state<string | null>(null);
   /** Which part of a run's results is on screen. */
@@ -379,18 +378,15 @@ class AppState {
   #close() {
     this.#stream?.close();
     this.#stream = null;
-    this.live = false;
   }
 
   #connect(id: string) {
     this.#close();
-    this.live = true;
     this.#stream = streamRun(
       id,
       (ev) => this.#apply(ev, id),
       () => {
         // The stream ended on its own (the run left memory); fall back to a fetch.
-        this.live = false;
         if (this.run?.status === 'running') this.openRun(id);
       },
     );

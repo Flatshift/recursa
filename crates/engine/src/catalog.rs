@@ -50,10 +50,6 @@ pub struct Links {
     pub privacy: Option<String>,
 }
 
-fn yes() -> bool {
-    true
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Resolver {
     pub id: String,
@@ -66,7 +62,7 @@ pub struct Resolver {
     #[serde(default)]
     pub default: bool,
     /// Answers plain DNS on port 53.
-    #[serde(default = "yes")]
+    #[serde(default = "crate::bench::yes")]
     pub udp: bool,
     #[serde(default)]
     pub ipv4: Vec<String>,

@@ -7,7 +7,7 @@ import { api, confirmAction } from './api';
 import { app } from './store.svelte';
 import type { MonitorConfig, MonitorResp } from './types';
 
-export interface MonitorOptions<C> {
+interface MonitorOptions<C> {
   /** `/api/monitor` or `/api/ntp/monitor`; `/last` and `/history` hang off it. */
   endpoint: string;
   /** The window to load, as a query string (`hours=72`). The record loads when it changes and is polled while it is

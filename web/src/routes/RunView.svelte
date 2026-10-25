@@ -391,7 +391,7 @@
                         rows={rank(rows)}
                         samples={run.samples}
                         tests={run.config.tests}
-                        multi={transports.length > 1}
+                        {multi}
                         live
                         warm={run.warm ?? []}
                         {placeholders}
