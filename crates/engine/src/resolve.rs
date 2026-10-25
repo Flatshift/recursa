@@ -27,12 +27,12 @@ impl Resolve {
                 let attempt = || -> Result<dns::Message, String> {
                     let mut x = UdpX::connect(SocketAddr::new(*s, 53)).map_err(|e| e.to_string())?;
                     let spec = QuerySpec::new(name, qtype);
-                    let m = dns::ask(&mut x, &spec, Duration::from_millis(1500)).map_err(|e| e.to_string())?.msg;
+                    let m = dns::ask_msg(&mut x, &spec, Duration::from_millis(1500)).map_err(|e| e.to_string())?;
                     // A truncated UDP answer is asked again over TCP.
                     if m.tc() {
-                        let ep = Endpoint { transport: Transport::Tcp, addr: SocketAddr::new(*s, 53), host: None, url: None };
+                        let ep = Endpoint::new(Transport::Tcp, SocketAddr::new(*s, 53));
                         let mut t = net::open(&ep, Duration::from_millis(1500)).map_err(|e| e.to_string())?;
-                        return dns::ask(t.as_mut(), &spec, Duration::from_millis(1500)).map(|a| a.msg).map_err(|e| e.to_string());
+                        return dns::ask_msg(t.as_mut(), &spec, Duration::from_millis(1500)).map_err(|e| e.to_string());
                     }
                     Ok(m)
                 };

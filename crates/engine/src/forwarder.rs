@@ -9,7 +9,7 @@
 //! answer is still treated as a forwarder when it is this computer's default gateway.
 
 use crate::dns::{self, QuerySpec};
-use crate::net::UdpX;
+use crate::net::{Exchanger, UdpX};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
@@ -31,11 +31,16 @@ pub fn describe(version: &str) -> Option<String> {
     }
 }
 
+/// The first non-empty answer, cleaned, to a CHAOS TXT question (`version.bind`, `id.server`) asked through `x`.
+pub fn chaos_txt(x: &mut dyn Exchanger, name: &str, timeout: Duration) -> Option<String> {
+    let m = dns::ask_msg(x, &QuerySpec::chaos_txt(name), timeout).ok()?;
+    m.txt_answers().into_iter().map(|t| clean(&t)).find(|t| !t.is_empty())
+}
+
 /// Ask a resolver for its version name over plain DNS. Blocking; a second at most.
 pub fn version_bind(ip: IpAddr) -> Option<String> {
     let mut x = UdpX::connect(SocketAddr::new(ip, 53)).ok()?;
-    let m = dns::ask(&mut x, &QuerySpec::chaos_txt("version.bind"), Duration::from_millis(900)).ok()?.msg;
-    m.txt_answers().into_iter().map(|t| clean(&t)).find(|t| !t.is_empty())
+    chaos_txt(&mut x, "version.bind", Duration::from_millis(900))
 }
 
 /// A description of the forwarder at `ip`, when it is one: dnsmasq or Pi-hole by what it says it is, or

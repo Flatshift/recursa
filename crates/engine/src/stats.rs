@@ -45,6 +45,13 @@ pub fn quantile(sorted: &[f64], q: f64) -> f64 {
     sorted[lo] + (h - lo as f64) * (sorted[hi] - sorted[lo])
 }
 
+/// The median of `v` in any order (the mean of the middle pair for an even count), or `None` when there is none.
+pub fn median(v: impl Iterator<Item = f64>) -> Option<f64> {
+    let mut v: Vec<f64> = v.collect();
+    v.sort_by(|a, b| a.total_cmp(b));
+    (!v.is_empty()).then(|| quantile(&v, 0.5))
+}
+
 /// Nearest-rank value at `q` over sorted data, or `None` when there is none.
 pub fn nearest_rank<T: Copy>(sorted: &[T], q: f64) -> Option<T> {
     (!sorted.is_empty()).then(|| sorted[((sorted.len() - 1) as f64 * q).round() as usize])
@@ -112,5 +119,13 @@ mod tests {
         assert!((s.wmean - 15.31).abs() < 0.01);
         assert!((s.mean - (435.0 + 1000.0) / 30.0).abs() < 1e-9);
         assert!(summarize(&mut [], 0, 0, 0, 0).wmean.is_nan());
+    }
+
+    #[test]
+    fn median_sorts_and_averages_the_middle_pair() {
+        assert_eq!(median([].into_iter()), None);
+        assert_eq!(median([7.0].into_iter()), Some(7.0));
+        assert_eq!(median([9.0, 1.0, 5.0].into_iter()), Some(5.0));
+        assert_eq!(median([8.0, 2.0, 6.0, 4.0].into_iter()), Some(5.0));
     }
 }

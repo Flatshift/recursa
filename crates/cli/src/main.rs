@@ -181,7 +181,7 @@ async fn trace(cli: &Cli, target: &str) {
 
 #[tokio::main]
 async fn main() {
-    #[cfg(feature = "rpki-local")]
+    #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
     recursa_engine::rpki::child_entry();
     recursa_engine::install_crypto_provider();
     let cli = Cli::parse();
@@ -550,7 +550,9 @@ fn print_table(s: &bench::RunState) {
             r.success * 100.0
         );
     }
-    println!("\nRanked by speed score: cached, uncached and TLD lookups weighted 40/35/25, each median pulled toward its p95.");
+    println!(
+        "\nRanked by speed score: cached, uncached and TLD lookups weighted 50/40/10, each a mean with its slowest tenth capped at the p90."
+    );
     if s.cdn.is_some() {
         println!(
             "cdn: ms per round trip to the CDN edges the resolver chose, vs the nearest any resolver found. It doesn't move the order."

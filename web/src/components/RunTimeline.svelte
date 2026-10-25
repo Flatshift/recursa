@@ -3,7 +3,7 @@
   // reads as the network from here, not as one resolver.
   import type { Sample, TestKind } from '../lib/types';
   import { logDomain, logScale, logTicks, tickLabel } from '../lib/scale';
-  import { TEST_LABEL } from '../lib/format';
+  import { TEST_LABEL } from '../lib/phases';
 
   let {
     samples,

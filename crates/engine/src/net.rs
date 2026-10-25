@@ -43,6 +43,13 @@ pub struct Endpoint {
     pub url: Option<String>,
 }
 
+impl Endpoint {
+    /// A plain-DNS endpoint: no TLS name and no DoH URL.
+    pub fn new(transport: Transport, addr: SocketAddr) -> Self {
+        Endpoint { transport, addr, host: None, url: None }
+    }
+}
+
 #[derive(Debug)]
 pub struct Reply {
     pub bytes: Vec<u8>,
@@ -181,36 +188,22 @@ impl UdpX {
     /// the TTL it arrived with.
     fn recv(&mut self) -> io::Result<(usize, Option<u64>, Option<u8>)> {
         let fd = self.fd();
-        let mut iov = libc::iovec { iov_base: self.buf.as_mut_ptr() as *mut libc::c_void, iov_len: self.buf.len() };
-        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-        msg.msg_iov = &mut iov;
-        msg.msg_iovlen = 1;
-        msg.msg_control = self.cmsg.as_mut_ptr() as *mut libc::c_void;
-        msg.msg_controllen = std::mem::size_of_val(&self.cmsg) as _;
-        let n = unsafe { libc::recvmsg(fd, &mut msg, 0) };
-        if n < 0 {
-            return Err(io::Error::last_os_error());
-        }
         let (mut stamp, mut ttl) = (None, None);
-        unsafe {
-            let mut c = libc::CMSG_FIRSTHDR(&msg);
-            while !c.is_null() {
-                let h = &*c;
-                let data = libc::CMSG_DATA(c);
-                match (h.cmsg_level, h.cmsg_type) {
-                    // macOS and iOS report the IPv4 TTL as one byte, Linux as an int.
-                    #[cfg(any(target_os = "macos", target_os = "ios"))]
-                    (libc::IPPROTO_IP, libc::IP_RECVTTL) => ttl = Some(*data),
-                    #[cfg(target_os = "linux")]
-                    (libc::IPPROTO_IP, libc::IP_TTL) => ttl = Some(std::ptr::read_unaligned(data as *const libc::c_int) as u8),
-                    (libc::IPPROTO_IPV6, libc::IPV6_HOPLIMIT) => ttl = Some(std::ptr::read_unaligned(data as *const libc::c_int) as u8),
-                    _ => {}
-                }
-                stamp = stamp.or(arrival_stamp(c));
-                c = libc::CMSG_NXTHDR(&msg, c);
+        let n = recvmsg_cmsgs(fd, &mut self.buf, &mut self.cmsg, |c| unsafe {
+            let h = &*c;
+            let data = libc::CMSG_DATA(c);
+            match (h.cmsg_level, h.cmsg_type) {
+                // macOS and iOS report the IPv4 TTL as one byte, Linux as an int.
+                #[cfg(any(target_os = "macos", target_os = "ios"))]
+                (libc::IPPROTO_IP, libc::IP_RECVTTL) => ttl = Some(*data),
+                #[cfg(target_os = "linux")]
+                (libc::IPPROTO_IP, libc::IP_TTL) => ttl = Some(std::ptr::read_unaligned(data as *const libc::c_int) as u8),
+                (libc::IPPROTO_IPV6, libc::IPV6_HOPLIMIT) => ttl = Some(std::ptr::read_unaligned(data as *const libc::c_int) as u8),
+                _ => {}
             }
-        }
-        Ok((n as usize, stamp, ttl))
+            stamp = stamp.or(arrival_stamp(c));
+        })?;
+        Ok((n, stamp, ttl))
     }
 
     /// Discard late answers to earlier, timed-out queries.
@@ -300,26 +293,33 @@ pub(crate) fn recv_stamped(sock: &std::net::UdpSocket, buf: &mut [u8]) -> io::Re
 /// [`recv_stamped`] over a raw descriptor, for sockets that are not `UdpSocket`s (the link check's ICMP socket).
 #[cfg(unix)]
 pub(crate) fn recv_stamped_fd(fd: libc::c_int, buf: &mut [u8]) -> io::Result<(usize, Option<u64>)> {
-    let mut cmsg = [0u64; 32];
+    let mut stamp = None;
+    let n = recvmsg_cmsgs(fd, buf, &mut [0u64; 32], |c| stamp = stamp.or(unsafe { arrival_stamp(c) }))?;
+    Ok((n, stamp))
+}
+
+/// One `recvmsg` into `buf`, with `cmsg` as room for control messages; `each` sees every control message that arrived
+/// with the datagram. Returns the datagram's length.
+#[cfg(unix)]
+fn recvmsg_cmsgs(fd: libc::c_int, buf: &mut [u8], cmsg: &mut [u64; 32], mut each: impl FnMut(*const libc::cmsghdr)) -> io::Result<usize> {
     let mut iov = libc::iovec { iov_base: buf.as_mut_ptr() as *mut libc::c_void, iov_len: buf.len() };
     let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
     msg.msg_iov = &mut iov;
     msg.msg_iovlen = 1;
     msg.msg_control = cmsg.as_mut_ptr() as *mut libc::c_void;
-    msg.msg_controllen = std::mem::size_of_val(&cmsg) as _;
+    msg.msg_controllen = std::mem::size_of_val(cmsg) as _;
     let n = unsafe { libc::recvmsg(fd, &mut msg, 0) };
     if n < 0 {
         return Err(io::Error::last_os_error());
     }
-    let mut stamp = None;
     unsafe {
         let mut c = libc::CMSG_FIRSTHDR(&msg);
         while !c.is_null() {
-            stamp = stamp.or(arrival_stamp(c));
+            each(c);
             c = libc::CMSG_NXTHDR(&msg, c);
         }
     }
-    Ok((n as usize, stamp))
+    Ok(n as usize)
 }
 
 #[cfg(unix)]
@@ -674,16 +674,20 @@ fn exchange_stream<X: StreamX>(x: &mut X, query: &[u8], timeout: Duration) -> Re
     x.ensure(timeout)?;
     match x.once(query, timeout) {
         Ok(r) => Ok(r),
+        // The server answered; retrying the same query would only get the same status.
+        Err(e @ XErr::Status(_)) => Err(e),
+        // A timeout drops the connection: a silently dead one would otherwise time out every later query too,
+        // and nothing on it would notice.
         Err(XErr::Timeout) => {
             x.drop_stream();
             Err(XErr::Timeout)
         }
         Err(_) => {
-            // Servers close idle connections; reconnect once and retry.
+            // Servers close idle connections (DoH: GOAWAY, or a reset); reconnect once and retry.
             x.drop_stream();
             x.ensure(timeout)?;
             let r = x.once(query, timeout);
-            if r.is_err() {
+            if matches!(r, Err(ref e) if !matches!(e, XErr::Status(_))) {
                 x.drop_stream();
             }
             r
@@ -834,7 +838,9 @@ impl DohX {
             task.abort();
         }
     }
+}
 
+impl StreamX for DohX {
     fn ensure(&mut self, timeout: Duration) -> Result<(), XErr> {
         if self.sender.is_some() {
             return Ok(());
@@ -912,32 +918,15 @@ impl DohX {
             .map_err(|_| XErr::Timeout)?
         })
     }
+
+    fn drop_stream(&mut self) {
+        self.disconnect();
+    }
 }
 
 impl Exchanger for DohX {
     fn exchange(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
-        self.ensure(timeout)?;
-        match self.once(query, timeout) {
-            Ok(r) => Ok(r),
-            // The server answered; retrying the same query would only get the same status.
-            Err(e @ XErr::Status(_)) => Err(e),
-            // As with TCP and DoT, a timeout drops the connection: a silently dead one would
-            // otherwise time out every later query too, and nothing on it would notice.
-            Err(XErr::Timeout) => {
-                self.disconnect();
-                Err(XErr::Timeout)
-            }
-            Err(_) => {
-                // GOAWAY or a reset connection: reconnect once.
-                self.disconnect();
-                self.ensure(timeout)?;
-                let r = self.once(query, timeout);
-                if matches!(r, Err(ref e) if !matches!(e, XErr::Status(_))) {
-                    self.disconnect();
-                }
-                r
-            }
-        }
+        exchange_stream(self, query, timeout)
     }
     fn setup_ns(&self) -> Option<u64> {
         self.setup_ns
@@ -976,7 +965,7 @@ mod tests {
     #[test]
     fn a_dripping_tcp_server_cannot_hold_a_query() {
         // A full-size frame, one byte at a time: each read succeeds well inside the socket timeout.
-        let ep = Endpoint { transport: Transport::Tcp, addr: dripping(&[0xff, 0xff]), host: None, url: None };
+        let ep = Endpoint::new(Transport::Tcp, dripping(&[0xff, 0xff]));
         let timeout = Duration::from_millis(300);
         let mut x = open(&ep, timeout).unwrap();
         let t = Instant::now();

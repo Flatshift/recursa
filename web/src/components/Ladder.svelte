@@ -6,13 +6,14 @@
   import type { Row } from '../lib/verdict';
   import { TESTS, worstP95 } from '../lib/verdict';
   import type { Sample, TestKind, WarmSample } from '../lib/types';
-  import { TEST_LABEL, TRANSPORT_LABEL, label, ms, pct, plural } from '../lib/format';
+  import { TRANSPORT_LABEL, label, ms, pct, plural } from '../lib/format';
+  import { TEST_LABEL } from '../lib/phases';
   import Icon from './Icon.svelte';
   import TransportChip from './TransportChip.svelte';
   import BaselineChip from './BaselineChip.svelte';
   import SetupDial from './SetupDial.svelte';
   import { flip } from 'svelte/animate';
-  import { RERANK, TICK_FADE, ZOOM, jitterOf, rankTracker, reduceMotion, rise, roll } from '../lib/motion';
+  import { RERANK, TICK_FADE, ZOOM, jitterOf, rankTracker, reduceMotion, rise, roll, sinFrac } from '../lib/motion';
   import { pacedOrder } from '../lib/paced.svelte';
   import { logDomain, logInvert, logScale, logTicks, tickLabel } from '../lib/scale';
   import { warmByTarget, warmJitter } from '../lib/warm';
@@ -71,8 +72,7 @@
   const ghostCount = $derived(live && !rows.length ? placeholders : 0);
   // A stable, distribution-like band per ghost lane, so the placeholders don't all look the same.
   const band = (seed: number, lane: number) => {
-    const h = Math.sin((seed + 1) * 12.9898 + (lane + 1) * 78.233) * 43758.5453;
-    const f = h - Math.floor(h);
+    const f = sinFrac((seed + 1) * 12.9898 + (lane + 1) * 78.233);
     return { left: 18 + f * 22, width: 14 + ((f * 7) % 1) * 20 };
   };
 
@@ -136,8 +136,7 @@
     const id = setTimeout(() => (settled = true));
     return () => clearTimeout(id);
   });
-  const frac = (n: number) => n - Math.floor(n);
-  const seedOf = (t: number, i: number, k: TestKind) => frac(Math.sin((t + 3) * 91.17 + (i + 5) * 17.31 + k.length * 7.7) * 24634.6345);
+  const seedOf = (t: number, i: number, k: TestKind) => sinFrac((t + 3) * 91.17 + (i + 5) * 17.31 + k.length * 7.7, 24634.6345);
   /** A new answer travels in from the axis origin, so the distance it covers is the time it took, and settles to its
    *  resting opacity. Each 2 s copy's answers start spread across the copy's two seconds, so they stream in rather
    *  than landing as a block. A warm-up ring scales in where it lands instead: it was never timed for the record. */

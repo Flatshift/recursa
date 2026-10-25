@@ -1,9 +1,9 @@
 <script lang="ts">
   // Source list: the app's places, then its runs, newest first.
   import { app } from '../lib/store.svelte';
-  import { desktop, mac, mobile, openSettings } from '../lib/api';
+  import { desktop, mac, mobile, openSettings, SEPARATOR } from '../lib/api';
   import { shortcut } from '../lib/keys';
-  import { menu, SEPARATOR } from '../lib/menu.svelte';
+  import { menu } from '../lib/menu.svelte';
   import { ms, shortWhen } from '../lib/format';
   import type { RunRow } from '../lib/types';
   import Icon from './Icon.svelte';

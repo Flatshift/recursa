@@ -27,6 +27,9 @@ const CAPS: Caps = Caps::WINDOWS;
 #[cfg(mobile)]
 const CAPS: Caps = Caps::IOS;
 
+/// The label of the main window.
+pub(crate) const MAIN: &str = "main";
+
 /// The database `--db <path>` or `--db=<path>` names, if either is given. A bare `--db` is an error
 /// rather than a silent fall-through to the shared database.
 fn db_arg(args: &[String]) -> Result<Option<std::path::PathBuf>, String> {

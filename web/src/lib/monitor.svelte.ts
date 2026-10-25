@@ -7,6 +7,11 @@ import { api, confirmAction } from './api';
 import { app } from './store.svelte';
 import type { MonitorConfig, MonitorResp } from './types';
 
+/** How often the resolver monitor may check, in minutes. */
+export const RESOLVER_INTERVAL_MIN = [1, 5, 10, 15, 30, 60];
+/** How long either monitor may keep its history, in days. */
+export const RETENTION_DAYS = [7, 30, 90, 365];
+
 interface MonitorOptions<C> {
   /** `/api/monitor` or `/api/ntp/monitor`; `/last` and `/history` hang off it. */
   endpoint: string;

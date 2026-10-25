@@ -51,11 +51,11 @@
   const edges = $derived(Object.values(run.cdn?.edges ?? {}));
   const named = $derived(edges.filter((e) => e.asn != null).length);
   const enter = new Map<string, number>();
-  const nets = $derived.by(() => {
-    const all = edgeNets(edges);
+  const nets = $derived(edgeNets(edges));
+  $effect.pre(() => {
+    if (stage !== 'name') return;
     let batch = 0;
-    for (const x of all) if (!enter.has(x.key)) enter.set(x.key, batch++ * 90);
-    return all;
+    for (const x of nets) if (!enter.has(x.key)) enter.set(x.key, batch++ * 90);
   });
 
   const stages = $derived.by((): Stage[] => [
@@ -93,10 +93,9 @@
   });
 
   // Where a dot sits on its cell's track: clustered at the start until timed, then on a 1–300 ms log scale.
-  const LO = Math.log(1);
   const HI = Math.log(300);
   const at = (ip: string, i: number) => {
-    if (best[ip] != null) return Math.min(1, Math.max(0, (Math.log(Math.max(1, best[ip])) - LO) / (HI - LO)));
+    if (best[ip] != null) return Math.min(1, Math.max(0, Math.log(Math.max(1, best[ip])) / HI));
     if (silent.has(ip)) return 1;
     return Math.min(0.5, 0.03 + i * 0.07);
   };
@@ -144,7 +143,7 @@
       <thead>
         <tr>
           <th class="first" scope="col">Resolver</th>
-          <th scope="col" class="names-h">Lookups</th>
+          <th scope="col">Lookups</th>
           {#each CDNS as c}
             <th scope="col" class="cdn-h">
               <CdnLogo id={c.id} name={c.name} />

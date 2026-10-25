@@ -7,13 +7,14 @@
   import { app } from '../lib/store.svelte';
   import { RELIABLE, WEIGHTS, type Row } from '../lib/verdict';
   import type { Sample, TestKind, WarmSample } from '../lib/types';
-  import { TEST_LABEL, label, ms, pct, plural } from '../lib/format';
+  import { label, ms, pct, plural } from '../lib/format';
+  import { TEST_LABEL } from '../lib/phases';
   import { logDomain, logScale, tickLabel } from '../lib/scale';
   import { warmByTarget, warmJitter } from '../lib/warm';
   import { flip } from 'svelte/animate';
   import { onMount } from 'svelte';
   import { fade } from 'svelte/transition';
-  import { RERANK, jitterOf, rankTracker, rise, roll } from '../lib/motion';
+  import { RERANK, jitterOf, rankTracker, rise, roll, sinFrac } from '../lib/motion';
   import { pacedOrder } from '../lib/paced.svelte';
 
   let {
@@ -66,8 +67,7 @@
   });
   const ghosts = $derived(live && !rows.length ? Math.min(placeholders, LIMIT) : 0);
   const ghostBand = (seed: number) => {
-    const h = Math.sin((seed + 1) * 12.9898) * 43758.5453;
-    const f = h - Math.floor(h);
+    const f = sinFrac((seed + 1) * 12.9898);
     return { left: 15 + f * 25, width: 18 + ((f * 7) % 1) * 22 };
   };
 

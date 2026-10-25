@@ -680,10 +680,8 @@ fn ask_authority(ex: &mut dyn Exchanger, mut spec: QuerySpec, timeout: Duration)
         dns::RData::Name(n) if a.rtype == dns::TYPE_NS => Some(n.clone()),
         _ => None,
     })?;
-    let (_, _, a) = ask_once(ex, &QuerySpec::new(host, dns::TYPE_A), timeout)?;
-    // The resolver under test picks this address: never one on this computer or its network.
-    let ip = a.ipv4_answers().into_iter().find(|ip| !crate::catalog::is_local_or_special(&(*ip).into()))?;
-    let ep = Endpoint { transport: Transport::Udp, addr: SocketAddr::new(ip.into(), 53), host: None, url: None };
+    let ip = dns::routable_a(ex, &host, timeout)?;
+    let ep = Endpoint::new(Transport::Udp, SocketAddr::new(ip.into(), 53));
     let mut auth = net::open(&ep, timeout).ok()?;
     spec.rd = false;
     let (_, _, m) = ask_once(auth.as_mut(), &spec, timeout)?;

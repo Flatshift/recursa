@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, SocketAddr};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
@@ -837,7 +837,7 @@ fn effective_cached_names(h: &RunHandle, set: Setup, cfg: &RunConfig, selected: 
 
 /// One query through `x`, parsed.
 fn ask(x: &mut dyn Exchanger, name: &str, qtype: u16, rd: bool, timeout: Duration) -> Option<dns::Message> {
-    dns::ask(x, &QuerySpec { rd, ..QuerySpec::new(name, qtype) }, timeout).ok().map(|a| a.msg)
+    dns::ask_msg(x, &QuerySpec { rd, ..QuerySpec::new(name, qtype) }, timeout).ok()
 }
 
 /// The setup checks before the measured phases: when they stop, and whether they may use plain DNS. A run on
@@ -876,27 +876,43 @@ fn open_for_run(
     if plain { endpoints::open_best(r, planned, timeout, avoid_udp) } else { endpoints::open_encrypted(r, planned, timeout, false) }
 }
 
-/// Up to two of the chosen resolvers, each shown to answer a name known to resolve.
-fn helpers(h: &RunHandle, set: Setup, selected: &[Resolver], timeout: Duration) -> Vec<Box<dyn Exchanger>> {
-    let control = crate::names::defaults().remove(0);
-    selected
-        .iter()
-        .take_while(|_| !set.over(h))
-        .filter_map(|r| set.open(r, timeout))
-        .filter_map(|mut x| resolves(x.as_mut(), &control, timeout).then_some(x))
-        .take(2)
-        .collect()
+/// Up to two of the chosen resolvers, each shown to answer a name known to resolve. Checked on first use and
+/// kept for the run; an `Exchanger` is `&mut`, so each user opens its own connection to them.
+fn helpers<'c, 's>(
+    verified: &'c OnceLock<Vec<&'s Resolver>>,
+    h: &RunHandle,
+    set: Setup,
+    selected: &'s [Resolver],
+    timeout: Duration,
+) -> &'c [&'s Resolver] {
+    verified.get_or_init(|| {
+        let control = crate::names::defaults().remove(0);
+        selected
+            .iter()
+            .take_while(|_| !set.over(h))
+            .filter(|r| set.open(r, timeout).is_some_and(|mut x| resolves(x.as_mut(), &control, timeout)))
+            .take(2)
+            .collect()
+    })
 }
 
 /// The zones the Uncached test will use. Each must still be unsigned (in a signed zone a resolver may answer random
 /// names from NSEC records it already holds, RFC 8198) and still answer any label (a wildcard). A zone that changed is
 /// left out, and said so. If none passes, or no resolver could be asked, the built-in list is used.
-fn effective_uncached_zones(h: &RunHandle, set: Setup, cfg: &RunConfig, selected: &[Resolver], timeout: Duration) -> Vec<String> {
+fn effective_uncached_zones<'s>(
+    h: &RunHandle,
+    set: Setup,
+    cfg: &RunConfig,
+    selected: &'s [Resolver],
+    verified: &OnceLock<Vec<&'s Resolver>>,
+    timeout: Duration,
+) -> Vec<String> {
     let zones: Vec<String> = UNCACHED_ZONES.iter().map(|z| z.to_string()).collect();
     if !cfg.tests.contains(&TestKind::Uncached) {
         return zones;
     }
-    let mut asks = helpers(h, set, selected, timeout);
+    let mut asks: Vec<Box<dyn Exchanger>> =
+        helpers(verified, h, set, selected, timeout).iter().filter_map(|r| set.open(r, timeout)).collect();
     if asks.is_empty() {
         return zones;
     }
@@ -960,12 +976,20 @@ fn denial(m: &dns::Message, tld: &str) -> Option<Denial> {
 
 /// The TLDs the TLD test will use: each must still deny random names with opt-out NSEC3. One whose proof can't be
 /// seen (the resolvers asked don't pass DNSSEC records on) is kept; one that changed is left out, and said so.
-fn effective_tlds(h: &RunHandle, set: Setup, cfg: &RunConfig, selected: &[Resolver], timeout: Duration) -> Vec<String> {
+fn effective_tlds<'s>(
+    h: &RunHandle,
+    set: Setup,
+    cfg: &RunConfig,
+    selected: &'s [Resolver],
+    verified: &OnceLock<Vec<&'s Resolver>>,
+    timeout: Duration,
+) -> Vec<String> {
     let tlds = Fresh::defaults().tlds;
     if !cfg.tests.contains(&TestKind::Tld) {
         return tlds;
     }
-    let mut asks = helpers(h, set, selected, timeout);
+    let mut asks: Vec<Box<dyn Exchanger>> =
+        helpers(verified, h, set, selected, timeout).iter().filter_map(|r| set.open(r, timeout)).collect();
     if asks.is_empty() {
         return tlds;
     }
@@ -1003,12 +1027,13 @@ fn effective_tlds(h: &RunHandle, set: Setup, cfg: &RunConfig, selected: &[Resolv
 /// authoritative count, so a device on this network that answers DNS itself can't supply one. Names whose
 /// authority can't be found are left out of the judgement. The name servers are asked over plain DNS, so a run on
 /// encrypted transports only skips this.
-fn authority_ttls(
+fn authority_ttls<'s>(
     h: &RunHandle,
     set: Setup,
     cfg: &RunConfig,
     cached: &[String],
-    selected: &[Resolver],
+    selected: &'s [Resolver],
+    verified: &OnceLock<Vec<&'s Resolver>>,
     timeout: Duration,
 ) -> BTreeMap<String, u32> {
     if !set.plain || !cfg.tests.contains(&TestKind::Cached) || selected.is_empty() {
@@ -1020,7 +1045,9 @@ fn authority_ttls(
             .into_iter()
             .map(|names| {
                 sc.spawn(move || {
-                    let Some(mut x) = helpers(h, set, selected, timeout).into_iter().next() else { return Vec::new() };
+                    let Some(mut x) = helpers(verified, h, set, selected, timeout).iter().find_map(|r| set.open(r, timeout)) else {
+                        return Vec::new();
+                    };
                     names
                         .iter()
                         .take_while(|_| !set.over(h))
@@ -1048,12 +1075,7 @@ fn authority_ttl(x: &mut dyn Exchanger, name: &str, timeout: Duration) -> Option
         (!ns.is_empty()).then_some(ns)
     })?;
     for ns in servers.iter().take(2) {
-        // The resolver under test picks this address: never one on this computer or its network.
-        let Some(ip) = ask(x, ns, dns::TYPE_A, true, timeout)
-            .and_then(|m| m.ipv4_answers().into_iter().find(|a| !crate::catalog::is_local_or_special(&IpAddr::V4(*a))))
-        else {
-            continue;
-        };
+        let Some(ip) = dns::routable_a(x, ns, timeout) else { continue };
         let Ok(mut auth) = UdpX::connect(SocketAddr::new(IpAddr::V4(ip), 53)) else { continue };
         let Some(m) = ask(&mut auth, name, dns::TYPE_A, false, timeout) else { continue };
         if !m.aa() {
@@ -1505,9 +1527,13 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
     let mut xs = open_targets(set, h, &plan, timeout);
     h.emit_targets();
     let cached = effective_cached_names(h, set, cfg, selected, timeout);
-    let fresh =
-        Fresh { zones: effective_uncached_zones(h, set, cfg, selected, timeout), tlds: effective_tlds(h, set, cfg, selected, timeout) };
-    let auth = authority_ttls(h, set, cfg, &cached, selected, timeout);
+    // Uncached, TLD and the authority workers share one check of the helper resolvers.
+    let verified = OnceLock::new();
+    let fresh = Fresh {
+        zones: effective_uncached_zones(h, set, cfg, selected, &verified, timeout),
+        tlds: effective_tlds(h, set, cfg, selected, &verified, timeout),
+    };
+    let auth = authority_ttls(h, set, cfg, &cached, selected, &verified, timeout);
     // The link check pings the gateway from the start of warm-up to the end of the measured phases.
     let pinger = (!link::disabled()).then(|| link::start(t0));
     // Warm-up gets a budget of its own: setup may have used most of the shared one, and a target
@@ -1916,8 +1942,8 @@ pub(crate) fn on_local_network(ip: &IpAddr) -> bool {
 }
 
 fn probe_resolver(r: &Resolver, targets: &[TargetInfo], avoid_udp: bool, ctx: &ProbeCtx) -> Option<probes::ProbeReport> {
-    let ProbeCtx { plan, sets, timeout, client_v6, plain } = *ctx;
     use probes::Status::{Fail, Info, Pass, Unknown};
+    let ProbeCtx { plan, sets, timeout, client_v6, plain } = *ctx;
     let planned = planned_for(plan, &r.id);
     let (mut ex, via) = open_for_run(r, &planned, timeout, avoid_udp, plain)?;
     let mut rep = probes::probe(&r.id, via, ex.as_mut(), timeout, sets);
@@ -1988,7 +2014,7 @@ fn probe_resolver(r: &Resolver, targets: &[TargetInfo], avoid_udp: bool, ctx: &P
 /// works: the signature of this computer's UDP DNS being blocked on the path.
 fn plain_dns_stopped() -> bool {
     let ask = |t: Transport, ip: &str| {
-        let ep = Endpoint { transport: t, addr: SocketAddr::new(ip.parse().unwrap(), 53), host: None, url: None };
+        let ep = Endpoint::new(t, SocketAddr::new(ip.parse().unwrap(), 53));
         let mut x = net::open(&ep, Duration::from_millis(1500)).ok()?;
         dns::ask(x.as_mut(), &QuerySpec::new("www.google.com", dns::TYPE_A), Duration::from_millis(1500)).ok()
     };
@@ -2000,6 +2026,8 @@ fn plain_dns_stopped() -> bool {
 /// then 53), interleaved over five rounds. Then flag plain-DNS targets whose answers
 /// beat that floor: a device on this network answered them. Meanwhile, trace the route to each address.
 fn check_paths(set: Setup, h: &RunHandle, selected: &[Resolver], deps: &Deps) -> Vec<String> {
+    const ROUNDS: usize = 5;
+    const TRACE_ROUNDS: usize = 4;
     let jobs: Vec<(String, IpAddr, Vec<u16>)> = selected
         .iter()
         .filter(|r| r.group != "system")
@@ -2013,8 +2041,6 @@ fn check_paths(set: Setup, h: &RunHandle, selected: &[Resolver], deps: &Deps) ->
             Some((r.id.clone(), ip, ports)).filter(|(_, _, ports)| !ports.is_empty())
         })
         .collect();
-    const ROUNDS: usize = 5;
-    const TRACE_ROUNDS: usize = 4;
     let traces: Vec<(String, IpAddr)> = if crate::trace::available() == crate::trace::TraceCap::Ok {
         jobs.iter().map(|(id, ip, _)| (id.clone(), *ip)).collect()
     } else {
@@ -2210,7 +2236,7 @@ fn run_cdn(
     // Handshakes land from several threads; batch them into an update every 60 ms or so, each
     // carrying only what changed.
     let pending: Mutex<(BTreeMap<String, f64>, Vec<String>, Instant)> = Mutex::new((BTreeMap::new(), Vec::new(), Instant::now()));
-    let edges = cdn::time_edges(&ips, &|t| {
+    let edges = cdn::time_edges(&ips, 443, &|t| {
         let mut p = pending.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ms) = t.ms {
             let b = p.0.entry(t.ip.to_string()).or_insert(ms);

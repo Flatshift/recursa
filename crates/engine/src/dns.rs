@@ -437,6 +437,21 @@ pub(crate) fn ask_wire(x: &mut dyn Exchanger, query: &[u8], timeout: Duration) -
     Ok(Answer { reply, msg })
 }
 
+/// [`ask`] for callers that want only the message.
+pub(crate) fn ask_msg(x: &mut dyn Exchanger, spec: &QuerySpec, timeout: Duration) -> Result<Message, XErr> {
+    ask(x, spec, timeout).map(|a| a.msg)
+}
+
+/// The first IPv4 address of a nameserver's host name, asked through `x`. The resolver under test picks it, so
+/// never one on this computer or its network.
+pub(crate) fn routable_a(x: &mut dyn Exchanger, host: &str, timeout: Duration) -> Option<Ipv4Addr> {
+    ask_msg(x, &QuerySpec::new(host, TYPE_A), timeout)
+        .ok()?
+        .ipv4_answers()
+        .into_iter()
+        .find(|a| !crate::catalog::is_local_or_special(&(*a).into()))
+}
+
 impl Message {
     pub fn ad(&self) -> bool {
         self.flags & FLAG_AD != 0

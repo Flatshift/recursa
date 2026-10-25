@@ -66,7 +66,6 @@ interface Summary {
   p75: number | null;
   p90: number | null;
   p95: number | null;
-  p99: number | null;
   max: number | null;
   mean: number | null;
   sd: number | null;
@@ -367,7 +366,6 @@ interface Vantage {
 
 interface Interception {
   verdict: 'direct' | 'intercepted' | 'partial' | 'unknown';
-  checked_at: number;
   link: { interface: string; wifi: boolean } | null;
   results: {
     ip: string;
@@ -420,7 +418,6 @@ export interface TraceHop {
   samples_ms: (number | null)[];
   best_ms: number | null;
   avg_ms: number | null;
-  last_ms: number | null;
   sent: number;
   recv: number;
 }
@@ -431,7 +428,6 @@ export interface Trace {
   rounds: number;
   /** The target itself answered. */
   reached: boolean;
-  elapsed_ms: number;
   /** Dense: one hop per TTL from 1 to the last that answered (or the target). */
   hops: TraceHop[];
 }
@@ -445,7 +441,6 @@ export interface RpkiStatus {
   last_sync: number | null;
   vrps: number;
   disk_bytes: number;
-  syncing_since: number | null;
   /** Publication points the running sync has read. */
   points: number;
   error: string | null;
@@ -580,7 +575,6 @@ export interface MonitorHistory {
 export interface MonitorResp {
   config: MonitorConfig;
   last: number | null;
-  paused: boolean;
   history: MonitorHistory;
 }
 
@@ -658,7 +652,6 @@ export interface NtpEntry {
   operator: string;
   kind: 'service' | 'lab' | 'pool' | 'custom';
   host: string;
-  port?: number | null;
   country?: string | null;
   nts?: string | null;
   nts_documented: boolean;
@@ -689,11 +682,8 @@ interface NtpAddr {
 
 interface NtsKe {
   ok: boolean;
-  host: string;
   port: number;
-  ms?: number | null;
   cookies: number;
-  aead?: number | null;
   server?: string | null;
   ntp_port?: number | null;
   error?: string | null;
@@ -745,8 +735,6 @@ export interface NtpResult {
   /** Absent when IPv6 wasn't tried. */
   ipv6?: 'answers' | 'unreachable' | 'no address' | null;
   nts_only: boolean;
-  /** Who runs it, from the catalogue. */
-  operator?: string;
 }
 
 export interface NtpRun {
@@ -791,15 +779,12 @@ export interface NtpMonitorPoint {
   offset_ms: number | null;
   lo_ms: number | null;
   hi_ms: number | null;
-  bound_ms: number | null;
   delay_ms: number | null;
   sent: number;
   ok: number;
 }
 
 interface NtpMonitorStats {
-  sent: number;
-  ok: number;
   up_pct: number;
   flaps: number;
   offset_median_ms: number | null;
@@ -813,7 +798,6 @@ interface NtpMonitorStats {
   last_ts: number | null;
   last_ok: boolean | null;
   last_kind: string | null;
-  stratum: number | null;
 }
 
 export interface NtpMonitorServer {
@@ -823,7 +807,7 @@ export interface NtpMonitorServer {
 }
 
 interface NtpMonitorClock {
-  points: { ts: number; median_ms: number; bound_ms: number; independent: number }[];
+  points: { ts: number; median_ms: number }[];
   cycles: number;
   median_ms: number | null;
   spread_ms: number | null;
@@ -833,16 +817,13 @@ interface NtpMonitorClock {
 export interface NtpMonitorResp {
   config: NtpMonitorConfig;
   last: number | null;
-  paused: boolean;
-  history: { since: number; until: number; bucket_ms: number; cycles: number; servers: NtpMonitorServer[]; clock: NtpMonitorClock };
+  history: { since: number; until: number; cycles: number; servers: NtpMonitorServer[]; clock: NtpMonitorClock };
 }
 
 /** The opt-in Check live feeds: blocking of live malware (URLhaus) and phishing (OpenPhish) hosts. */
 export interface LiveCategory extends FilterCategory {
   /** When the feed was downloaded (Unix ms). */
   fetched_at: number | null;
-  /** Feed hosts drawn at random; the samples are the ones of those that still resolve. */
-  sampled: number;
   /** When the feed first listed each tested host, for feeds that date entries (URLhaus). */
   listed_at: Record<string, number>;
 }

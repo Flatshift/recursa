@@ -31,9 +31,7 @@
   .warn {
     color: var(--warning);
   }
-  .info {
-    color: var(--ink-3);
-  }
+  .info,
   .unknown {
     color: var(--ink-3);
   }

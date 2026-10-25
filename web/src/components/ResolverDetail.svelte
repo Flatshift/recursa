@@ -6,7 +6,8 @@
   import { HIT_SHARE, RELIABLE, TESTS, expectsBlock, verdict } from '../lib/verdict';
   import { CAPS, PUBLISHED_ONLY, type CapGroup } from '../lib/caps';
   import { capCell, cdnCell, roaCell, rovCell } from '../lib/cells';
-  import { TEST_LABEL, TRANSPORT_LABEL, day, holder, label, list, ms, pct, when } from '../lib/format';
+  import { TRANSPORT_LABEL, day, holder, label, list, ms, pct, when } from '../lib/format';
+  import { TEST_LABEL } from '../lib/phases';
   import { status, stateLabel, stateGlyph, localNote } from '../lib/status.svelte';
   import { logDomain } from '../lib/scale';
   import { app } from '../lib/store.svelte';
@@ -32,6 +33,7 @@
     unreachable: 'unreachable',
     off_cdn: 'not this CDN',
   };
+  const asYouText = (a?: string | null) => (a === 'same' ? 'same edges' : a === 'near' ? 'near edges' : a === 'different' ? 'other edges' : '');
 
   let {
     resolver,
@@ -340,7 +342,7 @@
                     </td>
                     <td class="num">
                       {#if y?.rtt_ms != null}
-                        {ms(y.rtt_ms)}<br /><span class="muted">{asYou === 'same' ? 'same edges' : asYou === 'near' ? 'near edges' : asYou === 'different' ? 'other edges' : ''}</span>
+                        {ms(y.rtt_ms)}<br /><span class="muted">{asYouText(asYou)}</span>
                       {:else}<span class="muted">—</span>{/if}
                     </td>
                   </tr>
@@ -351,7 +353,7 @@
                       <td class="num">
                         {ms(h.rtt_ms)}{#if h.penalty_ms != null}<br /><span class="muted">{h.same ? 'within noise' : `+${ms(h.penalty_ms, false)} vs best`}</span>{/if}
                       </td>
-                      <td class="num"><span class="muted">{h.as_you === 'same' ? 'same edges' : h.as_you === 'near' ? 'near edges' : h.as_you === 'different' ? 'other edges' : ''}</span></td>
+                      <td class="num"><span class="muted">{asYouText(h.as_you)}</span></td>
                     </tr>
                   {/each}
                 {/each}

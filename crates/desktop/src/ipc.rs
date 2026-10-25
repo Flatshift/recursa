@@ -17,7 +17,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::sync::broadcast::error::RecvError;
 
 #[cfg(desktop)]
-use crate::shell::MAIN;
+use crate::MAIN;
 
 type App<'a> = State<'a, Arc<AppState>>;
 

@@ -4,14 +4,14 @@
   import { api, mobile, loginItem, shell } from '../lib/api';
   import type { ComponentProps } from 'svelte';
   import type { Housekeeping, MonitorConfig, RpkiStatus } from '../lib/types';
-  import { resolverMonitor } from '../lib/monitor.svelte';
+  import { RESOLVER_INTERVAL_MIN, RETENTION_DAYS, resolverMonitor } from '../lib/monitor.svelte';
   import { ago, pct, plural } from '../lib/format';
   import { HIT_SHARE, MIX_LABEL, type Mix } from '../lib/verdict';
   import Toolbar from '../components/Toolbar.svelte';
   import Icon from '../components/Icon.svelte';
   import Mark from '../components/Mark.svelte';
 
-  const mixes: Mix[] = ['home', 'office', 'lab'];
+  const mixes = Object.keys(MIX_LABEL) as Mix[];
   const themes = [
     { v: 'system', icon: 'monitor', label: 'Match system' },
     { v: 'light', icon: 'sun', label: 'Light' },
@@ -109,8 +109,6 @@
     return () => clearInterval(t);
   });
   const size = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`);
-
-  const standalone = shell;
 
   // One pane at a time, picked from the list on the left; the URL hash names the pane, so
   // other parts of the app can open Settings on one (the sidebar's run history menu, say).
@@ -262,7 +260,7 @@
               disabled={monitor.saving}
               onchange={(e) => saveMonitor({ ...cfg!, interval_min: Number((e.currentTarget as HTMLSelectElement).value) })}
             >
-              {#each [1, 5, 10, 15, 30, 60] as m}<option value={m}>{m} min</option>{/each}
+              {#each RESOLVER_INTERVAL_MIN as m}<option value={m}>{m} min</option>{/each}
             </select>
           </div>
           <div class="row">
@@ -273,7 +271,7 @@
               disabled={monitor.saving}
               onchange={(e) => saveMonitor({ ...cfg!, retention_days: Number((e.currentTarget as HTMLSelectElement).value) })}
             >
-              {#each [7, 30, 90, 365] as d}<option value={d}>{d} days</option>{/each}
+              {#each RETENTION_DAYS as d}<option value={d}>{d} days</option>{/each}
             </select>
           </div>
           <p class="note">
@@ -373,7 +371,7 @@
   </dialog>
 {/snippet}
 
-{#if standalone}
+{#if shell}
   <div class="window chrome">{@render body()}</div>
 {:else}
   <div class="view-root">

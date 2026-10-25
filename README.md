@@ -150,7 +150,7 @@ data/
   incidents.json sourced incident history
   ntp.json       curated NTP servers and what their operators publish
 docs/            PLATFORMS.md (generated from caps.rs), PENDING.md (fixes we wait on upstream)
-tools/           notices.py (third-party notices), icons.mjs (app icons), pending.py (checks docs/PENDING.md); dev helpers: gen-monitor.py (synthetic monitoring history), shoot.mjs (headless Chrome screenshots of the UI), crop.swift (crops them)
+tools/           notices.py (third-party notices), icons.mjs (app icons), pending.py (checks docs/PENDING.md); dev helper: gen-monitor.py (synthetic monitoring history)
 web/             Svelte 5 + Vite + TypeScript interface; lib/api.ts picks HTTP or IPC at runtime
 ```
 

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Verdict } from '../lib/verdict';
-  import { CDN_ROUND_TRIPS, HIT_SHARE, MIX_LABEL, RELIABLE, TIMEOUT_COST_MS, WEIGHTS } from '../lib/verdict';
+  import { CDN_ROUND_TRIPS, GOAL, HIT_SHARE, MIX_LABEL, RELIABLE, TIMEOUT_COST_MS, WEIGHTS } from '../lib/verdict';
   import { pct } from '../lib/format';
   import { app } from '../lib/store.svelte';
   import Provenance from './Provenance.svelte';
@@ -70,7 +70,7 @@
   const tall = (p: NonNullable<Verdict['picks']>[number]) => p.graph?.kind === 'checks';
   // The last speed row labels the log axis the speed rows share.
   const axisAt = $derived((v?.picks ?? []).map((p) => p.graph?.kind).lastIndexOf('dots'));
-  const ghostGoals = $derived(['Fastest answers', 'Fastest cache', 'Fastest fresh lookups', ...(cdn ? ['Nearest CDN edges'] : []), 'Best protection', 'Most private', 'Steadiest']);
+  const ghostGoals = $derived([GOAL.fastest, GOAL.cache, GOAL.fresh, ...(cdn ? [GOAL.cdn] : []), GOAL.protection, GOAL.private, GOAL.steadiest]);
 </script>
 
 <section class="verdict" aria-labelledby="verdict-h" aria-busy={!v}>

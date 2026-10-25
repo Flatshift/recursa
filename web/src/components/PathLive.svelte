@@ -92,14 +92,14 @@
         return { h, i, k: kindOf(h, destAsn), y: h.addrs.length && v != null ? y(v) : null, lo: got.length ? y(Math.min(...got)) : 0, hi: got.length ? y(Math.max(...got)) : 0 };
       });
       // The line joins each answering hop to the next; across silent hops it runs dashed.
-      const live = pts.filter((q) => q.y != null);
-      const segs = live.slice(1).map((b, n) => ({ a: live[n], b, gap: b.i - live[n].i > 1 }));
+      const answering = pts.filter((q) => q.y != null);
+      const segs = answering.slice(1).map((b, n) => ({ a: answering[n], b, gap: b.i - answering[n].i > 1 }));
       return {
         r,
         t,
         hops: pts,
         segs,
-        last: t?.reached ? live[live.length - 1] : undefined,
+        last: t?.reached ? answering[answering.length - 1] : undefined,
         bands: bands(hops, destAsn),
         shakes: Math.min(HANDSHAKES, p?.samples.length ?? 0),
         rtt: p?.rtt_ms ?? null,

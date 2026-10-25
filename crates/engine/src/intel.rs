@@ -411,7 +411,7 @@ impl Intel {
             tokio::task::spawn_blocking(move || -> Option<IpAddr> {
                 let addr: SocketAddr = server.parse().ok()?;
                 let mut x = UdpX::connect(addr).ok()?;
-                let m = dns::ask(&mut x, &QuerySpec::new("myip.opendns.com", qtype), Duration::from_millis(1500)).ok()?.msg;
+                let m = dns::ask_msg(&mut x, &QuerySpec::new("myip.opendns.com", qtype), Duration::from_millis(1500)).ok()?;
                 if qtype == dns::TYPE_A {
                     m.ipv4_answers().first().map(|a| IpAddr::V4(*a))
                 } else {

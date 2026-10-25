@@ -14,7 +14,7 @@
   type Parsed = { names: string[]; total: number; skipped: { text: string; why: string }[] };
 
   let saved = $state<Saved[]>([]);
-  let defaults = $state<string[]>(app.boot?.defaults.cached_names ?? []);
+  const defaults = $derived(app.boot?.defaults.cached_names ?? []);
   let max = $state(50);
   let adding = $state('');
   let editing = $state(false);
@@ -28,10 +28,9 @@
 
   $effect(() => {
     api
-      .get<{ lists: Saved[]; default: string[]; max: number }>('/api/cached-lists')
+      .get<{ lists: Saved[]; max: number }>('/api/cached-lists')
       .then((r) => {
         saved = r.lists;
-        defaults = r.default;
         max = r.max;
       })
       .catch(() => {

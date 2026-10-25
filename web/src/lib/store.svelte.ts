@@ -1,5 +1,6 @@
 import { api, confirmAction, desktop, mac, mobile, notifyDone, onDesktop, saveExport, setCaps, streamRun, type RunStream } from './api';
 import { flushSync } from 'svelte';
+import { resolverCount } from './format';
 import { reduceMotion } from './motion';
 import { phaseTab } from './phases';
 import type { Mix } from './verdict';
@@ -94,7 +95,6 @@ class AppState {
     });
     this.applyTheme();
     if (desktop) {
-      document.documentElement.classList.add('desktop');
       if (mac) document.documentElement.classList.add('mac');
       if (mobile) document.documentElement.classList.add('mobile');
       onDesktop('recursa:menu', (cmd) => this.command(cmd));
@@ -313,8 +313,6 @@ class AppState {
     const r = this.route;
     if (r.name === 'run') {
       if (this.run?.id !== r.id) this.openRun(r.id);
-    } else if (r.name === 'resolver') {
-      this.inspect = null;
     } else if (r.name !== 'resolvers') {
       this.inspect = null;
     }
@@ -569,7 +567,7 @@ class AppState {
   /** Tell the user a run finished while they were in another app. */
   #announceDone(r: RunState) {
     if (document.hasFocus()) return;
-    const n = new Set(r.targets.map((t) => t.resolver_id)).size;
+    const n = resolverCount(r.targets);
     const title = r.status === 'cancelled' ? 'Benchmark stopped' : 'Benchmark finished';
     notifyDone(title, `Results for ${n} resolver${n === 1 ? '' : 's'} are ready.`);
   }

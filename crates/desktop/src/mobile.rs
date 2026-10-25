@@ -1,5 +1,6 @@
 //! The iOS shell: one window and none of the desktop chrome (no menus, tray, dock or window state).
 
+use crate::MAIN;
 use objc2::msg_send;
 use objc2::runtime::AnyObject;
 use recursa_engine::app::AppState;
@@ -7,8 +8,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::{AppHandle, Context, Manager, WebviewUrl, WebviewWindowBuilder};
-
-pub const MAIN: &str = "main";
 
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
     // The UI reads this flag before anything async: Settings is a page here, not a window.

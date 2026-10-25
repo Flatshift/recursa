@@ -76,8 +76,13 @@ export function rankTracker() {
   };
 }
 
+/** A stable pseudo-random fraction in 0..1 from a sine hash of `x`: the same input always lands in the same place. */
+export function sinFrac(x: number, mul = 43758.5453) {
+  const h = Math.sin(x) * mul;
+  return h - Math.floor(h);
+}
+
 /** A dot's stable vertical offset in -1..1, the same in the Latency view and the ranked list. */
 export function jitterOf(s: Sample) {
-  const h = Math.sin((s.t + 1) * 12.9898 + (s.i + 1) * 78.233 + (s.k === 'cached' ? 1 : s.k === 'uncached' ? 2 : 3) * 37.719) * 43758.5453;
-  return (h - Math.floor(h)) * 2 - 1;
+  return sinFrac((s.t + 1) * 12.9898 + (s.i + 1) * 78.233 + (s.k === 'cached' ? 1 : s.k === 'uncached' ? 2 : 3) * 37.719) * 2 - 1;
 }

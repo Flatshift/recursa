@@ -974,3 +974,33 @@ html.mobile .segmented button {
     animation: none;
   }
 }
+
+/* The phone sheets (the inspector and the test plan): a scrim behind, a grabber on the head, and the rise and fade they
+   enter with. Each sheet sets its own reduced-motion fade. */
+.sheet-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-backdrop);
+  background: var(--backdrop);
+  animation: fadein 320ms var(--ease-out);
+}
+.grabber {
+  position: absolute;
+  top: 7px;
+  left: 50%;
+  width: 36px;
+  height: 5px;
+  margin-left: -18px;
+  border-radius: 3px;
+  background: var(--rule-2);
+}
+@keyframes rise {
+  from {
+    transform: translateY(100%);
+  }
+}
+@keyframes fadein {
+  from {
+    opacity: 0;
+  }
+}

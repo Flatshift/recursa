@@ -5,7 +5,7 @@
   import { app, readLocal, writeLocal } from '../lib/store.svelte';
   import type { NtpEntry, NtpResult, NtpRun } from '../lib/types';
   import { plural } from '../lib/format';
-  import { MAX_CUSTOM, addrs, idMap, nameOf, num, sgn } from '../lib/ntp';
+  import { MAX_CUSTOM, addrs, idMap, nameOf, num, reachMs, sgn } from '../lib/ntp';
   import Icon from '../components/Icon.svelte';
   import Info from '../components/Info.svelte';
   import Toolbar from '../components/Toolbar.svelte';
@@ -232,7 +232,6 @@
     operator: 'You',
     kind: 'custom',
     host: r.host,
-    port: r.port ?? null,
     nts_documented: false,
     nts_only: false,
     default: false,
@@ -263,7 +262,7 @@
     // agree and whose own addresses agree, the one with the smallest error ceiling against UTC is the one that can be trusted most.
     accurate: best(
       pinned.filter((x) => x.r!.agrees === true && !x.r!.addrs_disagree),
-      (r) => r.distance_ms ?? r.bound_ms,
+      reachMs,
     ),
     fastest: best(answered.filter((x) => x.e.kind !== 'pool' && sound(x.r!)), (r) => r.delay_min_ms),
     steadiest: best(pinned.filter((x) => enough(x.r!)), (r) => r.jitter_ms),
@@ -289,7 +288,7 @@
   };
 
   const pickRows = $derived([
-    { goal: 'Tightest error bound', pick: picks.accurate, say: (r: NtpResult) => `off by at most ${num(r.distance_ms ?? r.bound_ms)} ms from UTC, and agrees with the others` },
+    { goal: 'Tightest error bound', pick: picks.accurate, say: (r: NtpResult) => `off by at most ${num(reachMs(r))} ms from UTC, and agrees with the others` },
     { goal: 'Lowest latency', pick: picks.fastest, say: (r: NtpResult) => `${num(r.delay_min_ms)} ms round trip` },
     { goal: 'Steadiest', pick: picks.steadiest, say: (r: NtpResult) => `${num(r.jitter_ms, 2)} ms jitter over ${r.ok} answers` },
   ]);
@@ -310,7 +309,7 @@
       case 'bound':
         return r.bound_ms ?? Infinity;
       case 'distance':
-        return r.distance_ms ?? r.bound_ms ?? Infinity;
+        return reachMs(r) ?? Infinity;
       case 'delay':
         return r.delay_min_ms ?? Infinity;
       case 'jitter':
@@ -753,7 +752,7 @@
                     <dl class="mm">
                       <div><dt>Offset</dt><dd class="num">{sgn(r.offset_ms)} ms</dd></div>
                       <div><dt>±</dt><dd class="num">{num(r.bound_ms)}</dd></div>
-                      <div><dt>Error ≤</dt><dd class="num" class:win={picks.accurate?.r === r}>{num(r.distance_ms ?? r.bound_ms)}</dd></div>
+                      <div><dt>Error ≤</dt><dd class="num" class:win={picks.accurate?.r === r}>{num(reachMs(r))}</dd></div>
                       <div>
                         <dt>vs others</dt>
                         <dd class="num">
@@ -863,7 +862,7 @@
                       <td class="src"><span class="num">{r.stratum}</span> <span class="mono muted">{r.refid}</span></td>
                       <td class="r num">{sgn(r.offset_ms)} ms</td>
                       <td class="r num muted">{num(r.bound_ms)}</td>
-                      <td class="r num muted" class:win={picks.accurate?.r === r}>{num(r.distance_ms ?? r.bound_ms)}</td>
+                      <td class="r num muted" class:win={picks.accurate?.r === r}>{num(reachMs(r))}</td>
                       <td class="r num">
                         {sgn(r.deviation_ms)}
                         {#if r.agrees === true}<span class="ok" title="Within what this server's error ceiling and the consensus's allow, so it agrees." aria-label="agrees"><Icon name="check" size={12} /></span>

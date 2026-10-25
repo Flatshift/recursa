@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { NtpResult } from '../lib/types';
-  import { addrs, num, sgn } from '../lib/ntp';
+  import { addrs, num, reachMs, sgn } from '../lib/ntp';
 
   let { r }: { r: NtpResult } = $props();
 
@@ -8,7 +8,7 @@
   const offset = $derived(r.offset_ms ?? 0);
   const delay = $derived(r.delay_min_ms ?? 0);
   const bound = $derived(r.bound_ms ?? delay / 2);
-  const distance = $derived(r.distance_ms ?? bound);
+  const distance = $derived(reachMs(r) ?? bound);
   const rootDelay = $derived(r.root_delay_ms ?? null);
   const rootDisp = $derived(r.root_dispersion_ms ?? null);
   const server = $derived(Math.max(0, distance - bound));
