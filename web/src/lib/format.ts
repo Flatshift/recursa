@@ -1,11 +1,7 @@
 import type { Resolver, Transport, TestKind } from './types';
 import { checksOf } from './phases';
 
-export const TEST_LABEL: Record<TestKind, string> = {
-  cached: 'Cached',
-  uncached: 'Uncached',
-  tld: 'TLD',
-};
+export { TEST_LABEL } from './phases';
 
 export const TEST_HINT: Record<TestKind, string> = {
   cached: 'Popular names the resolver already holds: network round trip plus front-end time.',

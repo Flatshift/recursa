@@ -282,13 +282,13 @@ impl Store {
         c.execute("DELETE FROM custom WHERE id=?1", params![id]).map(|n| n > 0).unwrap_or(false)
     }
 
-    pub fn setting(&self, key: &str) -> Option<serde_json::Value> {
+    fn setting(&self, key: &str) -> Option<serde_json::Value> {
         let c = self.conn.lock().unwrap();
         let s: Option<String> = c.query_row("SELECT body FROM settings WHERE key=?1", params![key], |r| r.get(0)).optional().ok().flatten();
         s.and_then(|s| serde_json::from_str(&s).ok())
     }
 
-    pub fn set_setting(&self, key: &str, v: &serde_json::Value) {
+    fn set_setting(&self, key: &str, v: &serde_json::Value) {
         let c = self.conn.lock().unwrap();
         let _ = c.execute("INSERT OR REPLACE INTO settings(key, body) VALUES(?1, ?2)", params![key, v.to_string()]);
     }

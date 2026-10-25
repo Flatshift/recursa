@@ -108,7 +108,7 @@ impl Rpki {
     }
 
     pub(crate) fn enabled(&self) -> bool {
-        self.store.setting(SETTING).and_then(|v| v.as_bool()).unwrap_or(false)
+        self.store.get::<bool>(SETTING).unwrap_or(false)
     }
 
     /// Whether a sync is running in this process.
@@ -140,7 +140,7 @@ impl Rpki {
 
     /// Turns the check on or off. Off deletes the cache; on starts the first sync.
     pub(crate) fn set_enabled(self: &Arc<Self>, on: bool) -> Value {
-        self.store.set_setting(SETTING, &json!(on));
+        self.store.put(SETTING, &on);
         if on {
             self.start_sync();
         } else {
@@ -606,7 +606,7 @@ mod tests {
 
     fn rpki_in(dir: &Path, enabled: bool, measuring: bool) -> Arc<Rpki> {
         let store = Arc::new(Store::open(dir.join("test.db")).unwrap());
-        store.set_setting(SETTING, &json!(enabled));
+        store.put(SETTING, &enabled);
         Rpki::new(dir.join("rpki"), store, Arc::new(AtomicBool::new(measuring)))
     }
 

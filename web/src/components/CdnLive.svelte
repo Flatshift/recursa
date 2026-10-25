@@ -574,12 +574,6 @@
     }
   }
 
-  @keyframes pop {
-    from {
-      scale: 0.4;
-      opacity: 0;
-    }
-  }
   @keyframes arrive {
     from {
       opacity: 0;

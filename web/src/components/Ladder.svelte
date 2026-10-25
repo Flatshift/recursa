@@ -12,7 +12,7 @@
   import BaselineChip from './BaselineChip.svelte';
   import SetupDial from './SetupDial.svelte';
   import { flip } from 'svelte/animate';
-  import { RERANK, TICK_FADE, ZOOM, jitterOf, orderOf, rankTracker, reduceMotion, rise, roll } from '../lib/motion';
+  import { RERANK, TICK_FADE, ZOOM, jitterOf, rankTracker, reduceMotion, rise, roll } from '../lib/motion';
   import { pacedOrder } from '../lib/paced.svelte';
   import { logDomain, logInvert, logScale, logTicks, tickLabel } from '../lib/scale';
   import { warmByTarget, warmJitter } from '../lib/warm';
@@ -64,13 +64,10 @@
   // Ranked rows, then waiting ones, in one keyed list: a row that gets its first answers slides up into its rank
   // instead of leaving one list and appearing in another. The order changes only on a re-rank; each row reads its
   // gliding values by key.
-  const keepOrder = orderOf();
   const byIdx = $derived(new Map([...measured, ...pending].map((r) => [r.target.idx, r])));
-  const want = $derived(keepOrder([...measured, ...pending].map((r) => r.target.idx)));
   // While live, re-ranks are paced so each slide completes; rows that left are dropped at once.
-  const paced = pacedOrder(() => want, () => live);
-  const keepShown = orderOf();
-  const order = $derived(keepShown(paced.current.filter((k) => byIdx.has(k))));
+  const paced = pacedOrder(() => [...measured, ...pending].map((r) => r.target.idx), () => live);
+  const order = $derived(paced.current);
   const ghostCount = $derived(live && !rows.length ? placeholders : 0);
   // A stable, distribution-like band per ghost lane, so the placeholders don't all look the same.
   const band = (seed: number, lane: number) => {

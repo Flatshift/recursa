@@ -13,7 +13,7 @@
   import { flip } from 'svelte/animate';
   import { onMount } from 'svelte';
   import { fade } from 'svelte/transition';
-  import { RERANK, jitterOf, orderOf, rankTracker, rise, roll } from '../lib/motion';
+  import { RERANK, jitterOf, rankTracker, rise, roll } from '../lib/motion';
   import { pacedOrder } from '../lib/paced.svelte';
 
   let {
@@ -49,13 +49,10 @@
   const pending = $derived(live ? rows.filter((r) => !r.measured && (r.target.state === 'pending' || r.target.state === 'ready')).slice(0, Math.max(0, LIMIT - shown.length)) : []);
   // Ranked lines, then waiting ones, in one keyed list, so a line that gets its first answers slides up into its rank.
   // The order changes only on a re-rank; each line reads its gliding values by key.
-  const keepOrder = orderOf();
   const byIdx = $derived(new Map([...shown, ...pending].map((r) => [r.target.idx, r])));
-  const want = $derived(keepOrder([...shown, ...pending].map((r) => r.target.idx)));
   // While live, re-ranks are paced so each slide completes; rows that left are dropped at once.
-  const paced = pacedOrder(() => want, () => live);
-  const keepShown = orderOf();
-  const order = $derived(keepShown(paced.current.filter((k) => byIdx.has(k))));
+  const paced = pacedOrder(() => [...shown, ...pending].map((r) => r.target.idx), () => live);
+  const order = $derived(paced.current);
   // Rank numbers count only what can be picked: a forwarder on your network keeps its place as a reference line, unnumbered,
   // so #1 is the resolver the verdict names.
   const rankNo = $derived.by(() => {
