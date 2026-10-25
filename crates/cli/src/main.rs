@@ -572,9 +572,17 @@ async fn serve(cli: Cli) {
     app.start_background();
     // Two launch links: one to open now (unless told not to), one to print for another browser. Each opens once.
     // Launching the opener can succeed with no browser to show the page (no display, over SSH), so the printed link's
-    // label never claims a browser opened.
+    // label never claims a browser opened. The opened link goes through a private page, so its code is on no command
+    // line; the page goes when its code expires.
     let mut sessions = server::Sessions::default();
-    let opened = !cli.no_open && open::that_detached(sessions.opener_link(port)).is_ok();
+    let page = if cli.no_open { None } else { server::opener_page(&sessions.opener_link(port)).ok() };
+    let opened = page.as_ref().is_some_and(|p| open::that_detached(p).is_ok());
+    if let Some(p) = page.clone() {
+        tokio::spawn(async move {
+            tokio::time::sleep(server::OPENER_WINDOW).await;
+            let _ = std::fs::remove_file(p);
+        });
+    }
     let printed = sessions.link(port);
     eprintln!("Recursa is running on 127.0.0.1, port {port}.");
     eprintln!(
@@ -596,5 +604,8 @@ async fn serve(cli: Cli) {
     tokio::select! {
         r = axum::serve(listener, server::router(srv)) => r.expect("server"),
         _ = tokio::signal::ctrl_c() => eprintln!("\nStopped."),
+    }
+    if let Some(p) = page {
+        let _ = std::fs::remove_file(p);
     }
 }

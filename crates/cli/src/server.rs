@@ -48,9 +48,9 @@ fn secret() -> String {
 /// its own session once. A code that comes back a second time means someone else may have traded it first, so the
 /// session it started ends there, and a new link is printed.
 ///
-/// That check needs the user to trade the code too. The link Recursa opens itself may never load (the opener can
-/// succeed with no display, over SSH), and then its code, which was on a command line, would let whoever read it in
-/// unnoticed: unused after [`OPENER_WINDOW`], it stops working.
+/// That check needs the user to trade the code too. The link Recursa opens itself reaches the browser through a page
+/// only this user can read ([`opener_page`]), so its code is on no command line, but it may never load (the opener
+/// can succeed with no display, over SSH): unused after [`OPENER_WINDOW`], it stops working.
 #[derive(Default)]
 pub struct Sessions {
     /// Each link's code, the session token it started, and until when it may start one.
@@ -58,7 +58,22 @@ pub struct Sessions {
 }
 
 /// How long the link Recursa opens itself has to reach the page: a browser loads it within moments or never.
-const OPENER_WINDOW: Duration = Duration::from_secs(120);
+pub const OPENER_WINDOW: Duration = Duration::from_secs(120);
+
+/// A page that sends the browser on to `link`, in a new file in the temp folder that only this user can read. Opening
+/// the file puts its path on the opener's command line instead of the link.
+pub fn opener_page(link: &str) -> std::io::Result<std::path::PathBuf> {
+    let path = std::env::temp_dir().join(format!("recursa-open-{}.html", &secret()[..16]));
+    let mut f = std::fs::OpenOptions::new();
+    f.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut f, 0o600);
+    let page = format!(
+        "<!doctype html><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"0;url={link}\"><title>Recursa</title><a href=\"{link}\">Open Recursa</a>\n"
+    );
+    f.open(&path)?.write_all(page.as_bytes())?;
+    Ok(path)
+}
 
 enum Redeemed {
     Token(String),
@@ -320,5 +335,16 @@ mod tests {
         let prompt = s.opener_link(8053);
         let Redeemed::Token(t) = s.redeem(code_of(&prompt)) else { panic!("an opener link used in time starts a session") };
         assert!(s.valid(&t));
+    }
+
+    #[test]
+    fn the_opener_page_is_private_and_sends_the_browser_on() {
+        let link = Sessions::default().opener_link(8053);
+        let path = opener_page(&link).unwrap();
+        assert!(!path.to_string_lossy().contains(code_of(&link)), "the path the opener sees has no code");
+        assert!(std::fs::read_to_string(&path).unwrap().contains(&format!("content=\"0;url={link}\"")));
+        #[cfg(unix)]
+        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&path).unwrap().permissions()) & 0o777, 0o600);
+        std::fs::remove_file(path).unwrap();
     }
 }

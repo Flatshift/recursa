@@ -39,8 +39,8 @@ const CSV_COLUMNS: &[&str] = &[
 ];
 
 /// One field, quoted when it holds a comma, a quote or a line break, and never starting like a spreadsheet formula.
-fn csv_field(s: &str) -> String {
-    let s = if s.starts_with(['=', '+', '-', '@']) && s.parse::<f64>().is_err() { format!("'{s}") } else { s.to_string() };
+pub(crate) fn csv_field(s: &str) -> String {
+    let s = if s.starts_with(['=', '+', '-', '@', '\t', '\r']) && s.parse::<f64>().is_err() { format!("'{s}") } else { s.to_string() };
     if s.contains([',', '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
 }
 
@@ -281,6 +281,7 @@ mod tests {
         assert_eq!(lines[1].split(',').count(), lines[0].split(',').count() + 1); // the quoted comma
         assert_eq!(csv_field("a\"b"), "\"a\"\"b\"");
         assert_eq!(csv_field("-5"), "-5");
+        assert_eq!(csv_field("\t=1"), "'\t=1");
     }
 
     #[test]
