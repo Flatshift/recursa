@@ -90,13 +90,20 @@ pub const ADS: &[&str] = &[
 // unfiltered resolver and host nothing harmful, so a run can send them anywhere. Live feed hosts are looked up
 // only from a Deep Dive (`deepdive::live_blocking`).
 pub const MALWARE: &[&str] = &[
-    // Cloudflare's test category names, blocked by 1.1.1.2 and 1.1.1.3 and Cloudflare Gateway.
+    // WICAR's malware test host, the one name most filters share: Cloudflare 1.1.1.2 and 1.1.1.3, Quad9, AdGuard,
+    // Control D and DNS4EU all block it.
+    "malware.wicar.org",
+    // Cloudflare's test category name, blocked by 1.1.1.2 and 1.1.1.3 and Cloudflare Gateway.
     "malware.testcategory.com",
     // Quad9's blocking test name (quad9.net support pages).
     "isitblocked.org",
+    // Cisco Umbrella's malware test destination (also blocked by Quad9, Control D and DNS4EU).
+    "examplemalwaredomain.com",
+    // Google Safe Browsing's test host (blocked by Control D and DNS4EU).
+    "testsafebrowsing.appspot.com",
 ];
 pub const PHISHING: &[&str] = &[
-    // Cloudflare's test category names.
+    // Cloudflare's test category name (also blocked by DNS4EU).
     "phishing.testcategory.com",
     // Cisco OpenDNS's phishing test name (also blocked by CleanBrowsing).
     "internetbadguys.com",
@@ -104,7 +111,7 @@ pub const PHISHING: &[&str] = &[
 pub const ADULT: &[&str] = &[
     // Cloudflare's test category names, blocked by 1.1.1.3.
     "nudity.testcategory.com",
-    // Cisco OpenDNS's adult-content test name (FamilyShield; also CleanBrowsing and AdGuard family filters).
+    // Cisco OpenDNS's adult-content test name (FamilyShield; also CleanBrowsing).
     "exampleadultsite.com",
 ];
 
@@ -200,6 +207,12 @@ fn block_signal(m: &dns::Message) -> Option<String> {
         let o = a.octets();
         if o[0] == 146 && o[1] == 112 && o[2] == 61 && (104..=110).contains(&o[3]) {
             return Some(format!("{a} (Cisco block page)"));
+        }
+        if o == [94, 140, 14, 33] {
+            return Some(format!("{a} (AdGuard block page)"));
+        }
+        if o == [51, 15, 69, 11] {
+            return Some(format!("{a} (DNS4EU block page)"));
         }
     }
     None
@@ -454,14 +467,22 @@ pub fn probe(resolver_id: &str, via: &str, ex: &mut dyn Exchanger, timeout: Dura
         let (status, present, value) = if fc.tested == 0 {
             (Status::Unknown, None, "Couldn't test".to_string())
         } else {
-            let share = fc.blocked as f64 / fc.tested as f64;
-            let status = match (is_threat, share) {
-                (true, s) if s >= 0.5 => Status::Pass,
-                (true, _) if fc.blocked > 0 => Status::Partial,
-                (true, _) => Status::Fail,
+            // Vendor test names are mostly blocked only by their own vendor, so one blocked name confirms the filter
+            // and a count of them says nothing about coverage (that is the live-feed check). Ad hosts are a common
+            // list, so those need half and keep their count.
+            let ads = cat == "ads";
+            let present = if ads { fc.blocked * 2 >= fc.tested } else { fc.blocked > 0 };
+            let status = match (is_threat, present) {
+                (true, true) => Status::Pass,
+                (true, false) => Status::Fail,
                 _ => Status::Info,
             };
-            (status, Some(share >= 0.5), format!("{}/{} blocked", fc.blocked, fc.tested))
+            let value = match (ads, present) {
+                (true, _) => format!("{}/{} blocked", fc.blocked, fc.tested),
+                (false, true) => "Confirmed".into(),
+                (false, false) => "Not seen".into(),
+            };
+            (status, Some(present), value)
         };
         let blocked: Vec<String> =
             fc.samples.iter().filter(|s| s.blocked == Some(true)).map(|s| format!("{} → {}", s.domain, s.how)).take(3).collect();

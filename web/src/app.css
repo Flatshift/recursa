@@ -53,6 +53,10 @@
   --serious: #ec835a;
   --critical: #d03b3b;
   --warn-soft: oklch(0.96 0.045 85);
+  /* Warm fills for live progress (never text): amber, ember, rose. */
+  --w-amber: #e8a21a;
+  --w-ember: #eb6834;
+  --w-rose: #d9466f;
 
   --shadow-sheet: 0 24px 60px -20px oklch(0.2 0.01 285 / 0.28), 0 0 0 1px oklch(0.2 0.01 285 / 0.06);
   --backdrop: oklch(0.2 0.01 285 / 0.28);
@@ -73,6 +77,9 @@
   --r-lg: 10px;
 
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Things that travel; things leaving. */
+  --ease-in-out: cubic-bezier(0.76, 0, 0.24, 1);
+  --ease-exit: cubic-bezier(0.55, 0.055, 0.675, 0.19);
   --dur-fast: 140ms;
   --dur: 200ms;
 
@@ -127,6 +134,9 @@
     --s-neutral: oklch(0.6 0.008 285);
     --warning: #fab219;
     --warn-soft: oklch(0.3 0.05 80);
+    --w-amber: #f2b33a;
+    --w-ember: #e5743f;
+    --w-rose: #e2638a;
     --shadow-sheet: 0 24px 60px -16px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.07);
     --backdrop: oklch(0.05 0.005 285 / 0.55);
     --shadow-pop: 0 10px 30px -10px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.09);
@@ -163,6 +173,9 @@
   --s-neutral: oklch(0.6 0.008 285);
   --warning: #fab219;
   --warn-soft: oklch(0.3 0.05 80);
+  --w-amber: #f2b33a;
+  --w-ember: #e5743f;
+  --w-rose: #e2638a;
   --shadow-sheet: 0 24px 60px -16px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.07);
   --backdrop: oklch(0.05 0.005 285 / 0.55);
   --shadow-pop: 0 10px 30px -10px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.09);
@@ -807,4 +820,150 @@ html.mobile .segmented button {
 #app.fatal p {
   color: var(--ink-2);
   margin: 0;
+}
+
+/* A live run moving on to the view where its next phase shows, or its results landing in place (store `#show`). The
+   page holds still; only the results panel moves, toward the side of its tab, and the chosen tab slides across to
+   meet it. `data-vt` is fwd, back or swap (same view, new content). */
+:root[data-vt]::view-transition-old(root),
+:root[data-vt]::view-transition-new(root) {
+  animation: none;
+}
+#run-panel {
+  view-transition-name: run-panel;
+}
+.views [aria-selected='true'] {
+  view-transition-name: run-tab;
+}
+::view-transition-group(run-panel) {
+  overflow: clip;
+  animation-duration: 420ms;
+  animation-timing-function: var(--ease-in-out);
+}
+::view-transition-old(run-panel) {
+  animation: vt-leave 180ms var(--ease-exit) both;
+}
+::view-transition-new(run-panel) {
+  animation: vt-arrive 380ms var(--ease-out) 70ms both;
+}
+:root[data-vt='fwd']::view-transition-old(run-panel) {
+  animation-name: vt-leave-l;
+}
+:root[data-vt='fwd']::view-transition-new(run-panel) {
+  animation-name: vt-arrive-r;
+}
+:root[data-vt='back']::view-transition-old(run-panel) {
+  animation-name: vt-leave-r;
+}
+:root[data-vt='back']::view-transition-new(run-panel) {
+  animation-name: vt-arrive-l;
+}
+/* The CDN map landing in place of its live grid: each resolver's row moves to its ranked place. Named only for that
+   swap, so a sliding panel carries its rows with it. */
+:root[data-vt='swap'] [data-vtn] {
+  view-transition-name: var(--vtn);
+}
+:root[data-vt='swap']::view-transition-group(*) {
+  animation-duration: 640ms;
+  animation-timing-function: var(--ease-in-out);
+}
+::view-transition-group(run-tab) {
+  animation-duration: 420ms;
+  animation-timing-function: var(--ease-in-out);
+}
+::view-transition-old(run-tab),
+::view-transition-new(run-tab) {
+  animation-duration: 420ms;
+}
+@keyframes vt-leave {
+  to {
+    opacity: 0;
+    filter: blur(4px);
+    transform: scale(0.99);
+  }
+}
+@keyframes vt-arrive {
+  from {
+    opacity: 0;
+    filter: blur(6px);
+    transform: translateY(12px);
+  }
+}
+@keyframes vt-leave-l {
+  to {
+    opacity: 0;
+    filter: blur(3px);
+    transform: translateX(-14px);
+  }
+}
+@keyframes vt-leave-r {
+  to {
+    opacity: 0;
+    filter: blur(3px);
+    transform: translateX(14px);
+  }
+}
+@keyframes vt-arrive-r {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translateX(24px);
+  }
+}
+@keyframes vt-arrive-l {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translateX(-24px);
+  }
+}
+
+/* The rows of a live phase screen settling in one after another as it arrives. Set `--i` to the row's index. */
+.cascade {
+  animation: cascade 420ms var(--ease-out) calc(min(var(--i, 0), 14) * 28ms) backwards;
+}
+@keyframes cascade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cascade {
+    animation: none;
+  }
+}
+
+/* A value still being measured: a grey block at the size the value will take. It breathes only while its own phase
+   runs, and holds still under reduced motion. */
+.skel {
+  display: inline-block;
+  height: 0.85em;
+  width: 4em;
+  border-radius: 3px;
+  background: var(--rule);
+  vertical-align: middle;
+}
+.skel.now {
+  animation: skel-breathe 1600ms ease-in-out infinite;
+}
+@keyframes skel-breathe {
+  50% {
+    opacity: 0.4;
+  }
+}
+/* A measured value replacing its skeleton. */
+.arrive {
+  animation: arrive 240ms var(--ease-out) both;
+}
+@keyframes arrive {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skel.now,
+  .arrive {
+    animation: none;
+  }
 }

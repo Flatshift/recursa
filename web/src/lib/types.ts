@@ -117,6 +117,33 @@ export interface WarmSample {
   us: number;
 }
 
+/** One resolver's CDN lookups, before the edges are timed: hostnames that answered from their CDN, of those asked.
+ *  `cells` fill in per lookup; `finished` once the resolver is done (or given up on). */
+export interface CdnLookup {
+  answered: number;
+  asked: number;
+  finished?: boolean;
+  cells?: Record<string, CdnCell>;
+}
+
+/** What one resolver has handed out for one CDN so far: edge addresses, hostnames that answered from the CDN, and
+ *  hostnames that haven't yet. */
+export interface CdnCell {
+  ips: string[];
+  ok: string[];
+  missed: string[];
+}
+
+/** How far the CDN edge timing has got: handshakes done of those planned, over `edges` addresses. `best` is each
+ *  timed edge's fastest handshake so far; `silent` the edges whose first handshake got no answer. */
+export interface CdnTiming {
+  timed: number;
+  total: number;
+  edges: number;
+  best?: Record<string, number>;
+  silent?: string[];
+}
+
 export type CheckStatus = 'pass' | 'fail' | 'partial' | 'info' | 'unknown';
 
 export interface Check {
@@ -474,9 +501,15 @@ export interface RunState {
   intel: Record<string, ResolverIntel>;
   notes: Note[];
   cdn: CdnReport | null;
+  /** Resolvers whose CDN lookups are done, present only while the mapping is live. */
+  cdn_lookups?: Record<string, CdnLookup>;
+  /** The edge timing after the lookups, present only while it runs. */
+  cdn_timing?: CdnTiming;
   /** Absent in runs from before the link check, and when it is turned off. */
   link?: LinkStats | LinkUnavailable;
   paths: Record<string, PathInfo>;
+  /** Route traces from the path check, one per resolver address, filled round by round. */
+  routes?: Record<string, Trace>;
   /** The most queries per second Recursa sent to each resolver in any one second. */
   rates?: Record<string, number>;
   seq: number;

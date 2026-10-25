@@ -5,7 +5,7 @@
   import { shortcut } from '../lib/keys';
   import { HIT_SHARE, blendRows, buildRows, rank, verdict, type Row, type SortKey } from '../lib/verdict';
   import type { RunState, TestKind, Transport } from '../lib/types';
-  import { TEST_HINT, TEST_LABEL, TRANSPORT_LABEL, duration, label, ms, plural, runEstimateMs, when } from '../lib/format';
+  import { TEST_HINT, TEST_LABEL, TRANSPORT_LABEL, duration, label, ms, plural, checkMs, runEstimateMs, when } from '../lib/format';
   import { menu, SEPARATOR } from '../lib/menu.svelte';
   import { reduceMotion } from '../lib/motion';
   import { status } from '../lib/status.svelte';
@@ -18,6 +18,9 @@
   import CapMatrix, { type CapView } from '../components/CapMatrix.svelte';
   import LatencyTable from '../components/LatencyTable.svelte';
   import CdnPanel from '../components/CdnPanel.svelte';
+  import CdnLive from '../components/CdnLive.svelte';
+  import PathLive from '../components/PathLive.svelte';
+  import ProbesLive from '../components/ProbesLive.svelte';
   import Inspector from '../components/Inspector.svelte';
   import Shortlist, { type Pick } from '../components/Shortlist.svelte';
   import Info from '../components/Info.svelte';
@@ -154,13 +157,30 @@
     const t = setInterval(() => (now = Date.now()), 1000);
     return () => clearInterval(t);
   });
+  // When the current phase began: once the checks after the latency rounds start, time left is what remains of theirs.
+  let phaseAt = $state({ phase: '', at: 0 });
+  $effect(() => {
+    const p = run?.phase ?? '';
+    untrack(() => {
+      if (p !== phaseAt.phase) phaseAt = { phase: p, at: Date.now() };
+    });
+  });
   // While measuring, say how long is left, and why when the run outlasts its estimate.
   function elapsed(r: RunState): string {
     const spent = now - r.started_at;
+    const checks = checkMs(new Set(r.targets.map((t) => t.resolver_id)).size, r.config);
+    const order = Object.keys(checks);
+    const at = order.indexOf(r.phase);
+    if (at >= 0) {
+      const rest = Math.max(0, checks[r.phase] - (now - phaseAt.at)) + order.slice(at + 1).reduce((a, k) => a + checks[k], 0);
+      return rest >= 3000 ? `${duration(spent)}, about ${duration(rest)} left` : `${duration(spent)}, finishing up`;
+    }
+    // Never less than the checks still to come, so time left doesn't jump when they begin.
+    const later = order.reduce((a, k) => a + checks[k], 0);
     const left = runEstimateMs(r.targets.length, new Set(r.targets.map((t) => t.resolver_id)).size, r.config) - spent;
-    if (left >= 3000) return `${duration(spent)}, about ${duration(left)} left`;
     const timeouts = r.samples.filter((s) => s.o === 'timeout').length;
-    return `${duration(spent)}, longer than estimated${timeouts ? `: ${plural(timeouts, 'query', 'queries')} waited out the timeout` : ''}`;
+    if (left >= later || !timeouts) return `${duration(spent)}, about ${duration(Math.max(left, later))} left`;
+    return `${duration(spent)}, longer than estimated: ${plural(timeouts, 'query', 'queries')} waited out the timeout`;
   }
   const title = $derived(!run ? 'Results' : running ? 'Measuring' : run.status === 'cancelled' ? 'Run stopped' : 'Results');
   const subtitle = $derived(
@@ -177,6 +197,12 @@
       : '',
   );
 
+  // The tab whose content is filling while the run works: a dot marks it, so a view the run isn't on still says where
+  // the action is.
+  const LIVE_TAB: Record<string, RunView> = { path: 'path', probes: 'caps', cdn: 'cdn', intel: 'caps' };
+  // Intel ends by naming the CDN edges' networks, which shows on the CDN view.
+  const liveTab = $derived(running && run ? (run.phase === 'intel' && run.cdn ? 'cdn' : (LIVE_TAB[run.phase] ?? 'latency')) : null);
+
   // The phone folds Numbers into Overview.
   const PHONE_VIEWS = RUN_VIEWS.filter((v) => v !== 'numbers');
   $effect(() => {
@@ -186,6 +212,7 @@
   const VIEW_LABEL: Record<RunView, string> = {
     overview: 'Overview',
     latency: 'Latency',
+    path: 'Path',
     cdn: 'CDN',
     caps: 'Capabilities',
     numbers: 'Numbers',
@@ -195,8 +222,8 @@
   function onKey(e: KeyboardEvent) {
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || menu.open) return;
-    // ⌥⌘1–5 (Ctrl+Shift+1–5 on Windows) switch views; the desktop menu sends the same commands.
-    if (((e.altKey && e.metaKey) || (e.ctrlKey && e.shiftKey)) && /^Digit[1-5]$/.test(e.code)) {
+    // ⌥⌘1–6 (Ctrl+Shift+1–6 on Windows) switch views; the desktop menu sends the same commands.
+    if (((e.altKey && e.metaKey) || (e.ctrlKey && e.shiftKey)) && /^Digit[1-6]$/.test(e.code)) {
       e.preventDefault();
       app.setRunView(RUN_VIEWS[Number(e.code.slice(5)) - 1]);
       return;
@@ -284,7 +311,8 @@
               aria-selected={app.runView === view}
               aria-controls="run-panel"
               title="{VIEW_LABEL[view]} ({shortcut(`alt+cmd+${i + 1}`)})"
-              onclick={() => app.setRunView(view)}>{VIEW_LABEL[view]}</button
+              onclick={() => app.setRunView(view)}
+              >{VIEW_LABEL[view]}{#if liveTab === view}<span class="live" aria-hidden="true"></span><span class="visually-hidden">, in progress</span>{/if}</button
             >
           {/each}
         </div>
@@ -333,7 +361,7 @@
           <div class="viewstrip" role="tablist" aria-label="Results view">
             {#each PHONE_VIEWS as view}
               <button role="tab" class="vtab" class:on={app.runView === view} aria-selected={app.runView === view} aria-controls="run-panel" onclick={() => app.setRunView(view)}
-                >{VIEW_LABEL[view]}</button
+                >{VIEW_LABEL[view]}{#if liveTab === view}<span class="live" aria-hidden="true"></span><span class="visually-hidden">, in progress</span>{/if}</button
               >
             {/each}
           </div>
@@ -408,6 +436,12 @@
                   </ul>
                 {/if}
               </div>
+            {:else if app.runView === 'path'}
+              {#if running && run.phase !== 'path' && !Object.keys(run.paths).length}
+                <div class="empty"><p>The path check runs after the latency tests: it traces the route to each resolver and times the wire to it.</p></div>
+              {:else}
+                <PathLive {run} rows={ordered} />
+              {/if}
             {:else if app.runView === 'latency'}
               <div class="bar chrome">
                 <div class="segmented" role="group" aria-label="Test shown">
@@ -473,7 +507,9 @@
                 />
               </div>
             {:else if app.runView === 'cdn'}
-              {#if run.cdn?.version === 2 && Object.keys(run.cdn.resolvers).length}
+              {#if running && run.config.cdn}
+                <CdnLive {run} rows={ordered} />
+              {:else if run.cdn?.version === 2 && Object.keys(run.cdn.resolvers).length}
                 <CdnPanel {run} cdn={run.cdn} onopen={open} />
               {:else}
                 <div class="empty">
@@ -481,22 +517,16 @@
                     {#if !run.config.cdn}
                       This run skipped CDN mapping. Turn on <b>CDN mapping quality</b> in the test plan to see which edges each resolver
                       sends you to.
-                    {:else if running}
-                      CDN mapping runs after the latency tests, so it never disturbs them.
                     {:else}
                       No CDN results: none of the resolvers answered the CDN lookups.
                     {/if}
                   </p>
                 </div>
               {/if}
+            {:else if app.runView === 'caps' && running && run.phase === 'probes'}
+              <ProbesLive {run} rows={ordered} />
             {:else if app.runView === 'caps'}
-              {#if !running || Object.keys(run.probes).length}
-                <CapMatrix {run} rows={ordered} {v} bind:view={capView} onopen={open} />
-              {:else}
-                <div class="empty">
-                  <p>Capability probes run after the latency tests.</p>
-                </div>
-              {/if}
+              <CapMatrix {run} rows={ordered} {v} bind:view={capView} onopen={open} />
             {:else if app.runView === 'numbers'}
               <div class="fill">
                 <div class="bar chrome">
@@ -559,7 +589,7 @@
     height: 28px;
     font-size: var(--t-xs);
   }
-  /* Phone: four views (Numbers folds into Overview) as a strip of tabs under the bar, all in view at once. */
+  /* Phone: five views (Numbers folds into Overview) as a strip of tabs under the bar, all in view at once. */
   .viewstrip {
     flex: none;
     display: flex;
@@ -591,7 +621,28 @@
     color: var(--ink);
     font-weight: 620;
   }
-  /* Not enough room for five tabs: a pop-up button, as a Mac toolbar would. */
+  /* The tab the live run is filling: a slow breath, still under reduced motion. */
+  .live {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-left: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    vertical-align: 0.1em;
+    animation: breathe 2400ms ease-in-out infinite;
+  }
+  @keyframes breathe {
+    50% {
+      opacity: 0.3;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .live {
+      animation: none;
+    }
+  }
+  /* Not enough room for six tabs: a pop-up button, as a Mac toolbar would. */
   @container toolbar (max-width: 900px) {
     .views {
       display: none;

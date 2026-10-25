@@ -19,6 +19,8 @@
   // stay out of the findings and the penalty.
   const steered = $derived(cdn.cdns.filter((c) => c.role === 'steered'));
   const uniform = $derived(cdn.cdns.filter((c) => c.role === 'control'));
+  // Resolvers that answered nothing earlier in the run are not asked.
+  const left = $derived(run.resolvers.filter((r) => !(r.id in cdn.resolvers)));
   const short = (c: CdnInfo) => c.name.replace(/\s*\(.*\)$/, '').replace('Amazon ', '');
   const yous = $derived(new Map(cdn.cdns.map((c) => [c.id, youOf(c)])));
   const you = (c: CdnInfo) => yous.get(c.id) ?? null;
@@ -39,6 +41,20 @@
   const clientIp = $derived(run.env?.vantage?.ipv4 ?? null);
   const edges = $derived(Object.values(cdn.edges));
   const onNet = $derived(edges.filter((e) => e.on_net));
+
+  // The networks the edges sit in, largest first, your ISP's ahead.
+  const nets = $derived.by(() => {
+    const m = new Map<string, { key: string; name: string; n: number; you: boolean }>();
+    for (const e of edges) {
+      if (e.asn == null) continue;
+      const key = String(e.asn);
+      const x = m.get(key) ?? { key, name: holder(e.holder) || `AS${e.asn}`, n: 0, you: false };
+      x.n++;
+      x.you ||= e.on_net;
+      m.set(key, x);
+    }
+    return [...m.values()].sort((a, b) => Number(b.you) - Number(a.you) || b.n - a.n);
+  });
 
   /** What a resolver tells CDNs about you, short enough for a column. */
   function ecs(id: string): { text: string; title: string; tone: 'you' | 'other' | 'none' } {
@@ -188,6 +204,14 @@
         <p><b>{name(x.id)}</b> sends your subnet, yet got farther {list(x.cdns)} edges than your own address did.</p>
       {/each}
     </div>
+    {#if nets.length}
+      <div class="nets">
+        <span class="nets-h">Edge networks</span>
+        {#each nets as x (x.key)}
+          <span class="net" class:you={x.you}>{x.name} <span class="num nn">{x.n}</span>{#if x.you}<span class="nyou">your ISP</span>{/if}</span>
+        {/each}
+      </div>
+    {/if}
   </header>
 
   {#if mobile}
@@ -311,7 +335,7 @@
         {/if}
         {#each rows as { id, r, res } (id)}
           {@const e = ecs(id)}
-          <tr data-resolver={id} class:sel={app.inspect === id}>
+          <tr data-resolver={id} class:sel={app.inspect === id} data-vtn style:--vtn="cdnr-{run.resolvers.findIndex((x) => x.id === id)}">
             <th class="first" scope="row">
               <button onclick={() => onopen(id)}><b>{res?.provider}</b> <span>{res?.variant}</span></button>
             </th>
@@ -369,6 +393,12 @@
             : 'They are'} shown as a check and {uniform.length === 1 ? 'isn’t' : 'aren’t'} counted in the penalty.
       </p>
     {/if}
+    {#if left.length}
+      <p>
+        {list(left.map((r) => label(r.provider, r.variant)))} answered nothing earlier in the run, so {left.length === 1 ? 'it was' : 'they were'} left out of the
+        map.
+      </p>
+    {/if}
     <p>Differences under {ms(2 * cdn.noise_ms, false)} ms are noise in this run.</p>
     <p>
       {#if onNet.length}
@@ -399,8 +429,7 @@
     gap: 6px;
   }
   h2 {
-    font-size: var(--t-md);
-    font-weight: 650;
+    font-size: var(--t-lg);
   }
   .findings {
     display: grid;
@@ -609,6 +638,39 @@
     padding: 0 4px;
     border-radius: 4px;
     border: 1px solid var(--good);
+  }
+  .nets {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--t-xs);
+    color: var(--ink-2);
+  }
+  .nets-h {
+    margin-right: 4px;
+    color: var(--ink-3);
+    font-weight: 600;
+  }
+  .net {
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    border: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  .nn {
+    color: var(--ink-3);
+    margin-left: 2px;
+  }
+  .net.you {
+    border-color: var(--good);
+    color: var(--ink);
+  }
+  .nyou {
+    margin-left: 6px;
+    color: var(--good);
+    font-weight: 600;
   }
   .foot {
     display: grid;

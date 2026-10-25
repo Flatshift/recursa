@@ -75,8 +75,6 @@
   const edgeV = (v: number) => (v < 0.05 ? 'best edges' : `+${ms(v)}`);
   const stackSum = $derived(g.kind === 'stack' ? g.terms.reduce((a, t) => a + t.v, 0) : 0);
   const bar = $derived(Math.round(H / 2));
-  // Protection: one square per test domain.
-  const up = $derived(g.kind === 'units' && g.items.length ? Math.min(14, H, (w - 3 * (g.items.length - 1)) / g.items.length) : 0);
   // Checks: one group per property across the width, one pip per resolver in each; named when there is room.
   const GG = 14;
   const gw = $derived(g.kind === 'checks' ? (w - GG * (g.rows.length - 1)) / g.rows.length : 0);
@@ -91,8 +89,6 @@
         ? `Distance from the best CDN edges: ` + g.cands.map((c) => `${c.name} ${edgeV(c.v)}`).join(', ')
         : g.kind === 'spread'
           ? `Answer-time spread: ` + g.cands.map((c) => `${c.name} ±${ms(c.v)}`).join(', ')
-        : g.kind === 'units'
-          ? `Malware test domains: ` + g.items.map((u) => `${u.name} ${u.on ? 'blocked' : 'not blocked'}`).join(', ')
           : g.kind === 'checks'
             ? `Rows: ${g.rows.join(', ')}. ` + g.cols.map((c) => `${c.name}: ${c.on.filter(Boolean).length} of ${g.rows.length}`).join('; ')
             : g.terms.map((t) => `${t.label} ${ms(t.v)}`).join(', '),
@@ -128,21 +124,6 @@
       {:else}
         {#each sLabels as l}<text class="cap" x={l.x} y={H - 2} text-anchor={l.a}>{l.t}</text>{/each}
       {/if}
-    {:else if g.kind === 'units'}
-      {#each g.items as u, i}
-        <rect
-          class="unit"
-          class:on={u.on}
-          x={i * (up + 3)}
-          y={(H - up) / 2}
-          width={up}
-          height={up}
-          rx="1.5"
-          data-h={u.name}
-          data-v={u.on ? 'Blocked' : 'Not blocked'}
-          data-s="malware test domain"
-        />
-      {/each}
     {:else if g.kind === 'checks'}
       {#each g.rows as row, j}
         {#if named}<text class="cap" x={j * (gw + GG)} y="10">{row}</text>{/if}
@@ -227,16 +208,6 @@
     fill: var(--ink);
     stroke: var(--surface);
     stroke-width: 1.5;
-  }
-  /* Not blocked: an empty square. */
-  .unit {
-    fill: transparent;
-    stroke: var(--ink-3);
-    stroke-width: 1;
-  }
-  .unit.on {
-    fill: var(--ink);
-    stroke: var(--ink);
   }
   .cap {
     font-size: 11px;

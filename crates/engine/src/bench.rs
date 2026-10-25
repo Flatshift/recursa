@@ -321,6 +321,39 @@ pub struct Note {
     pub resolver_id: Option<String>,
 }
 
+/// One resolver's CDN lookups, before the edges are timed: what each CDN has handed out so far and, once
+/// `finished`, how many hostnames answered from their CDN.
+#[derive(Clone, Debug, Serialize, Default)]
+pub struct CdnLookup {
+    pub answered: u32,
+    pub asked: u32,
+    pub finished: bool,
+    pub cells: BTreeMap<String, CdnCell>,
+}
+
+/// One resolver's lookups for one CDN so far.
+#[derive(Clone, Debug, Serialize, Default)]
+pub struct CdnCell {
+    /// Usable edges handed out, first answer first.
+    pub ips: Vec<String>,
+    /// Hostnames that answered with an edge.
+    pub ok: Vec<String>,
+    /// Hostnames that haven't answered with one (yet): an error, a block or no answer at all.
+    pub missed: Vec<String>,
+}
+
+/// How far the CDN edge timing has got: handshakes done of those planned, over `edges` addresses.
+#[derive(Clone, Debug, Serialize)]
+pub struct CdnTiming {
+    pub timed: u32,
+    pub total: u32,
+    pub edges: u32,
+    /// Each edge's best round trip so far.
+    pub best: BTreeMap<String, f64>,
+    /// Edges that didn't answer the first handshake, so are timed no further.
+    pub silent: BTreeSet<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct RunState {
     pub id: String,
@@ -343,10 +376,21 @@ pub struct RunState {
     pub intel: BTreeMap<String, Value>,
     pub notes: Vec<Note>,
     pub cdn: Option<cdn::CdnReport>,
+    /// Resolvers whose CDN lookups are done, while the edges are still to be timed: for the live view only.
+    /// Cleared when the CDN report lands.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cdn_lookups: BTreeMap<String, CdnLookup>,
+    /// The edge timing after the lookups, for the live view only. Cleared when the CDN report lands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cdn_timing: Option<CdnTiming>,
     /// How the link to the gateway behaved while measuring (see [`link`]); absent in runs from before the check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<Value>,
     pub paths: BTreeMap<String, PathInfo>,
+    /// The route to each resolver from the path check, as [`crate::trace::Trace`]s. Absent in older runs and where
+    /// tracing isn't available.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub routes: BTreeMap<String, Value>,
     /// The most queries per second Recursa sent to each resolver in any one second (all its transports count:
     /// limits are per client address), from the measured phases.
     pub rates: BTreeMap<String, f64>,
@@ -468,8 +512,11 @@ pub fn spawn(mut cfg: RunConfig, mut deps: Deps) -> Arc<RunHandle> {
         intel: BTreeMap::new(),
         notes: vec![],
         cdn: None,
+        cdn_lookups: BTreeMap::new(),
+        cdn_timing: None,
         link: None,
         paths: BTreeMap::new(),
+        routes: BTreeMap::new(),
         rates: BTreeMap::new(),
         timings: vec![],
         seq: 0,
@@ -503,6 +550,8 @@ pub fn spawn(mut cfg: RunConfig, mut deps: Deps) -> Arc<RunHandle> {
                 s.finished_at = Some(now_ms());
                 s.timings.push(("done".into(), now_ms() - s.started_at));
                 s.warm.clear();
+                s.cdn_lookups.clear();
+                s.cdn_timing = None;
             });
             let final_state = hh.with(|s| s.clone());
             on_finish(&final_state);
@@ -1520,7 +1569,7 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
 
     // ---- Path check: true network RTT per resolver, and interception detection.
     // The setup budget ran out long ago, with the measured phases: this check gets its own.
-    let intercepted: Vec<String> = if h.cancelled() { vec![] } else { check_paths(Setup::new(cfg), h, selected) };
+    let intercepted: Vec<String> = if h.cancelled() { vec![] } else { check_paths(Setup::new(cfg), h, selected, deps) };
 
     // ---- Capability probes.
     if cfg.probes && !h.cancelled() {
@@ -1543,8 +1592,9 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
     // ---- CDN mapping: resolve CDN hostnames through every resolver, time the edges.
     if cfg.cdn && !h.cancelled() {
         h.phase("cdn", selected.len() as u32);
-        let report = run_cdn(selected, &plan, timeout, &avoid_udp, set.plain);
+        let report = run_cdn(h, selected, &plan, timeout, &avoid_udp, set.plain);
         h.publish(|s| {
+            // The live lookups and timing stay until the run ends: the UI keeps its live grid through intel.
             s.cdn = Some(report);
             json!({"type": "cdn", "cdn": s.cdn})
         });
@@ -1948,8 +1998,8 @@ fn plain_dns_stopped() -> bool {
 
 /// Time TCP handshakes to each public resolver's address (DoT port first, then HTTPS,
 /// then 53), interleaved over five rounds. Then flag plain-DNS targets whose answers
-/// beat that floor: a device on this network answered them.
-fn check_paths(set: Setup, h: &RunHandle, selected: &[Resolver]) -> Vec<String> {
+/// beat that floor: a device on this network answered them. Meanwhile, trace the route to each address.
+fn check_paths(set: Setup, h: &RunHandle, selected: &[Resolver], deps: &Deps) -> Vec<String> {
     let jobs: Vec<(String, IpAddr, Vec<u16>)> = selected
         .iter()
         .filter(|r| r.group != "system")
@@ -1963,31 +2013,64 @@ fn check_paths(set: Setup, h: &RunHandle, selected: &[Resolver]) -> Vec<String> 
             Some((r.id.clone(), ip, ports)).filter(|(_, _, ports)| !ports.is_empty())
         })
         .collect();
-    h.phase("path", jobs.len() as u32);
+    const ROUNDS: usize = 5;
+    const TRACE_ROUNDS: usize = 4;
+    let traces: Vec<(String, IpAddr)> = if crate::trace::available() == crate::trace::TraceCap::Ok {
+        jobs.iter().map(|(id, ip, _)| (id.clone(), *ip)).collect()
+    } else {
+        vec![]
+    };
+    h.phase("path", (jobs.len() * ROUNDS + traces.len() * TRACE_ROUNDS) as u32);
     let mut paths: BTreeMap<String, PathInfo> = BTreeMap::new();
     let mut order: Vec<usize> = (0..jobs.len()).collect();
-    for _ in 0..5 {
-        fastrand::shuffle(&mut order);
-        for &j in &order {
-            if set.over(h) {
-                break;
-            }
-            let (id, ip, ports) = &jobs[j];
-            // Once a port answers, keep using it so every sample measures the same path.
-            let candidates: Vec<u16> = paths.get(id).map(|p| vec![p.port]).unwrap_or_else(|| ports.clone());
-            for port in candidates {
-                let start = clock::now_ns();
-                if std::net::TcpStream::connect_timeout(&SocketAddr::new(*ip, port), Duration::from_millis(1500)).is_ok() {
-                    let ms = clock::since(start) as f64 / 1e6;
-                    let p = paths.entry(id.clone()).or_insert(PathInfo { rtt_ms: None, port, samples: vec![] });
-                    p.samples.push((ms * 1000.0).round() / 1000.0);
-                    p.rtt_ms = Some(p.rtt_ms.map_or(ms, |x| x.min(ms)));
+    std::thread::scope(|sc| {
+        // Each trace streams its hops round by round. They run side by side, told apart by their probe identifiers.
+        for (i, (id, ip)) in traces.iter().enumerate() {
+            sc.spawn(move || {
+                let on_round = |t: &crate::trace::Trace| {
+                    h.publish(|s| {
+                        s.done += 1;
+                        s.routes.insert(id.clone(), json!(t));
+                        json!({"type": "route", "resolver_id": id, "trace": t, "done": s.done})
+                    })
+                };
+                // A trace that can't start leaves its resolver without a route; the handshakes still count.
+                let _ = crate::trace::run_live(*ip, 0x5200 + i as u16, &on_round);
+            });
+        }
+        for _ in 0..ROUNDS {
+            fastrand::shuffle(&mut order);
+            for &j in &order {
+                if set.over(h) {
                     break;
                 }
+                let (id, ip, ports) = &jobs[j];
+                // Once a port answers, keep using it so every sample measures the same path.
+                let candidates: Vec<u16> = paths.get(id).map(|p| vec![p.port]).unwrap_or_else(|| ports.clone());
+                for port in candidates {
+                    let start = clock::now_ns();
+                    if std::net::TcpStream::connect_timeout(&SocketAddr::new(*ip, port), Duration::from_millis(1500)).is_ok() {
+                        let ms = clock::since(start) as f64 / 1e6;
+                        let p = paths.entry(id.clone()).or_insert(PathInfo { rtt_ms: None, port, samples: vec![] });
+                        p.samples.push((ms * 1000.0).round() / 1000.0);
+                        p.rtt_ms = Some(p.rtt_ms.map_or(ms, |x| x.min(ms)));
+                        break;
+                    }
+                }
+                h.publish(|s| {
+                    s.done += 1;
+                    json!({"type": "progress", "done": s.done})
+                });
+                std::thread::sleep(Duration::from_millis(3));
             }
-            std::thread::sleep(Duration::from_millis(3));
+            // Each round's best handshakes so far, so the wire floors draw in as the check goes.
+            h.publish(|s| {
+                s.paths = paths.clone();
+                json!({"type": "paths", "paths": s.paths, "targets": s.targets})
+            });
         }
-    }
+    });
+    name_route_hops(h, deps);
     let mut flagged: Vec<String> = Vec::new();
     let mut local: Vec<String> = Vec::new();
     h.publish(|s| {
@@ -2047,6 +2130,7 @@ fn check_paths(set: Setup, h: &RunHandle, selected: &[Resolver]) -> Vec<String> 
 }
 
 fn run_cdn(
+    h: &RunHandle,
     selected: &[Resolver],
     plan: &[(TargetInfo, Option<Endpoint>)],
     timeout: Duration,
@@ -2060,8 +2144,39 @@ fn run_cdn(
                 let avoid_udp = intercepted.contains(&r.id);
                 let planned = planned_for(plan, &r.id);
                 sc.spawn(move || {
-                    let (mut ex, _) = open_for_run(r, &planned, timeout, avoid_udp, plain)?;
-                    Some((r.id.clone(), cdn::resolve_all(ex.as_mut(), timeout)))
+                    let heard = &mut |x: cdn::Heard| {
+                        h.publish(|s| {
+                            let c = s.cdn_lookups.entry(r.id.clone()).or_default().cells.entry(x.cdn.into()).or_default();
+                            let host = x.host.to_string();
+                            if x.outcome == "ok" {
+                                c.missed.retain(|m| *m != host);
+                                if !c.ok.contains(&host) {
+                                    c.ok.push(host);
+                                }
+                                for ip in x.ips {
+                                    if !c.ips.contains(ip) {
+                                        c.ips.push(ip.clone());
+                                    }
+                                }
+                            } else if !c.ok.contains(&host) && !c.missed.contains(&host) {
+                                c.missed.push(host);
+                            }
+                            json!({"type": "cdn_cell", "resolver_id": r.id, "cdn": x.cdn, "cell": c, "outcome": x.outcome})
+                        })
+                    };
+                    let a = open_for_run(r, &planned, timeout, avoid_udp, plain)
+                        .map(|(mut ex, _)| cdn::resolve_all(ex.as_mut(), timeout, heard));
+                    let answered =
+                        a.iter().flat_map(|a| a.values().flat_map(|hs| hs.values())).filter(|m| m.status == cdn::HostStatus::Ok).count();
+                    h.publish(|s| {
+                        let l = s.cdn_lookups.entry(r.id.clone()).or_default();
+                        l.answered = answered as u32;
+                        l.asked = cdn::CDNS.iter().map(|c| c.hosts.len() as u32).sum();
+                        l.finished = true;
+                        s.done += 1;
+                        json!({"type": "cdn_lookup", "resolver_id": r.id, "lookup": l, "done": s.done})
+                    });
+                    a.map(|a| (r.id.clone(), a))
                 })
             })
             .collect();
@@ -2092,16 +2207,92 @@ fn run_cdn(
         .flat_map(|c| c.values().flat_map(|h| h.values().flat_map(|x| x.ips.iter().cloned())))
         .chain(refs.values().flat_map(|r| r.ips.iter().cloned()))
         .collect();
-    let edges = cdn::time_edges(&ips);
+    // Handshakes land from several threads; batch them into an update every 60 ms or so, each
+    // carrying only what changed.
+    let pending: Mutex<(BTreeMap<String, f64>, Vec<String>, Instant)> = Mutex::new((BTreeMap::new(), Vec::new(), Instant::now()));
+    let edges = cdn::time_edges(&ips, &|t| {
+        let mut p = pending.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(ms) = t.ms {
+            let b = p.0.entry(t.ip.to_string()).or_insert(ms);
+            *b = b.min(ms);
+        }
+        if t.silent {
+            p.1.push(t.ip.to_string());
+        }
+        if t.done < t.total && p.2.elapsed() < Duration::from_millis(60) {
+            return;
+        }
+        let (best, silent) = (std::mem::take(&mut p.0), std::mem::take(&mut p.1));
+        p.2 = Instant::now();
+        h.publish(|s| {
+            let tm = s.cdn_timing.get_or_insert_with(|| CdnTiming {
+                timed: 0,
+                total: t.total,
+                edges: ips.len() as u32,
+                best: BTreeMap::new(),
+                silent: BTreeSet::new(),
+            });
+            // The probe threads can report out of order; keep the furthest.
+            if tm.timed < t.done {
+                (tm.timed, tm.total) = (t.done, t.total);
+            }
+            for (ip, ms) in &best {
+                let b = tm.best.entry(ip.clone()).or_insert(*ms);
+                *b = b.min(*ms);
+            }
+            tm.silent.extend(silent.iter().cloned());
+            json!({"type": "cdn_timing", "timing": {"timed": tm.timed, "total": tm.total, "edges": tm.edges}, "best": best, "silent": silent})
+        });
+    });
     cdn::mark_unreachable(&mut answers, &edges);
     let noise = cdn::noise_floor(&edges);
     cdn::score(answers, refs, edges, noise)
+}
+
+/// Name the network behind each public hop of the path check's routes.
+fn name_route_hops(h: &RunHandle, deps: &Deps) {
+    let ips: BTreeSet<IpAddr> = h.with(|s| {
+        s.routes
+            .values()
+            .flat_map(|t| t["hops"].as_array().cloned().unwrap_or_default())
+            .filter(|hop| hop["private"] == false)
+            .flat_map(|hop| hop["addrs"].as_array().cloned().unwrap_or_default())
+            .filter_map(|a| a.as_str()?.parse().ok())
+            .collect()
+    });
+    if ips.is_empty() {
+        return;
+    }
+    let intel = deps.intel.clone();
+    let owners: BTreeMap<String, Value> = deps.rt.block_on(async move {
+        use futures_util::StreamExt;
+        futures_util::stream::iter(ips.into_iter().map(|ip| {
+            let intel = intel.clone();
+            async move { (ip.to_string(), intel.asn_of(ip).await) }
+        }))
+        .buffer_unordered(8)
+        .collect()
+        .await
+    });
+    h.publish(|s| {
+        for t in s.routes.values_mut() {
+            for hop in t["hops"].as_array_mut().into_iter().flatten() {
+                let Some(o) = hop["addrs"].get(0).and_then(Value::as_str).and_then(|a| owners.get(a)) else { continue };
+                hop["asn"] = o["asn"].clone();
+                hop["holder"] = o["holder"].clone();
+            }
+        }
+        json!({"type": "routes", "routes": s.routes})
+    });
+    // The named routes are the path check's payoff on screen; hold them a moment before the next phase takes over.
+    std::thread::sleep(Duration::from_millis(1500));
 }
 
 /// After intel: name each edge's network and explain each resolver's mapping basis.
 fn enrich_cdn(h: &RunHandle, deps: &Deps) {
     let Some(ips) = h.with(|s| s.cdn.as_ref().map(|c| c.edges.keys().cloned().collect::<Vec<_>>())) else { return };
     let intel = deps.intel.clone();
+    let client_asn = deps.env.pointer("/vantage/network/asn").and_then(Value::as_u64);
     let owners: Vec<(String, Value)> = deps.rt.block_on(async move {
         use futures_util::StreamExt;
         futures_util::stream::iter(ips.into_iter().map(|ip| {
@@ -2115,10 +2306,15 @@ fn enrich_cdn(h: &RunHandle, deps: &Deps) {
             }
         }))
         .buffer_unordered(6)
+        // Name each edge's network as it comes back, for the live view.
+        .inspect(|(ip, v)| {
+            let asn = v["asn"].as_u64();
+            let on_net = client_asn.is_some() && asn == client_asn;
+            h.publish(|_| json!({"type": "cdn_owner", "ip": ip, "asn": asn, "holder": v["holder"], "on_net": on_net}));
+        })
         .collect()
         .await
     });
-    let client_asn = deps.env.pointer("/vantage/network/asn").and_then(Value::as_u64);
     let client_v4: Option<std::net::Ipv4Addr> = deps.env.pointer("/vantage/ipv4").and_then(Value::as_str).and_then(|s| s.parse().ok());
     h.publish(|s| {
         let RunState { cdn, probes, intel, .. } = s;
@@ -2595,8 +2791,11 @@ mod tests {
             intel: BTreeMap::new(),
             notes: vec![],
             cdn: None,
+            cdn_lookups: BTreeMap::new(),
+            cdn_timing: None,
             link: None,
             paths: BTreeMap::new(),
+            routes: BTreeMap::new(),
             rates: BTreeMap::new(),
             timings: vec![],
             seq: 0,
@@ -2820,8 +3019,11 @@ mod tests {
             intel: BTreeMap::new(),
             notes: vec![],
             cdn: None,
+            cdn_lookups: BTreeMap::new(),
+            cdn_timing: None,
             link: None,
             paths: BTreeMap::new(),
+            routes: BTreeMap::new(),
             rates: BTreeMap::new(),
             timings: vec![],
             seq: 0,
@@ -2866,8 +3068,11 @@ mod tests {
             intel: BTreeMap::new(),
             notes: vec![],
             cdn: None,
+            cdn_lookups: BTreeMap::new(),
+            cdn_timing: None,
             link: None,
             paths: BTreeMap::new(),
+            routes: BTreeMap::new(),
             rates: BTreeMap::new(),
             timings: vec![],
             seq: 0,
@@ -2926,8 +3131,11 @@ mod tests {
             intel: BTreeMap::new(),
             notes: vec![],
             cdn: None,
+            cdn_lookups: BTreeMap::new(),
+            cdn_timing: None,
             link: None,
             paths: BTreeMap::new(),
+            routes: BTreeMap::new(),
             rates: BTreeMap::new(),
             timings: vec![],
             seq: 0,

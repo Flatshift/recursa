@@ -137,16 +137,24 @@ pub fn available() -> TraceCap {
 /// callback, and the worst case is bounded.
 #[cfg(not(target_os = "ios"))]
 pub fn run(target: IpAddr, cancel: &AtomicBool) -> Result<Trace, String> {
+    let _ = cancel;
+    run_live(target, 0, &|_| {})
+}
+
+/// [`run`], handing `on_round` the trace as it stands after each round. Traces that run at the same time need
+/// distinct non-zero `id`s: each tracer drops replies carrying another's identifier (0 accepts any).
+#[cfg(not(target_os = "ios"))]
+pub fn run_live(target: IpAddr, id: u16, on_round: &dyn Fn(&Trace)) -> Result<Trace, String> {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
     use trippy_core::{Builder, PrivilegeMode, ProbeStatus, Protocol};
 
-    let _ = cancel;
     const ROUNDS: usize = 4;
     let mode = if cfg!(target_os = "macos") { PrivilegeMode::Unprivileged } else { PrivilegeMode::Privileged };
     let tracer = Builder::new(target)
         .protocol(Protocol::Icmp)
         .privilege_mode(mode)
+        .trace_identifier(id)
         .max_rounds(Some(ROUNDS))
         .max_ttl(30)
         .grace_duration(Duration::from_millis(100))
@@ -156,6 +164,11 @@ pub fn run(target: IpAddr, cancel: &AtomicBool) -> Result<Trace, String> {
         .map_err(|e| e.to_string())?;
     let t0 = Instant::now();
     let rounds: Mutex<Vec<RoundProbes>> = Mutex::default();
+    let snapshot = |rounds: &[RoundProbes]| {
+        let (hops, reached) = fold(rounds, target);
+        let elapsed_ms = round1(t0.elapsed().as_secs_f64() * 1000.0);
+        Trace { target, protocol: "icmp", rounds: rounds.len() as u32, reached, elapsed_ms, hops }
+    };
     tracer
         .run_with(|round| {
             let probes = round
@@ -170,17 +183,21 @@ pub fn run(target: IpAddr, cancel: &AtomicBool) -> Result<Trace, String> {
                     _ => None,
                 })
                 .collect();
-            rounds.lock().unwrap().push(probes);
+            let mut all = rounds.lock().unwrap();
+            all.push(probes);
+            on_round(&snapshot(&all));
         })
         .map_err(|e| e.to_string())?;
-    let elapsed_ms = round1(t0.elapsed().as_secs_f64() * 1000.0);
-    let rounds = rounds.into_inner().unwrap();
-    let (hops, reached) = fold(&rounds, target);
-    Ok(Trace { target, protocol: "icmp", rounds: rounds.len() as u32, reached, elapsed_ms, hops })
+    Ok(snapshot(&rounds.into_inner().unwrap()))
 }
 
 #[cfg(target_os = "ios")]
 pub fn run(_target: IpAddr, _cancel: &AtomicBool) -> Result<Trace, String> {
+    Err("Trace route is not available on this platform.".to_string())
+}
+
+#[cfg(target_os = "ios")]
+pub fn run_live(_target: IpAddr, _id: u16, _on_round: &dyn Fn(&Trace)) -> Result<Trace, String> {
     Err("Trace route is not available on this platform.".to_string())
 }
 

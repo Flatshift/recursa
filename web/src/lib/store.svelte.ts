@@ -1,4 +1,6 @@
 import { api, confirmAction, desktop, mac, mobile, notifyDone, onDesktop, saveExport, setCaps, streamRun, type RunStream } from './api';
+import { flushSync } from 'svelte';
+import { reduceMotion } from './motion';
 import type { Mix } from './verdict';
 import type { Bootstrap, Env, Outcome, Resolver, RunConfig, RunRow, RunState, Sample } from './types';
 
@@ -12,9 +14,19 @@ type Route =
   | { name: 'method' }
   | { name: 'settings' };
 
-/** The views a run's results are split into, in order (⌥⌘1–5; Ctrl+Shift+1–5 elsewhere). */
-export const RUN_VIEWS = ['overview', 'latency', 'cdn', 'caps', 'numbers'] as const;
+/** The views a run's results are split into, in order (⌥⌘1–6; Ctrl+Shift+1–6 elsewhere). */
+export const RUN_VIEWS = ['overview', 'latency', 'path', 'cdn', 'caps', 'numbers'] as const;
 export type RunView = (typeof RUN_VIEWS)[number];
+
+/** The view where a live run's current phase shows its work: the latency rounds and the path check on Latency, the
+ *  probes on Capabilities, the CDN mapping on CDN. Network intel is too short to jump for, so it keeps the last one. */
+function liveView(r: Pick<RunState, 'phase'>, from: RunView = 'latency'): RunView {
+  if (r.phase === 'path') return 'path';
+  if (r.phase === 'probes') return 'caps';
+  if (r.phase === 'cdn') return 'cdn';
+  if (r.phase === 'intel') return from === 'overview' ? 'latency' : from;
+  return 'latency';
+}
 
 function parse(path: string): Route {
   const m = path.match(/^\/run\/([\w-]+)/);
@@ -120,6 +132,56 @@ class AppState {
     if (this.route.name !== 'run') return;
     this.runView = v;
     if (this.run?.status === 'running') this.#viewChosen = true;
+  }
+
+  /** A run update waiting for its view transition's first snapshot; later events build on it. */
+  #staged: { run: RunState; view: RunView } | null = null;
+
+  /** Show `next` on view `v`. With `animate`, as a view transition: the results panel slides toward the side of its tab
+   *  (or fades through, staying on one view) while the toolbar and progress rail hold still. */
+  #show(next: RunState, v: RunView, animate: boolean) {
+    if (this.#staged) {
+      this.#staged = { run: next, view: v };
+      return;
+    }
+    if (!animate || reduceMotion || !document.startViewTransition || document.hidden) {
+      this.run = next;
+      this.runView = v;
+      return;
+    }
+    const root = document.documentElement;
+    const dir = (to: RunView) => {
+      const a = RUN_VIEWS.indexOf(this.runView);
+      const b = RUN_VIEWS.indexOf(to);
+      return b > a ? 'fwd' : b < a ? 'back' : 'swap';
+    };
+    root.dataset.vt = dir(v);
+    this.#staged = { run: next, view: v };
+    let ran = false;
+    const apply = () => {
+      if (ran) return;
+      ran = true;
+      const s = this.#staged;
+      this.#staged = null;
+      // The user opened another run meanwhile.
+      if (!s || this.run?.id !== s.run.id) return;
+      this.run = s.run;
+      if (!this.#viewChosen) {
+        // Events staged while the snapshot was taken may have moved the view on; slide toward where it ends up.
+        root.dataset.vt = dir(s.view);
+        this.runView = s.view;
+      }
+      flushSync();
+    };
+    const t = document.startViewTransition(apply);
+    t.ready.catch(() => {});
+    t.finished.finally(() => delete root.dataset.vt);
+    // A page that stops rendering (a hidden or occluded window) never runs the callback; don't hold events behind it.
+    setTimeout(() => {
+      if (ran) return;
+      t.skipTransition();
+      apply();
+    }, 1000);
   }
 
   setSidebar(on: boolean, remember = true) {
@@ -366,7 +428,7 @@ class AppState {
       if (seq !== this.#openSeq) return; // a newer openRun replaced this one
       this.run = r;
       // A live run opens on its samples landing; a finished one on its verdict.
-      this.runView = r.status === 'running' ? 'latency' : 'overview';
+      this.runView = r.status === 'running' ? liveView(r) : 'overview';
       this.#viewChosen = false;
       if (r.status === 'running') this.#connect(id);
     } catch (e) {
@@ -401,7 +463,7 @@ class AppState {
       this.openRun(id);
       return;
     }
-    const cur = this.run;
+    const cur = this.#staged?.run ?? this.run;
     if (!cur || cur.id !== id) return;
     if (typeof ev.seq === 'number' && ev.seq <= cur.seq) return;
     const next: RunState = { ...cur, seq: ev.seq ?? cur.seq };
@@ -410,6 +472,15 @@ class AppState {
         next.phase = ev.phase;
         next.total = ev.total;
         next.done = 0;
+        // Follow the run to the view where this phase shows its work, unless the user picked one.
+        if (!this.#viewChosen) {
+          const from = this.#staged?.view ?? this.runView;
+          const v = liveView(next, from);
+          return this.#show(next, v, v !== from);
+        }
+        break;
+      case 'progress':
+        next.done = ev.done;
         break;
       case 'targets':
         next.targets = ev.targets;
@@ -442,7 +513,33 @@ class AppState {
         next.intel = { ...cur.intel, [ev.resolver_id]: ev.intel };
         next.done = ev.done ?? cur.done;
         break;
+      case 'cdn_cell': {
+        // One lookup landed: the resolver's cell for that CDN, as it stands now.
+        const l = cur.cdn_lookups?.[ev.resolver_id] ?? { answered: 0, asked: 0, finished: false, cells: {} };
+        next.cdn_lookups = { ...cur.cdn_lookups, [ev.resolver_id]: { ...l, cells: { ...l.cells, [ev.cdn]: ev.cell } } };
+        break;
+      }
+      case 'cdn_lookup':
+        next.cdn_lookups = { ...cur.cdn_lookups, [ev.resolver_id]: ev.lookup };
+        next.done = ev.done ?? cur.done;
+        break;
+      case 'cdn_timing': {
+        // Each update carries only the edges that changed since the last.
+        const best = { ...cur.cdn_timing?.best };
+        for (const [ip, v] of Object.entries(ev.best ?? {}) as [string, number][]) best[ip] = Math.min(v, best[ip] ?? Infinity);
+        const silent = [...new Set([...(cur.cdn_timing?.silent ?? []), ...(ev.silent ?? [])])];
+        next.cdn_timing = { ...ev.timing, best, silent };
+        break;
+      }
+      case 'cdn_owner': {
+        // The network behind one edge, named during the intel phase.
+        const e = cur.cdn?.edges[ev.ip];
+        if (!cur.cdn || !e) break;
+        next.cdn = { ...cur.cdn, edges: { ...cur.cdn.edges, [ev.ip]: { ...e, asn: ev.asn, holder: ev.holder, on_net: ev.on_net } } };
+        break;
+      }
       case 'cdn':
+        // The live grid stays up through intel; the finished map waits for the end of the run.
         next.cdn = ev.cdn;
         break;
       case 'link':
@@ -452,15 +549,23 @@ class AppState {
         next.paths = ev.paths;
         next.targets = ev.targets;
         break;
-      case 'done':
-        this.run = ev.run as RunState;
+      case 'route':
+        next.routes = { ...cur.routes, [ev.resolver_id]: ev.trace };
+        next.done = ev.done ?? cur.done;
+        break;
+      case 'routes':
+        next.routes = ev.routes;
+        break;
+      case 'done': {
         this.#close();
-        this.#recordRun(ev.run as RunState);
-        if (!this.#viewChosen) this.runView = 'overview';
-        this.#announceDone(ev.run as RunState);
+        const r = ev.run as RunState;
+        this.#show(r, this.#viewChosen ? this.runView : 'overview', true);
+        this.#recordRun(r);
+        this.#announceDone(r);
         return;
+      }
     }
-    this.run = next;
+    this.#show(next, this.#staged?.view ?? this.runView, false);
   }
 
   /** Tell the user a run finished while they were in another app. */

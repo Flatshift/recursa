@@ -21,7 +21,7 @@ use crate::net::{self, Endpoint, Exchanger, Transport};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -285,7 +285,7 @@ impl Seen {
                 self.target = self.target.take().or(Some(target));
             }
             Outcome::Blocked(e) => self.blocked = Some(e),
-            Outcome::Failed(e) => self.failed = Some(e),
+            Outcome::Failed(e) | Outcome::Silent(e) => self.failed = Some(e),
         }
     }
 
@@ -320,14 +320,52 @@ impl Seen {
     }
 }
 
+/// One lookup as it lands, for a live view.
+pub struct Heard<'a> {
+    pub cdn: &'static str,
+    pub host: &'static str,
+    /// The usable edges it returned; empty unless it answered.
+    pub ips: &'a [String],
+    /// ok | blocked | failed (an error answer) | silent (no answer at all)
+    pub outcome: &'static str,
+}
+
+/// Lookups in a row that get no answer at all, before the resolver has answered anything,
+/// after which it counts as silent and its remaining names are skipped.
+const SILENT_AFTER: u32 = 3;
+
 /// Resolve every CDN hostname through one resolver, `RESOLVE_ROUNDS` times, interleaved.
-/// Returns CDN id → hostname → mapping.
-pub fn resolve_all(ex: &mut dyn Exchanger, timeout: Duration) -> BTreeMap<String, BTreeMap<String, HostMapping>> {
+/// `heard` runs after each lookup. Returns CDN id → hostname → mapping.
+pub fn resolve_all(
+    ex: &mut dyn Exchanger,
+    timeout: Duration,
+    heard: &mut dyn FnMut(Heard),
+) -> BTreeMap<String, BTreeMap<String, HostMapping>> {
     let order = interleaved();
     let mut seen: BTreeMap<&str, Seen> = BTreeMap::new();
-    for _ in 0..RESOLVE_ROUNDS {
-        for (_, h) in &order {
-            seen.entry(h.name).or_default().record(lookup(ex, h.name, timeout));
+    let (mut alive, mut misses) = (false, 0);
+    'rounds: for _ in 0..RESOLVE_ROUNDS {
+        for (c, h) in &order {
+            let o = lookup(ex, h.name, timeout);
+            let (ips, outcome): (&[String], _) = match &o {
+                Outcome::Answer(ips, _) => (ips, "ok"),
+                Outcome::Blocked(_) => (&[], "blocked"),
+                Outcome::Failed(_) => (&[], "failed"),
+                Outcome::Silent(_) => (&[], "silent"),
+            };
+            heard(Heard { cdn: c.id, host: h.name, ips, outcome });
+            if matches!(o, Outcome::Silent(_)) {
+                misses += 1;
+            } else {
+                alive = true;
+            }
+            seen.entry(h.name).or_default().record(o);
+            if !alive && misses >= SILENT_AFTER {
+                for (_, h) in &order {
+                    seen.entry(h.name).or_default().failed.get_or_insert_with(|| "skipped: the resolver stopped answering".into());
+                }
+                break 'rounds;
+            }
         }
     }
     CDNS.iter()
@@ -343,6 +381,8 @@ enum Outcome {
     Answer(Vec<String>, String),
     Blocked(String),
     Failed(String),
+    /// No answer at all: a timeout or a transport error.
+    Silent(String),
 }
 
 /// An address a CDN edge could really have.
@@ -361,7 +401,7 @@ fn lookup(ex: &mut dyn Exchanger, host: &str, timeout: Duration) -> Outcome {
 fn lookup_once(ex: &mut dyn Exchanger, host: &str, timeout: Duration) -> Outcome {
     let msg = match dns::ask(ex, &QuerySpec::new(host, dns::TYPE_A), timeout) {
         Ok(a) => a.msg,
-        Err(e) => return Outcome::Failed(e.to_string()),
+        Err(e) => return Outcome::Silent(e.to_string()),
     };
     match msg.rcode {
         dns::RCODE_NOERROR => {}
@@ -498,6 +538,17 @@ const PROBE_THREADS: usize = 8;
 const RESOLVE_ROUNDS: u32 = 2;
 const PASS_ONE_MS: f64 = 1200.0;
 
+/// One handshake as it lands, for a live view.
+pub struct Tick<'a> {
+    pub done: u32,
+    pub total: u32,
+    pub ip: &'a str,
+    /// The round trip; none when the handshake timed out.
+    pub ms: Option<f64>,
+    /// Timed out in the first pass, so the address is dropped from the rest.
+    pub silent: bool,
+}
+
 enum Probe {
     Sample(f64),
     Refused(f64),
@@ -517,8 +568,9 @@ fn probe(addr: SocketAddr, timeout: Duration) -> Probe {
 }
 
 /// Run `jobs` (index, address, timeout) over a fixed pool of threads, each waiting a
-/// random 10–50 ms before it starts a probe so the SYNs don't arrive in a burst.
-fn run_pass(jobs: &[(usize, SocketAddr, Duration)]) -> Vec<(usize, Probe)> {
+/// random 10–50 ms before it starts a probe so the SYNs don't arrive in a burst. `tick`
+/// runs after each probe.
+fn run_pass(jobs: &[(usize, SocketAddr, Duration)], tick: &(dyn Fn(usize, &Probe) + Sync)) -> Vec<(usize, Probe)> {
     let next = AtomicUsize::new(0);
     std::thread::scope(|sc| {
         let workers: Vec<_> = (0..PROBE_THREADS.min(jobs.len()))
@@ -527,7 +579,9 @@ fn run_pass(jobs: &[(usize, SocketAddr, Duration)]) -> Vec<(usize, Probe)> {
                     let mut out = Vec::new();
                     while let Some(&(i, addr, timeout)) = jobs.get(next.fetch_add(1, Ordering::Relaxed)) {
                         std::thread::sleep(Duration::from_millis(fastrand::u64(10..=50)));
-                        out.push((i, probe(addr, timeout)));
+                        let p = probe(addr, timeout);
+                        tick(i, &p);
+                        out.push((i, p));
                     }
                     out
                 })
@@ -540,12 +594,14 @@ fn run_pass(jobs: &[(usize, SocketAddr, Duration)]) -> Vec<(usize, Probe)> {
 /// Time TCP handshakes to every edge's HTTPS port: a throwaway warm-up, then three shuffled
 /// passes over a pool of threads, keeping every sample. An address that times out in the first
 /// pass is dropped from the rest; later passes wait only a few times the best round trip.
-pub fn time_edges(ips: &BTreeSet<String>) -> BTreeMap<String, Edge> {
-    time_port(ips, 443)
+/// `progress` runs after each handshake; its `total` shrinks once the first pass has found
+/// the unreachable addresses.
+pub fn time_edges(ips: &BTreeSet<String>, progress: &(dyn Fn(Tick) + Sync)) -> BTreeMap<String, Edge> {
+    time_port(ips, 443, progress)
 }
 
 /// `time_edges` against any port, so the test can use a listener of its own.
-fn time_port(ips: &BTreeSet<String>, port: u16) -> BTreeMap<String, Edge> {
+fn time_port(ips: &BTreeSet<String>, port: u16, progress: &(dyn Fn(Tick) + Sync)) -> BTreeMap<String, Edge> {
     let mut edges: BTreeMap<String, Edge> = ips.iter().map(|ip| (ip.clone(), Edge { ip: ip.clone(), ..Default::default() })).collect();
     let mut order: Vec<(String, SocketAddr)> =
         ips.iter().filter_map(|ip| ip.parse().ok().map(|a: IpAddr| (ip.clone(), SocketAddr::new(a, port)))).collect();
@@ -554,6 +610,7 @@ fn time_port(ips: &BTreeSet<String>, port: u16) -> BTreeMap<String, Edge> {
         probe(*addr, Duration::from_millis(PASS_ONE_MS as u64));
     }
     let mut unreachable: BTreeSet<String> = BTreeSet::new();
+    let done = AtomicU32::new(0);
     for pass in 0..3 {
         fastrand::shuffle(&mut order);
         let live: Vec<&(String, SocketAddr)> = order.iter().filter(|(ip, _)| !unreachable.contains(ip)).collect();
@@ -569,7 +626,17 @@ fn time_port(ips: &BTreeSet<String>, port: u16) -> BTreeMap<String, Edge> {
                 (i, *addr, Duration::from_micros((ms * 1000.0) as u64))
             })
             .collect();
-        for (i, result) in run_pass(&jobs) {
+        // The handshakes so far, plus this pass's for each pass still to come.
+        let total = done.load(Ordering::Relaxed) + (jobs.len() * (3 - pass)) as u32;
+        let tick = |i: usize, p: &Probe| {
+            let ms = match p {
+                Probe::Sample(ms) | Probe::Refused(ms) => Some(*ms),
+                Probe::Failed => None,
+            };
+            let done = done.fetch_add(1, Ordering::Relaxed) + 1;
+            progress(Tick { done, total, ip: &live[i].0, ms, silent: pass == 0 && ms.is_none() });
+        };
+        for (i, result) in run_pass(&jobs, &tick) {
             let ip = &live[i].0;
             let e = edges.get_mut(ip).unwrap();
             match result {
@@ -1118,7 +1185,7 @@ mod tests {
     #[test]
     fn resolving_blocks_private_answers_and_retries_once() {
         let mut ex = Stub { ip: [10, 0, 0, 1], fail_first: 0, calls: 0 };
-        let m = resolve_all(&mut ex, Duration::from_millis(50));
+        let m = resolve_all(&mut ex, Duration::from_millis(50), &mut |_| {});
         let n = hosts_in(&m);
         assert_eq!(n, 16);
         assert!(m.values().flat_map(|h| h.values()).all(|x| x.status == HostStatus::Blocked && x.ips.is_empty()));
@@ -1126,12 +1193,22 @@ mod tests {
 
         // A public address on the queried name: only the CDN whose own name it is passes.
         let mut ex = Stub { ip: [23, 1, 1, 1], fail_first: 1, calls: 0 };
-        let m = resolve_all(&mut ex, Duration::from_millis(50));
+        let m = resolve_all(&mut ex, Duration::from_millis(50), &mut |_| {});
         assert_eq!(ex.calls as usize, n * 2 + 1); // one timeout, retried
         let status = |cdn: &str, host: &str| m[cdn][host].status;
         assert_eq!(status("akamai", "www.apple.com"), HostStatus::OffCdn);
         assert_eq!(status("cloudflare", "www.cloudflare.com"), HostStatus::Ok);
         assert_eq!(m["cloudflare"]["www.cloudflare.com"].ips, ["23.1.1.1"]);
+    }
+
+    #[test]
+    fn a_silent_resolver_is_given_up_on() {
+        let mut ex = Stub { ip: [23, 1, 1, 1], fail_first: u32::MAX, calls: 0 };
+        let mut heard = Vec::new();
+        let m = resolve_all(&mut ex, Duration::from_millis(50), &mut |h| heard.push(h.outcome));
+        assert_eq!(heard, ["silent"; SILENT_AFTER as usize]);
+        assert_eq!(ex.calls, SILENT_AFTER * 2);
+        assert!(m.values().flat_map(|h| h.values()).all(|x| x.status == HostStatus::Failed));
     }
 
     #[test]
@@ -1141,7 +1218,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let ips = BTreeSet::from(["127.0.0.1".to_string()]);
-        let e = &time_port(&ips, port)["127.0.0.1"];
+        let e = &time_port(&ips, port, &|_| {})["127.0.0.1"];
         assert_eq!(e.samples.len(), 3);
         assert!(!e.refused);
         assert!(e.rtt_ms.is_some() && e.median_ms.is_some());
