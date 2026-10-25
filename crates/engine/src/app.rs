@@ -121,19 +121,7 @@ fn builtin() -> &'static [Resolver] {
 
 /// The monitoring setting as saved, if there is one and it parses.
 fn stored_monitor(store: &Store) -> Option<MonitorConfig> {
-    store.get("monitor")
-}
-
-impl MonitorConfig {
-    /// Within sane bounds, as [`NtpMonitorConfig::clamped`]: a resolver at most once, at most 24 of them.
-    fn clamped(mut self) -> Self {
-        self.interval_min = self.interval_min.clamp(1, 1440);
-        self.retention_days = self.retention_days.clamp(1, 365);
-        let mut seen = std::collections::HashSet::new();
-        self.resolvers.retain(|id| seen.insert(id.clone()));
-        self.resolvers.truncate(24);
-        self
-    }
+    store.get::<MonitorConfig>("monitor").map(MonitorConfig::clamped)
 }
 
 /// Apply a setting another process saved, when it was readable and differs from what subscribers have.
@@ -288,7 +276,7 @@ impl AppState {
         all
     }
 
-    pub fn env(&self) -> Value {
+    pub(crate) fn env(&self) -> Value {
         json!({
             "platform": std::env::consts::OS,
             "version": env!("CARGO_PKG_VERSION"),
@@ -342,14 +330,9 @@ impl AppState {
     /// Start an NTP run: servers from the catalog, asked in parallel, eight seconds apart. Shares the one measurement
     /// slot with benchmarks and monitoring, so nothing else is on the network while it times.
     async fn start_ntp(self: &Arc<Self>, req: NtpRequest) -> Result<Value, ApiError> {
-        let catalog = crate::ntp::catalog();
         let mut entries: Vec<crate::ntp::Entry> = Vec::new();
         for id in &req.servers {
-            match catalog.iter().find(|e| &e.id == id) {
-                Some(e) if !entries.iter().any(|x| x.id == e.id) => entries.push(e.clone()),
-                Some(_) => {}
-                None => return Err(ApiError::new(400, format!("Unknown time server: {id}."))),
-            }
+            crate::ntp::add_pick(&mut entries, id, false).map_err(|m| ApiError::new(400, m))?;
         }
         if req.custom.len() > crate::ntp::MAX_CUSTOM {
             return Err(ApiError::new(400, format!("At most {} servers of your own per run.", crate::ntp::MAX_CUSTOM)));
@@ -370,12 +353,11 @@ impl AppState {
         let (entries, skipped) = self.ntp_guard(&entries);
         if entries.is_empty() {
             drop(held);
-            let wait = skipped.iter().map(|s| s.until).min().unwrap_or(0).saturating_sub(bench::now_ms()).max(0) / 60_000 + 1;
+            let (wait, s) = crate::ntp::minutes_until(skipped.iter().map(|s| s.until).min().unwrap_or(0));
             return Err(ApiError::new(
                 409,
                 format!(
-                    "Every server you picked was asked a few minutes ago, or asked us to stop. To be gentle, wait about {wait} minute{} and try again.",
-                    if wait == 1 { "" } else { "s" }
+                    "Every server you picked was asked a few minutes ago, or asked us to stop. To be gentle, wait about {wait} minute{s} and try again."
                 ),
             ));
         }
@@ -393,7 +375,7 @@ impl AppState {
             consensus: None,
             skipped,
             added,
-            spacing_s: crate::ntp::MIN_SPACING.as_secs(),
+            spacing_s: crate::ntp::run_spacing(&entries).as_secs(),
             cancel: cancel.clone(),
         };
         *self.ntp.lock().unwrap() = Some(run);
@@ -751,7 +733,7 @@ impl AppState {
     }
 
     /// The resolver with this id, or that a custom entry or alias of this id folded into.
-    fn find_resolver(&self, id: &str) -> Result<Resolver, ApiError> {
+    pub fn find_resolver(&self, id: &str) -> Result<Resolver, ApiError> {
         self.resolvers()
             .into_iter()
             .find(|r| r.id == id || r.custom_id.as_deref() == Some(id) || r.aliases.iter().any(|a| a == id))
@@ -795,16 +777,9 @@ impl AppState {
         if crate::trace::available() != crate::trace::TraceCap::Ok {
             return Err(ApiError::new(501, "Trace route is not available here."));
         }
-        let ip: IpAddr =
-            r.ipv4.first().and_then(|a| a.parse().ok()).ok_or_else(|| ApiError::new(422, "This resolver has no IPv4 address."))?;
+        let ip = r.primary(false).ok_or_else(|| ApiError::new(422, "This resolver has no IPv4 address."))?;
         let res = Resolve::new(self.system.read().unwrap().clone());
-        let out = self
-            .measure_blocking(move |cancel| {
-                let mut t = crate::trace::run(ip, cancel)?;
-                crate::trace::enrich(&mut t.hops, &res);
-                Ok::<_, String>(t)
-            })
-            .await?;
+        let out = self.measure_blocking(move |cancel| crate::trace::run_enriched(ip, &res, cancel)).await?;
         out.map_err(|e| ApiError::new(502, e))
     }
 
@@ -897,13 +872,13 @@ impl AppState {
     }
 
     /// Picks up monitoring settings another process saved to this database. Unreadable ones are ignored.
-    pub fn reload_monitors(&self) {
+    pub(crate) fn reload_monitors(&self) {
         reload(&self.monitor, stored_monitor(&self.store));
     }
 
     /// Delete old unsaved runs by the saved housekeeping setting (read fresh, so another
     /// process's Settings apply too). Call it only while nothing is measuring. Returns how many went.
-    pub fn cleanup_runs(&self) -> usize {
+    pub(crate) fn cleanup_runs(&self) -> usize {
         let cfg = stored_housekeeping(&self.store);
         let since = cfg.keep_days.map(|d| bench::now_ms() - d as i64 * 86_400_000);
         let n = self.store.cleanup_runs(cfg.keep_runs, since);
@@ -916,7 +891,7 @@ impl AppState {
     }
 
     /// As [`AppState::reload_monitors`], for the NTP monitor.
-    pub fn reload_ntp_monitor(&self) {
+    pub(crate) fn reload_ntp_monitor(&self) {
         reload(&self.ntp_monitor, stored_ntp_monitor(&self.store));
     }
 
@@ -953,11 +928,14 @@ impl AppState {
         if id.starts_with("ntp-") {
             return self.export_ntp(id, csv);
         }
-        let body = self.run_json(id)?;
         if !csv {
+            let body = self.run_json(id)?;
             return Some(Export { filename: format!("recursa-{id}.json"), mime: "application/json", body });
         }
-        let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+        let v: Value = match self.run_handle(id) {
+            Some(h) => serde_json::to_value(&*h.state()).ok()?,
+            None => serde_json::from_str(&self.store.get_run(id)?).unwrap_or(Value::Null),
+        };
         let empty = Vec::new();
         let targets = v["targets"].as_array().unwrap_or(&empty);
         let samples = v["samples"].as_array().unwrap_or(&empty);

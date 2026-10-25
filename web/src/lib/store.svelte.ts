@@ -1,6 +1,7 @@
 import { api, confirmAction, desktop, mac, mobile, notifyDone, onDesktop, saveExport, setCaps, streamRun, type RunStream } from './api';
 import { flushSync } from 'svelte';
 import { reduceMotion } from './motion';
+import { phaseTab } from './phases';
 import type { Mix } from './verdict';
 import type { Bootstrap, Env, Outcome, Resolver, RunConfig, RunRow, RunState, Sample } from './types';
 
@@ -18,14 +19,11 @@ type Route =
 export const RUN_VIEWS = ['overview', 'latency', 'path', 'cdn', 'caps', 'numbers'] as const;
 export type RunView = (typeof RUN_VIEWS)[number];
 
-/** The view where a live run's current phase shows its work: the latency rounds and the path check on Latency, the
+/** The view where a live run's current phase shows its work: the latency rounds on Latency, the path check on Path, the
  *  probes on Capabilities, the CDN mapping on CDN. Network intel is too short to jump for, so it keeps the last one. */
 function liveView(r: Pick<RunState, 'phase'>, from: RunView = 'latency'): RunView {
-  if (r.phase === 'path') return 'path';
-  if (r.phase === 'probes') return 'caps';
-  if (r.phase === 'cdn') return 'cdn';
   if (r.phase === 'intel') return from === 'overview' ? 'latency' : from;
-  return 'latency';
+  return phaseTab(r.phase) ?? 'latency';
 }
 
 function parse(path: string): Route {

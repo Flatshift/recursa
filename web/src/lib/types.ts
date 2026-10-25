@@ -214,7 +214,7 @@ interface ResolverIntel {
   egress: IpInfo | null;
 }
 
-interface Edge {
+export interface Edge {
   ip: string;
   /** Minimum handshake RTT: the best estimate of path latency. */
   rtt_ms: number | null;

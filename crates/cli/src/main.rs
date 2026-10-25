@@ -134,21 +134,17 @@ async fn trace(cli: &Cli, target: &str) {
     }
     let ip: std::net::IpAddr = match target.parse() {
         Ok(ip) => ip,
-        Err(_) => {
-            let found = open_state(cli, false)
-                .resolvers()
-                .into_iter()
-                .find(|r| r.id == target || r.custom_id.as_deref() == Some(target) || r.aliases.iter().any(|a| a == target));
-            match found {
-                None => fail(&format!("No resolver or address called {target}.")),
-                Some(r) => r.ipv4.first().and_then(|a| a.parse().ok()).unwrap_or_else(|| fail("This resolver has no IPv4 address.")),
-            }
-        }
+        Err(_) => match open_state(cli, false).find_resolver(target) {
+            Err(_) => fail(&format!("No resolver or address called {target}.")),
+            Ok(r) => r.primary(false).unwrap_or_else(|| fail("This resolver has no IPv4 address.")),
+        },
     };
     let t = tokio::task::spawn_blocking(move || {
-        let mut t = trace::run(ip, &std::sync::atomic::AtomicBool::new(false))?;
-        trace::enrich(&mut t.hops, &recursa_engine::resolve::Resolve::new(recursa_engine::sysdns::discover()));
-        Ok::<_, String>(t)
+        trace::run_enriched(
+            ip,
+            &recursa_engine::resolve::Resolve::new(recursa_engine::sysdns::discover()),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
     })
     .await
     .unwrap()
@@ -242,16 +238,10 @@ async fn main() {
             } else {
                 let mut out: Vec<recursa_engine::ntp::Entry> = Vec::new();
                 for s in servers {
-                    let e = match cat.iter().find(|e| e.id == *s) {
-                        Some(e) => e.clone(),
-                        None => recursa_engine::ntp::custom_entry(s).unwrap_or_else(|m| {
-                            eprintln!("{m}");
-                            std::process::exit(if plugin { 3 } else { 2 });
-                        }),
-                    };
-                    if !out.iter().any(|x| x.id == e.id) {
-                        out.push(e);
-                    }
+                    recursa_engine::ntp::add_pick(&mut out, s, true).unwrap_or_else(|m| {
+                        eprintln!("{m}");
+                        std::process::exit(if plugin { 3 } else { 2 });
+                    });
                 }
                 out
             };
@@ -266,13 +256,13 @@ async fn main() {
             let (entries, skipped) = app.ntp_guard(&entries);
             if !plugin {
                 for s in &skipped {
-                    let mins = (s.until - recursa_engine::bench::now_ms()).max(0) / 60_000 + 1;
+                    let (mins, plural) = recursa_engine::ntp::minutes_until(s.until);
                     let why = if s.why == "kiss" {
                         format!("it told us to stop ({})", s.kiss.clone().unwrap_or_default())
                     } else {
                         "asked a few minutes ago".to_string()
                     };
-                    eprintln!("Leaving {} alone: {why} (about {mins} more minute{}).", s.host, if mins == 1 { "" } else { "s" });
+                    eprintln!("Leaving {} alone: {why} (about {mins} more minute{plural}).", s.host);
                 }
             }
             if entries.is_empty() {
@@ -286,7 +276,7 @@ async fn main() {
             }
             if !plugin {
                 let custom = recursa_engine::ntp::CUSTOM_SPACING.as_secs();
-                let spacing = if entries.iter().all(|e| e.kind == "custom") { custom } else { recursa_engine::ntp::MIN_SPACING.as_secs() };
+                let spacing = recursa_engine::ntp::run_spacing(&entries).as_secs();
                 let yours = if entries.iter().any(|e| e.kind == "custom") && spacing != custom {
                     format!(" (yours: {custom})")
                 } else {

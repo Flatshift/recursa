@@ -15,7 +15,7 @@
   import type { Resolver, RunState } from '../lib/types';
   import type { Row, Verdict } from '../lib/verdict';
   import { capCell, cdnCell, egressCell, roaCell, rovCell, type Cell as C } from '../lib/cells';
-  import { CAP } from '../lib/caps';
+  import { CAP, CAP_KEYS } from '../lib/caps';
   import { label } from '../lib/format';
   import Cell from './Cell.svelte';
   import Glyph from './Glyph.svelte';
@@ -56,8 +56,8 @@
   // Capabilities run down the page and resolvers across it, like a spec sheet: seventeen columns never fit, nine
   // resolvers do, and a capability every resolver shares collapses to one line.
   const groups: [Exclude<CapView, 'all'>, string, Line[]][] = $derived([
-    ['privacy', 'Privacy & security', [cap('dnssec'), cap('ecs'), cap('qmin'), cap('rebind')]],
-    ['blocking', 'Blocking', [cap('filter_malware'), cap('filter_phishing'), cap('filter_ads')]],
+    ['privacy', 'Privacy & security', CAP_KEYS.privacy.map(cap)],
+    ['blocking', 'Blocking', CAP_KEYS.blocking.map(cap)],
     [
       'routing',
       'Routing',
@@ -68,7 +68,7 @@
         { key: 'egress', label: 'Egress network', title: 'The network the resolver’s queries leave from for the Internet, from its egress address.', cell: (r) => egressCell(run, r.id) },
       ],
     ],
-    ['protocol', 'Protocol', [cap('ede'), cap('edns_version'), cap('cookies'), cap('tcp'), cap('dot'), cap('doh')]],
+    ['protocol', 'Protocol', CAP_KEYS.protocol.map(cap)],
   ]);
 
   // While the run works, a cell its check hasn't reached yet is a skeleton: the probes fill a resolver's column, the CDN

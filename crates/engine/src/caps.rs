@@ -22,11 +22,13 @@ pub struct Caps {
 }
 
 /// One row per build, in the order `docs/PLATFORMS.md` shows them.
-pub const BUILDS: [(&str, Caps); 4] =
-    [("macOS", Caps::MAC), ("Windows", Caps::WINDOWS), ("iOS", Caps::IOS), ("Browser (CLI)", Caps::BROWSER)];
+#[cfg(test)]
+const BUILDS: [(&str, Caps); 4] = [("macOS", Caps::MAC), ("Windows", Caps::WINDOWS), ("iOS", Caps::IOS), ("Browser (CLI)", Caps::BROWSER)];
 
 /// What each field means, for `docs/PLATFORMS.md`.
+#[cfg(test)]
 type Feature = (&'static str, fn(&Caps) -> bool);
+#[cfg(test)]
 const FEATURES: [Feature; 6] = [
     ("Export runs as CSV or JSON", |c| c.export),
     ("Settings in its own window", |c| c.settings_window),
@@ -46,7 +48,8 @@ impl Caps {
         Caps { export: true, settings_window: false, native_menus: false, app_menu: false, login_item: false, trace_route: true };
 
     /// `docs/PLATFORMS.md`: every feature against every build.
-    pub fn table() -> String {
+    #[cfg(test)]
+    fn table() -> String {
         let mut s = String::from(
             "# Platforms\n\nWhat each build of Recursa can do. Generated from `crates/engine/src/caps.rs` by\n`cargo test -p recursa-engine caps`; edit that file, not this one.\n\n| Feature |",
         );

@@ -6,57 +6,43 @@
   import type { CheckStatus, Resolver, RunState } from '../lib/types';
   import type { Row } from '../lib/verdict';
   import { capCell } from '../lib/cells';
-  import { CAP } from '../lib/caps';
+  import { CAP, CAP_KEYS } from '../lib/caps';
   import { ms } from '../lib/format';
+  import { GLYPH } from './Glyph.svelte';
   import Icon from './Icon.svelte';
   import PhaseStages, { type Stage } from './PhaseStages.svelte';
 
   let { run, rows }: { run: RunState; rows: Row[] } = $props();
 
   const AT_ONCE = 8;
-  const GROUPS: { title: string; tone: string; none?: string; checks: string[][] }[] = [
-    {
-      title: 'Privacy & security',
-      tone: 'var(--s-cached)',
-      checks: [
-        ['dnssec', 'DNSSEC'],
-        ['ecs', 'ECS'],
-        ['qmin', 'QNAME min'],
-        ['rebind', 'Rebinding'],
-      ],
-    },
+  // The column heads, short enough for a tile.
+  const CODE: Record<string, string> = {
+    dnssec: 'DNSSEC',
+    ecs: 'ECS',
+    qmin: 'QNAME min',
+    rebind: 'Rebinding',
+    filter_malware: 'Malware',
+    filter_phishing: 'Phishing',
+    filter_ads: 'Ads',
+    ede: 'EDE',
+    edns_version: 'EDNS',
+    cookies: 'Cookies',
+    tcp: 'TCP',
+    dot: 'DoT',
+    doh: 'DoH',
+  };
+  const GROUPS: { title: string; tone: string; none?: string; checks: string[] }[] = [
+    { title: 'Privacy & security', tone: 'var(--s-cached)', checks: CAP_KEYS.privacy },
     {
       title: 'Blocking',
       tone: 'var(--w-amber)',
       // A resolver that filters nothing answers all three with a note rather than a verdict: one cell says so.
       none: 'No filtering',
-      checks: [
-        ['filter_malware', 'Malware'],
-        ['filter_phishing', 'Phishing'],
-        ['filter_ads', 'Ads'],
-      ],
+      checks: CAP_KEYS.blocking,
     },
-    {
-      title: 'Protocol',
-      tone: 'var(--s-tld)',
-      checks: [
-        ['ede', 'EDE'],
-        ['edns_version', 'EDNS'],
-        ['cookies', 'Cookies'],
-        ['tcp', 'TCP'],
-        ['dot', 'DoT'],
-        ['doh', 'DoH'],
-      ],
-    },
+    { title: 'Protocol', tone: 'var(--s-tld)', checks: CAP_KEYS.protocol },
   ];
   const TOTAL = GROUPS.reduce((n, g) => n + g.checks.length, 0);
-  const GLYPH: Record<CheckStatus, 'check' | 'cross' | 'half' | 'info' | 'dash'> = {
-    pass: 'check',
-    fail: 'cross',
-    partial: 'half',
-    info: 'info',
-    unknown: 'dash',
-  };
 
   // Rows keep one order for the whole phase: fastest cached lookup first, from the phase that already ran.
   const cached = $derived(new Map(rows.flatMap((r) => (r.resolver ? [[r.target.resolver_id, r.dist.cached?.p50 ?? null]] : []))));
@@ -75,7 +61,7 @@
     for (const r of run.resolvers) {
       if (!run.probes[r.id]) continue;
       out[r.id] = GROUPS.flatMap((g) =>
-        g.checks.map(([key]) => {
+        g.checks.map((key) => {
           const c = capCell(run, r, key);
           return { status: c.status, tip: `${CAP[key].label}: ${c.text}` };
         }),
@@ -124,7 +110,7 @@
         {#each GROUPS as g}
           <span class="group" style:--tone={g.tone} style:--n={g.checks.length}>
             <span class="gt">{g.title}</span>
-            {#each g.checks as [, code]}<span class="code">{code}</span>{/each}
+            {#each g.checks as key}<span class="code">{CODE[key]}</span>{/each}
           </span>
         {/each}
       </span>

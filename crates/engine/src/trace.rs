@@ -47,7 +47,7 @@ pub struct Hop {
 type RoundProbes = Vec<(u8, Option<(IpAddr, f64)>)>;
 
 /// RFC 1918, 100.64/10, link-local and loopback (IPv6: ULA, link-local, loopback): the user's own network.
-pub fn is_private(ip: IpAddr) -> bool {
+pub(crate) fn is_private(ip: IpAddr) -> bool {
     crate::catalog::is_private(&ip)
 }
 
@@ -104,13 +104,20 @@ fn fold(rounds: &[RoundProbes], target: IpAddr) -> (Vec<Hop>, bool) {
 }
 
 /// Fill in `asn` and `holder` for each public hop from its first address (Team Cymru). A failed lookup leaves both null.
-pub fn enrich(hops: &mut [Hop], res: &Resolve) {
+pub(crate) fn enrich(hops: &mut [Hop], res: &Resolve) {
     for h in hops.iter_mut().filter(|h| !h.private) {
         let Some(&addr) = h.addrs.first() else { continue };
         let Ok(Some(o)) = cymru::origin_of(res, addr) else { continue };
         h.asn = Some(o.asn);
         h.holder = cymru::name_of(res, o.asn).ok().flatten().map(|n| cymru::holder_name(&n));
     }
+}
+
+/// [`run`], then name the hops with [`enrich`].
+pub fn run_enriched(target: IpAddr, res: &Resolve, cancel: &AtomicBool) -> Result<Trace, String> {
+    let mut t = run(target, cancel)?;
+    enrich(&mut t.hops, res);
+    Ok(t)
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -136,7 +143,7 @@ pub fn available() -> TraceCap {
 /// accepted for symmetry with the other probes but not polled: Trippy's `run_with` can't be stopped from its
 /// callback, and the worst case is bounded.
 #[cfg(not(target_os = "ios"))]
-pub fn run(target: IpAddr, cancel: &AtomicBool) -> Result<Trace, String> {
+pub(crate) fn run(target: IpAddr, cancel: &AtomicBool) -> Result<Trace, String> {
     let _ = cancel;
     run_live(target, 0, &|_| {})
 }
@@ -144,7 +151,7 @@ pub fn run(target: IpAddr, cancel: &AtomicBool) -> Result<Trace, String> {
 /// [`run`], handing `on_round` the trace as it stands after each round. Traces that run at the same time need
 /// distinct non-zero `id`s: each tracer drops replies carrying another's identifier (0 accepts any).
 #[cfg(not(target_os = "ios"))]
-pub fn run_live(target: IpAddr, id: u16, on_round: &dyn Fn(&Trace)) -> Result<Trace, String> {
+pub(crate) fn run_live(target: IpAddr, id: u16, on_round: &dyn Fn(&Trace)) -> Result<Trace, String> {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
     use trippy_core::{Builder, PrivilegeMode, ProbeStatus, Protocol};
@@ -192,12 +199,12 @@ pub fn run_live(target: IpAddr, id: u16, on_round: &dyn Fn(&Trace)) -> Result<Tr
 }
 
 #[cfg(target_os = "ios")]
-pub fn run(_target: IpAddr, _cancel: &AtomicBool) -> Result<Trace, String> {
+pub(crate) fn run(_target: IpAddr, _cancel: &AtomicBool) -> Result<Trace, String> {
     Err("Trace route is not available on this platform.".to_string())
 }
 
 #[cfg(target_os = "ios")]
-pub fn run_live(_target: IpAddr, _id: u16, _on_round: &dyn Fn(&Trace)) -> Result<Trace, String> {
+pub(crate) fn run_live(_target: IpAddr, _id: u16, _on_round: &dyn Fn(&Trace)) -> Result<Trace, String> {
     Err("Trace route is not available on this platform.".to_string())
 }
 
