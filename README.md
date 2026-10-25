@@ -11,6 +11,8 @@ It comes two ways, built from the same engine and interface:
 * **`recursa`**, a single command-line binary. It runs benchmarks in the terminal, or serves the same interface to your
   browser on `127.0.0.1`.
 
+[docs/PLATFORMS.md](docs/PLATFORMS.md) lists what each build can do.
+
 ## Install
 
 Download from the [Releases page](https://github.com/flatshift/recursa/releases). The builds are not yet signed with
@@ -28,10 +30,10 @@ a developer certificate, so each system warns once:
   installs for the current user and needs no administrator rights. When SmartScreen appears, choose **More info**, then
   **Run anyway**.
 
-Or build it yourself (Rust, Node 22.12+):
+Or build it yourself (Rust 1.88+, Node 22.12+, Python 3):
 
 ```bash
-./build.sh            # builds the UI, then the command-line binary
+./build.sh            # installs the UI's packages if needed, builds the UI, then the command-line binary
 ./build.sh app        # also bundles Recursa.app and a DMG (target/release/bundle/)
 ./target/release/recursa
 ```
@@ -43,9 +45,10 @@ Or build it yourself (Rust, Node 22.12+):
 | **Latency** | Cached, uncached (random names under unsigned wildcard zones, so the resolver must recurse) and TLD (random `.com` NXDOMAIN) lookups over UDP, TCP, DoT and DoH. Every resolver gets one query per round in shuffled order. |
 | **Timing precision** | UDP receive stamps come from the kernel (`SO_TIMESTAMP_MONOTONIC` on macOS, `SO_TIMESTAMPNS` on Linux, `SIO_TIMESTAMPING` on Windows 10 2004 and later) on dedicated, prioritized measurement threads (user-interactive QoS on macOS, time-critical priority on Windows). Queries are encoded before the send stamp. A loopback self-calibration publishes the instrument's own floor (≈ 45–50 µs on an M4 Max). |
 | **Interception** | Two independent signals. A TCP handshake to each resolver gives the true path RTT, and no genuine answer can beat it. The IP TTL of every UDP answer gives the router hops it crossed, and a public resolver 0–1 hops away is a device on your LAN (DNAT rules, or AP features such as UniFi DNS Assistance). Flagged targets are measured but not ranked, and their probes switch to encrypted DNS. A standalone check runs at startup with **Re-check**, or run `recursa check`. |
+| **Path** | Each run times a TCP handshake to every resolver and traces the route to it with ICMP probes of rising TTL, naming the network each hop belongs to. The run's Path tab shows both; `recursa trace` traces one resolver from the terminal. |
 | **Capabilities** | DNSSEC validation (and AD bit), EDNS(0) and version negotiation, ECS, QNAME minimisation, NSID and anycast site, DNS Cookies, Extended DNS Errors, NXDOMAIN rewriting, rebinding protection, TCP/DoT/DoH/IPv6 reachability. Every probe uses random labels so no cache can answer it, and each check keeps its evidence. |
 | **Blocking** | Ad/tracker hosts, and the malware, phishing and adult-content test domains that Cloudflare, Quad9 and Cisco OpenDNS publish for testing their blocking. Results show the block style (0.0.0.0, NXDOMAIN, block page, EDE 15–18), and **Not tested** for a check the run left off. For a closer look, Check live feeds on a resolver's page tests one resolver against live URLhaus and OpenPhish hosts. |
-| **CDN mapping** | Each resolver resolves DNS-steered CDN hostnames (Akamai, Microsoft, Apple, CloudFront, Google, Fastly, Meta; Cloudflare as an anycast control). Recursa times TCP handshakes to the edges returned and reports each resolver's penalty against the best edge seen. It labels why: on-net, ECS with your subnet, ECS with a substitute subnet, or resolver location. Edges inside your own ISP are marked. |
+| **CDN mapping** | Each resolver resolves DNS-steered CDN hostnames (Akamai, CloudFront, Google, Meta; Fastly and Cloudflare as anycast controls). Recursa times TCP handshakes to the edges returned and reports each resolver's penalty against the best edge seen. It labels why: on-net, ECS with your subnet, ECS with a substitute subnet, or resolver location. Edges inside your own ISP are marked. |
 | **Routing security** | RPKI ROA validity of the resolver's prefix, checked on this computer if you turn it on in Settings (a built-in RRDP validator; origin AS and prefix from Team Cymru), and the operator network's route-origin validation (RoVista). |
 | **Resolver page** | A read-only look at one resolver, from the Inspector or its menu, with a button for each check. **Sample 18 queries** sends 18 ordinary queries to give the spread of its latency, cold versus warm cache, how long answers stay cached, and the fields of one response (rcode, flags, EDNS, DNSSEC, EDE, NSID). A diagnostic, not a load test: the query count is fixed. **Check behaviour**, when you start it, tests large answers and TCP fallback, TTL caps, negative caching, DNSSEC with known-broken test names, how many caches sit behind the address, and what each transport's connection setup costs. **Check live feeds**, opt-in, asks it for live malware (URLhaus) and phishing (OpenPhish) hosts to gauge how well it blocks; a network's IDS/IPS (a UniFi gateway, Azure, a corporate firewall) may flag those lookups. **Live names go over DoT/DoH** except to your own resolver on the local network (a Pi-hole, your router), or when you allow plain DNS. |
 | **Link check** | While a run measures, Recursa pings your default gateway every 100 ms and times the replies with the same kernel stamps. If the link stalls (a Wi-Fi scan, a busy channel), the run says its scores are inflated, and on macOS names the likely cause. The scores are not changed. |
@@ -72,14 +75,17 @@ recursa ntp --all --format csv            # every catalog server; --format is ta
 recursa ntp --plugin                      # one-line monitoring check, exit 0 to 3 (-w, -c set the limits)
 recursa calibrate                         # measure the timing floor
 recursa list                              # resolver ids
+recursa trace cloudflare                  # the route to a resolver (an id or an address)
 ```
 
 ## Build
 
-Requirements: Rust 1.85+ (edition 2024) and Node 22.12+.
+Requirements: Rust 1.88+ (edition 2024), Node 22.12+ and Python 3. `./build.sh` runs these steps, the last only with `app`:
 
 ```bash
-cd web && npm install && npm run build && cd ..
+cd web && npm ci && cd ..
+python3 -I tools/notices.py                                      # third-party notices, embedded in both builds
+cd web && npm run build && cd ..
 cargo build --release                                            # the CLI
 cd crates/desktop && ../../web/node_modules/.bin/tauri build     # the app (Tauri 2), ad-hoc signed
 ```
@@ -104,6 +110,8 @@ crates/engine/src/   the engine (library), shared by both front ends
   clock.rs       one monotonic clock domain shared with kernel stamps
   net.rs         UDP (kernel stamps), TCP, DoT (rustls), DoH (HTTP/2) transports
   bench.rs       run orchestration: setup, warm-up, interleaved phases, path check, probes, CDN, intel
+  caps.rs        what each build can do: the UI reads it, and docs/PLATFORMS.md is generated from it
+  trace.rs       route trace with ICMP probes of rising TTL (Trippy), hops named by network, for the path check and `recursa trace`
   probes.rs      capability and blocking probes with evidence
   catalog.rs     resolver catalog: curated, system and custom resolvers in one shape (data/catalog.json)
   names.rs       names for the Cached test: checking, importing and parsing lists
@@ -131,6 +139,8 @@ crates/cli/src/      the `recursa` binary
   main.rs        CLI commands and server start-up
   server.rs      HTTP transport: embedded UI, API, SSE, export; Host/Origin/token guards
 crates/desktop/src/  the desktop app (Tauri 2)
+  lib.rs         the app: engine in-process, UI in the system WebView
+  mobile.rs      the iOS shell: one window, none of the desktop chrome
   ipc.rs         IPC transport: API calls, live run channels, native save and confirm dialogs
   shell.rs       window, app menu, menu-bar item, launch at login
   chrome.rs      keeps the page clear of the macOS title bar and full-screen menu bar
@@ -139,7 +149,8 @@ data/
   catalog.json   curated resolvers and their published claims
   incidents.json sourced incident history
   ntp.json       curated NTP servers and what their operators publish
-tools/           notices.py (third-party notices), icons.mjs (app icons), pending.py (checks docs/PENDING.md, the fixes we wait on upstream); dev helper: gen-monitor.py (synthetic monitoring history)
+docs/            PLATFORMS.md (generated from caps.rs), PENDING.md (fixes we wait on upstream)
+tools/           notices.py (third-party notices), icons.mjs (app icons), pending.py (checks docs/PENDING.md); dev helpers: gen-monitor.py (synthetic monitoring history), shoot.mjs (headless Chrome screenshots of the UI), crop.swift (crops them)
 web/             Svelte 5 + Vite + TypeScript interface; lib/api.ts picks HTTP or IPC at runtime
 ```
 
@@ -171,6 +182,8 @@ if another run is in progress, and only one process records monitoring for a giv
   and restart Recursa. Answers without a stamp are timed in userspace, loopback answers always are, and the
   Method page says which applied and how to change it. The Windows link check times each echo in userspace, and
   reports only how late its own ticks ran, not loopback echoes or interface counters.
+* Tracing a route needs Administrator on Windows and CAP_NET_RAW or root on Linux; macOS runs it as the user.
+  Without it, the path check times handshakes only.
 * Background monitoring runs while Recursa is running; it isn't installed as a system service.
 
 ## License
