@@ -4,7 +4,7 @@ use crate::ntp::{Consensus, ServerResult, Skipped};
 use serde_json::{Value, json};
 
 /// Bumped when a field is renamed, removed or changes meaning. Adding a field does not bump it.
-pub const SCHEMA_VERSION: u32 = 1;
+pub(crate) const SCHEMA_VERSION: u32 = 1;
 
 pub fn to_json(results: &[ServerResult], consensus: Option<&Consensus>) -> Value {
     json!({ "schema_version": SCHEMA_VERSION, "results": results, "consensus": consensus })
@@ -53,7 +53,7 @@ fn flag(v: Option<bool>) -> String {
 }
 
 /// What happened to a server in one word: `ok`, or the reason nothing was measured.
-pub fn status(r: &ServerResult) -> String {
+pub(crate) fn status(r: &ServerResult) -> String {
     if r.ok > 0 { "ok".into() } else { r.error_kind.clone().unwrap_or_else(|| "no_answer".into()) }
 }
 

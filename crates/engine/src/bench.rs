@@ -33,7 +33,7 @@ pub(crate) const ACCURATE_GAP: Duration = Duration::from_millis(4);
 /// instead of about 4 s. Cached and Uncached are not paced this way.
 pub(crate) const TLD_RESOLVER_GAP: Duration = Duration::from_millis(100);
 
-pub const CACHED_NAMES: &[&str] = &[
+pub(crate) const CACHED_NAMES: &[&str] = &[
     "www.google.com",
     "www.youtube.com",
     "www.wikipedia.org",
@@ -47,7 +47,7 @@ pub const CACHED_NAMES: &[&str] = &[
 /// synthesis is possible, so each query forces the resolver to ask the authority.
 /// Each is hosted by a different DNS provider (NS1, Vercel, Google Cloud DNS, Route 53),
 /// so the Uncached test isn't a measure of the path to one of them. Setup checks them first.
-pub const UNCACHED_ZONES: &[&str] = &["github.io", "vercel.app", "firebaseapp.com", "onrender.com"];
+pub(crate) const UNCACHED_ZONES: &[&str] = &["github.io", "vercel.app", "firebaseapp.com", "onrender.com"];
 /// TLDs for the TLD test, each run by a different registry operator (Verisign, Identity Digital, Nominet).
 /// Each proves a name doesn't exist with hashed, opt-out NSEC3, from which no resolver may answer a different
 /// name (RFC 8198). Setup checks them first.
@@ -89,7 +89,7 @@ pub enum TestKind {
 impl TestKind {
     const ALL: [TestKind; 3] = [TestKind::Cached, TestKind::Uncached, TestKind::Tld];
 
-    pub fn key(self) -> &'static str {
+    pub(crate) fn key(self) -> &'static str {
         match self {
             TestKind::Cached => "cached",
             TestKind::Uncached => "uncached",
@@ -213,7 +213,7 @@ pub enum Outcome {
 impl Outcome {
     /// The user got no answer they could use and the cause sits at the resolver or on the path to it, so the
     /// speed score charges it like a timeout. A filter's block or rewrite is the resolver doing as configured.
-    pub fn costs(self) -> bool {
+    pub(crate) fn costs(self) -> bool {
         matches!(self, Outcome::Servfail | Outcome::Refused | Outcome::Rcode | Outcome::Neterr | Outcome::Unreachable)
     }
 }
@@ -476,7 +476,7 @@ pub struct Deps {
     pub on_finish: Box<dyn FnOnce(&RunState) + Send>,
 }
 
-pub fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
@@ -484,7 +484,7 @@ fn new_id() -> String {
     format!("{:x}{:04x}", now_ms(), fastrand::u16(..))
 }
 
-pub fn spawn(mut cfg: RunConfig, mut deps: Deps) -> Arc<RunHandle> {
+pub(crate) fn spawn(mut cfg: RunConfig, mut deps: Deps) -> Arc<RunHandle> {
     cfg.samples = cfg.samples.clamp(3, 500);
     cfg.tests.sort();
     cfg.tests.dedup();
@@ -1272,7 +1272,7 @@ pub struct Stall {
 /// Where a resolver answered normally and then went silent, or began refusing: at least five unanswered
 /// queries in a row at the end, after at least five answered with almost none lost. That is what a rate
 /// limit looks like from here, though so is a network that dropped; the note says which it can't tell.
-pub fn stalls(s: &RunState) -> Vec<Stall> {
+pub(crate) fn stalls(s: &RunState) -> Vec<Stall> {
     let mut seq: BTreeMap<(u16, TestKind), Vec<(u32, Outcome)>> = BTreeMap::new();
     for x in s.samples.iter().filter(|x| !x.x) {
         seq.entry((x.t, x.k)).or_default().push((x.i, x.o));
@@ -1909,9 +1909,9 @@ fn run_probes(h: &RunHandle, selected: &[Resolver], intercepted: &[String], ctx:
 /// A resolver on this network's own address space: RFC 1918, unique-local or link-local. Not shared (CGNAT,
 /// Tailscale) space or a loopback stub, which forward to somewhere else.
 pub(crate) fn on_local_network(ip: &IpAddr) -> bool {
-    match ip {
+    match ip.to_canonical() {
         IpAddr::V4(v) => v.is_private() || v.is_link_local(),
-        IpAddr::V6(v) => (v.segments()[0] & 0xfe00) == 0xfc00 || (v.segments()[0] & 0xffc0) == 0xfe80,
+        IpAddr::V6(v) => v.is_unique_local() || v.is_unicast_link_local(),
     }
 }
 
@@ -2497,7 +2497,7 @@ fn failure_cost_of(stats: &BTreeMap<String, stats::Summary>) -> f64 {
     if sent == 0 { 0.0 } else { TIMEOUT_COST_MS * to as f64 / sent as f64 }
 }
 
-pub fn success(t: &TargetInfo) -> f64 {
+pub(crate) fn success(t: &TargetInfo) -> f64 {
     let (ok, sent) = t.stats.values().filter(|s| !s.limited).fold((0u32, 0u32), |(o, n), s| (o + s.ok, n + s.sent));
     if sent == 0 { 0.0 } else { ok as f64 / sent as f64 }
 }
@@ -2627,7 +2627,7 @@ fn fnv1a(s: &str) -> u32 {
 }
 
 /// Small summary stored alongside each run for the history list and the CLI.
-pub fn summary(s: &RunState) -> Value {
+pub(crate) fn summary(s: &RunState) -> Value {
     // The fastest pick, and the next resolver when this run can't tell the two apart.
     let label = |t: &TargetInfo| format!("{} {}", t.provider, t.variant).trim().to_string();
     let picks: Vec<Ranked> = ranked(s).into_iter().filter(|r| r.eligible() && !is_baseline(s, r.target)).collect();
@@ -2688,7 +2688,7 @@ mod tests {
 
     #[test]
     fn cost_is_the_winsorised_mean_and_cached_weighs_most() {
-        let r = crate::catalog::builtin().into_iter().find(|r| r.id == "cloudflare").unwrap();
+        let r = crate::catalog::by_id("cloudflare");
         let mk = |w: f64| {
             let mut t = TargetInfo::new(&r, Transport::Udp, false, r.primary(false).unwrap());
             for k in ["cached", "uncached", "tld"] {
@@ -2724,7 +2724,7 @@ mod tests {
 
     #[test]
     fn timeouts_cost_a_retry_in_the_composite() {
-        let r = crate::catalog::builtin().into_iter().find(|r| r.id == "cloudflare").unwrap();
+        let r = crate::catalog::by_id("cloudflare");
         let mut t = TargetInfo::new(&r, Transport::Udp, false, r.primary(false).unwrap());
         for k in ["cached", "uncached", "tld"] {
             t.stats.insert(k.into(), stats::Summary { sent: 100, wmean: 10.0, ..Default::default() });
@@ -2763,7 +2763,7 @@ mod tests {
 
     /// A finished run with the given resolvers (one UDP target each) and samples `(target, test, round, outcome, at ms)`.
     fn run_with(ids: &[&str], samples: &[(u16, TestKind, u32, Outcome, u32)]) -> RunState {
-        let resolvers: Vec<Resolver> = ids.iter().map(|id| crate::catalog::builtin().into_iter().find(|r| r.id == *id).unwrap()).collect();
+        let resolvers: Vec<Resolver> = ids.iter().map(|id| crate::catalog::by_id(id)).collect();
         let targets = resolvers
             .iter()
             .enumerate()
@@ -2989,7 +2989,7 @@ mod tests {
         let mut local = crate::catalog::system_entries(&["192.168.1.53".parse().unwrap()]).remove(0);
         local.forwarder = Some("Pi-hole (dnsmasq-pi-hole-v2.93)".into());
         let isp = crate::catalog::system_entries(&["203.0.113.9".parse().unwrap()]).remove(0);
-        let cf = crate::catalog::builtin().into_iter().find(|r| r.id == "cloudflare").unwrap();
+        let cf = crate::catalog::by_id("cloudflare");
         let target = |r: &Resolver, p50: f64, idx: usize| {
             let mut t = TargetInfo::new(r, Transport::Udp, false, r.primary(false).unwrap());
             t.idx = idx;
@@ -3041,7 +3041,7 @@ mod tests {
         let mut v = vec![10.0; 20];
         let base = stats::summarize(&mut v, 20, 0, 0, 0);
         let target = |id: &str, p50: f64, idx: usize| {
-            let r = crate::catalog::builtin().into_iter().find(|r| r.id == id).unwrap();
+            let r = crate::catalog::by_id(id);
             let mut t = TargetInfo::new(&r, Transport::Udp, false, r.primary(false).unwrap());
             t.idx = idx;
             t.state = "ready".into();
@@ -3090,7 +3090,7 @@ mod tests {
 
     #[test]
     fn close_scores_are_tied_and_clear_gaps_are_not() {
-        let cf = crate::catalog::builtin().into_iter().find(|r| r.id == "cloudflare").unwrap();
+        let cf = crate::catalog::by_id("cloudflare");
         let target = |idx: usize| {
             let mut t = TargetInfo::new(&cf, Transport::Udp, false, cf.primary(false).unwrap());
             t.idx = idx;

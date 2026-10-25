@@ -6,22 +6,18 @@
   import { untrack } from 'svelte';
   import type { CdnCell, RunState } from '../lib/types';
   import type { Row } from '../lib/verdict';
-  import { holder, ms } from '../lib/format';
+  import { app } from '../lib/store.svelte';
+  import { ms } from '../lib/format';
+  import { edgeNets, median, silentEdges } from '../lib/cdn';
   import CdnLogo from './CdnLogo.svelte';
+  import EdgeNets from './EdgeNets.svelte';
   import PhaseStages, { type Stage } from './PhaseStages.svelte';
 
   let { run, rows }: { run: RunState; rows: Row[] } = $props();
 
   // The engine's catalog, in its order: hostnames asked per CDN, anycast controls last.
-  const CDNS = [
-    { id: 'akamai', name: 'Akamai', hosts: 5 },
-    { id: 'cloudfront', name: 'CloudFront', hosts: 3 },
-    { id: 'google', name: 'Google', hosts: 3 },
-    { id: 'meta', name: 'Meta', hosts: 3 },
-    { id: 'fastly', name: 'Fastly', hosts: 1, any: true },
-    { id: 'cloudflare', name: 'Cloudflare', hosts: 1, any: true },
-  ];
-  const ASKED = CDNS.reduce((n, c) => n + c.hosts, 0);
+  const CDNS = $derived((app.boot?.method.cdns ?? []).map((c) => ({ id: c.id, name: c.name, hosts: c.hosts.length, any: c.role === 'control' })));
+  const ASKED = $derived(CDNS.reduce((n, c) => n + c.hosts, 0));
 
   // Rows keep the order the ranking had when the mapping began: the live ranking moves too fast to follow.
   const first = untrack(() => rows.flatMap((r) => (r.resolver ? [r.target.resolver_id] : [])));
@@ -42,7 +38,7 @@
   );
   const timing = $derived(run.cdn_timing);
   const best = $derived(timing?.best ?? {});
-  const silent = $derived(new Set((timing?.silent ?? []).filter((ip) => best[ip] == null)));
+  const silent = $derived(new Set(silentEdges(timing)));
   const stage = $derived(run.phase === 'intel' && run.cdn ? 'name' : run.phase !== 'cdn' ? 'wait' : timing ? 'time' : 'ask');
   const timed = $derived(stage === 'time' || stage === 'name');
 
@@ -56,18 +52,10 @@
   const named = $derived(edges.filter((e) => e.asn != null).length);
   const enter = new Map<string, number>();
   const nets = $derived.by(() => {
-    const m = new Map<string, { key: string; name: string; n: number; you: boolean }>();
-    for (const e of edges) {
-      if (e.asn == null) continue;
-      const key = String(e.asn);
-      const x = m.get(key) ?? { key, name: holder(e.holder) || `AS${e.asn}`, n: 0, you: false };
-      x.n++;
-      x.you ||= e.on_net;
-      m.set(key, x);
-    }
+    const all = edgeNets(edges);
     let batch = 0;
-    for (const k of m.keys()) if (!enter.has(k)) enter.set(k, batch++ * 90);
-    return [...m.values()];
+    for (const x of all) if (!enter.has(x.key)) enter.set(x.key, batch++ * 90);
+    return all;
   });
 
   const stages = $derived.by((): Stage[] => [
@@ -119,10 +107,6 @@
     if (colBest[id] != null && v <= colBest[id] + 2) return 'var(--good)';
     return v < 20 ? 'var(--w-amber)' : v < 80 ? 'var(--w-ember)' : 'var(--w-rose)';
   };
-  const median = (v: number[]) => {
-    const s = [...v].sort((a, b) => a - b);
-    return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
-  };
   const cellMs = (c: CdnCell | undefined) => {
     const t = (c?.ips ?? []).flatMap((ip) => (best[ip] != null ? [best[ip]] : []));
     return t.length ? median(t) : null;
@@ -147,16 +131,10 @@
     </div>
     {#if stage !== 'wait'}
       <PhaseStages {stages} label="CDN mapping progress" />
-      {#if stage === 'name' && nets.length}
-        <div class="nets" aria-live="polite">
-          <span class="nets-h">Edge networks</span>
-          {#each nets as x (x.key)}
-            <span class="net" class:you={x.you} style:animation-delay="{enter.get(x.key) ?? 0}ms"
-              >{x.name} <span class="num nn">{x.n}</span>{#if x.you}<span class="nyou">your ISP</span>{/if}</span
-            >
-          {/each}
+      {#if stage === 'name'}
+        <EdgeNets {nets} live {enter}>
           {#if named < edges.length}<span class="naming">naming {edges.length - named} more</span>{/if}
-        </div>
+        </EdgeNets>
       {/if}
     {/if}
   </header>
@@ -514,40 +492,6 @@
     animation: none;
   }
 
-  .nets {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    font-size: var(--t-xs);
-    color: var(--ink-2);
-  }
-  .nets-h {
-    margin-right: 4px;
-    color: var(--ink-3);
-    font-weight: 600;
-  }
-  .net {
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--w-rose) 9%, var(--surface));
-    border: 1px solid color-mix(in srgb, var(--w-rose) 35%, var(--rule));
-    white-space: nowrap;
-    animation: pop 420ms var(--ease-out) both;
-  }
-  .nn {
-    color: var(--ink-3);
-    margin-left: 2px;
-  }
-  .net.you {
-    border-color: var(--good);
-    color: var(--ink);
-  }
-  .nyou {
-    margin-left: 6px;
-    color: var(--good);
-    font-weight: 600;
-  }
   .naming {
     color: var(--ink-3);
     animation: breathe 1.4s ease-in-out infinite;
@@ -653,7 +597,6 @@
     .asking,
     .arrive,
     .deadband,
-    .net,
     .naming,
     .track.timing::before,
     .track.timing::after {

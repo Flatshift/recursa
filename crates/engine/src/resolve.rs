@@ -17,7 +17,7 @@ impl Resolve {
 
     /// Ask the first system resolver that answers. Any answer counts, SERVFAIL and NXDOMAIN
     /// included: the caller decides what those mean. Two passes over the servers on timeouts.
-    pub fn query(&self, name: &str, qtype: u16) -> Result<dns::Message, String> {
+    pub(crate) fn query(&self, name: &str, qtype: u16) -> Result<dns::Message, String> {
         if self.servers.is_empty() {
             return Err("no system resolver found".into());
         }

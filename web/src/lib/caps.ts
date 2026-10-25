@@ -167,6 +167,13 @@ export const CAPS: CapDef[] = [
 
 export const CAP = Object.fromEntries(CAPS.map((c) => [c.key, c])) as Record<string, CapDef>;
 
+/** The probed checks the Capabilities view and the live probe board both group, in column order. */
+export const CAP_KEYS = {
+  privacy: ['dnssec', 'ecs', 'qmin', 'rebind'],
+  blocking: ['filter_malware', 'filter_phishing', 'filter_ads'],
+  protocol: ['ede', 'edns_version', 'cookies', 'tcp', 'dot', 'doh'],
+};
+
 export const PUBLISHED_ONLY: { key: string; label: string; explain: string; get: (p: Published) => boolean | null | undefined; ref?: string }[] = [
   { key: 'doq', label: 'DNS over QUIC', explain: 'Encrypted DNS over QUIC (UDP 853): TLS-grade privacy with lower handshake cost.', ref: 'RFC 9250', get: (p) => p.doq },
   { key: 'dnscrypt', label: 'DNSCrypt', explain: 'An older, non-IETF encrypted DNS protocol, still offered by some operators.', get: (p) => p.dnscrypt },

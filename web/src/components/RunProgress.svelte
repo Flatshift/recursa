@@ -2,30 +2,13 @@
   import { untrack } from 'svelte';
   import type { RunState } from '../lib/types';
   import { duration, label } from '../lib/format';
+  import { isCheck, phaseName, phasesOf } from '../lib/phases';
+  import { silentEdges } from '../lib/cdn';
   import { rise } from '../lib/motion';
 
   let { run }: { run: RunState } = $props();
 
-  const NAMES: Record<string, string> = {
-    setup: 'Setup',
-    warmup: 'Warm-up',
-    cached: 'Cached',
-    uncached: 'Uncached',
-    tld: 'TLD',
-    path: 'Path check',
-    probes: 'Probes',
-    cdn: 'CDN mapping',
-    intel: 'Network intel',
-  };
-  const phases = $derived([
-    'setup',
-    'warmup',
-    ...run.config.tests,
-    'path',
-    ...(run.config.probes ? ['probes'] : []),
-    ...(run.config.cdn ? ['cdn'] : []),
-    'intel',
-  ]);
+  const phases = $derived(phasesOf(run.config));
   const idx = $derived(run.phase === 'done' ? phases.length : phases.indexOf(run.phase));
   const running = $derived(run.status === 'running');
   // CDN mapping is a short round of lookups (about a fifth of it) and then the edge timing, each with its own count.
@@ -36,8 +19,7 @@
     return run.phase === 'cdn' ? 0.2 * f : f;
   });
   // The checks after the latency rounds report per handshake (the path check) or per resolver. Until a check has reported, its track sweeps; from the first report it fills.
-  const QUIET = new Set(['path', 'probes', 'cdn', 'intel']);
-  const busy = $derived(QUIET.has(run.phase) && run.done === 0);
+  const busy = $derived(isCheck(run.phase) && run.done === 0);
 
   // What the phase is doing, in a line above the rail, so the run says what it is busy with as well as how far along.
   const WORK: Record<string, string> = {
@@ -77,7 +59,7 @@
     if (run.phase === 'cdn') {
       if (run.cdn_timing) {
         const t = run.cdn_timing;
-        const quiet = (t.silent ?? []).filter((ip) => t.best?.[ip] == null).length;
+        const quiet = silentEdges(t).length;
         return `${t.edges} edges, ${t.timed} of ${t.total} handshakes${quiet ? `, ${quiet} silent` : ''}`;
       }
       return run.total > 0 && run.done >= run.total ? 'Timing edges' : `${run.done} of ${run.total} resolvers`;
@@ -92,7 +74,7 @@
     <p class="head">
       {#key run.phase}
         <span class="what" in:rise={{ on: true }}>
-          <b>{NAMES[run.phase] ?? run.phase}</b>
+          <b>{phaseName(run.phase)}</b>
           <span class="desc">{WORK[run.phase] ?? ''}</span>
         </span>
       {/key}
@@ -104,12 +86,12 @@
     <ol class="rail" aria-label="Run progress">
       {#each phases as p, i}
         <li class:done={i < idx} class:now={i === idx} class:busy={i === idx && busy} aria-current={i === idx ? 'step' : undefined}>
-          <span class="lbl">{NAMES[p] ?? p}</span>
+          <span class="lbl">{phaseName(p)}</span>
           <span class="track"><span class="fill" style:transform="scaleX({i < idx ? 1 : i === idx ? frac : 0})"></span></span>
         </li>
       {/each}
     </ol>
-    <p class="visually-hidden" aria-live="polite">{NAMES[run.phase] ?? run.phase} phase</p>
+    <p class="visually-hidden" aria-live="polite">{phaseName(run.phase)} phase</p>
   </div>
 {/if}
 

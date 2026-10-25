@@ -1,7 +1,33 @@
-import type { CdnInfo, Mapping, Reference } from './types';
+import type { CdnInfo, CdnTiming, Edge, Mapping, Reference } from './types';
+import { holder } from './format';
 
 /** The edge addresses a resolver returned for a CDN, across its hostnames. */
 export const edgeIps = (m: Mapping | undefined): string[] => [...new Set(Object.values(m?.hosts ?? {}).flatMap((h) => h.ips))];
+
+/** The edges that never answered a handshake: listed as silent and still without a time. */
+export const silentEdges = (t: Pick<CdnTiming, 'best' | 'silent'> | undefined): string[] => (t?.silent ?? []).filter((ip) => t?.best?.[ip] == null);
+
+export interface EdgeNet {
+  key: string;
+  name: string;
+  n: number;
+  you: boolean;
+}
+
+/** The networks the edges sit in, with how many edges each holds. `ranked` puts your ISP first, then the largest. */
+export function edgeNets(edges: Edge[], ranked = false): EdgeNet[] {
+  const m = new Map<string, EdgeNet>();
+  for (const e of edges) {
+    if (e.asn == null) continue;
+    const key = String(e.asn);
+    const x = m.get(key) ?? { key, name: holder(e.holder) || `AS${e.asn}`, n: 0, you: false };
+    x.n++;
+    x.you ||= e.on_net;
+    m.set(key, x);
+  }
+  const out = [...m.values()];
+  return ranked ? out.sort((a, b) => Number(b.you) - Number(a.you) || b.n - a.n) : out;
+}
 
 /** The penalty a cell shows. A CDN needs two usable hostnames for its own; an anycast control with one hostname shows that one. */
 export function cellPenalty(c: CdnInfo, m: Mapping | undefined): number | null {
@@ -15,7 +41,7 @@ export function level(m: Mapping | undefined): boolean {
   return ok.length > 0 && ok.every((h) => h.same);
 }
 
-const median = (v: number[]) => {
+export const median = (v: number[]) => {
   const s = [...v].sort((a, b) => a - b);
   return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
 };

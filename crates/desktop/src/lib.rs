@@ -67,7 +67,7 @@ pub fn run() {
         Err((message, e)) => fail(message, &e),
     };
 
-    #[allow(unused_mut)]
+    #[cfg_attr(mobile, allow(unused_mut))]
     let mut builder = tauri::Builder::default();
     // Must come first: a second launch just brings the running app forward. A smoke run
     // must test its own process, not hand off to an open copy and exit 0.

@@ -103,16 +103,16 @@ struct State {
 
 impl Rpki {
     /// `dir` is `<data dir>/rpki`. Nothing is read or created until it is needed.
-    pub fn new(dir: PathBuf, store: Arc<Store>, measuring: Arc<AtomicBool>) -> Arc<Self> {
+    pub(crate) fn new(dir: PathBuf, store: Arc<Store>, measuring: Arc<AtomicBool>) -> Arc<Self> {
         Arc::new(Rpki { dir, store, measuring, epoch: AtomicU64::new(0), state: Mutex::default() })
     }
 
-    pub fn enabled(&self) -> bool {
+    pub(crate) fn enabled(&self) -> bool {
         self.store.setting(SETTING).and_then(|v| v.as_bool()).unwrap_or(false)
     }
 
     /// Whether a sync is running in this process.
-    pub fn syncing(&self) -> bool {
+    pub(crate) fn syncing(&self) -> bool {
         self.state.lock().unwrap().syncing_since.is_some()
     }
 
@@ -139,7 +139,7 @@ impl Rpki {
     }
 
     /// Turns the check on or off. Off deletes the cache; on starts the first sync.
-    pub fn set_enabled(self: &Arc<Self>, on: bool) -> Value {
+    pub(crate) fn set_enabled(self: &Arc<Self>, on: bool) -> Value {
         self.store.set_setting(SETTING, &json!(on));
         if on {
             self.start_sync();
@@ -309,7 +309,7 @@ impl Rpki {
     }
 
     /// State for the Settings page: off | syncing | ready | error, and the numbers behind it.
-    pub fn status(&self) -> Value {
+    pub(crate) fn status(&self) -> Value {
         let enabled = self.enabled();
         if enabled {
             self.load();
@@ -344,7 +344,7 @@ impl Rpki {
 
     /// The `rpki` member of an address's intel: the RFC 6811 state of `prefix` announced by AS`asn`,
     /// in the shape the UI reads. Never waits for a sync and never fails.
-    pub fn lookup(self: &Arc<Self>, asn: u64, prefix: &str) -> Value {
+    pub(crate) fn lookup(self: &Arc<Self>, asn: u64, prefix: &str) -> Value {
         if !self.enabled() {
             return not_checked("off", "Off. It can be turned on in Settings.");
         }

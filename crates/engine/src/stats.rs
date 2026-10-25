@@ -45,6 +45,11 @@ pub fn quantile(sorted: &[f64], q: f64) -> f64 {
     sorted[lo] + (h - lo as f64) * (sorted[hi] - sorted[lo])
 }
 
+/// Nearest-rank value at `q` over sorted data, or `None` when there is none.
+pub fn nearest_rank<T: Copy>(sorted: &[T], q: f64) -> Option<T> {
+    (!sorted.is_empty()).then(|| sorted[((sorted.len() - 1) as f64 * q).round() as usize])
+}
+
 /// `ms` holds round trips (milliseconds) of successful queries only.
 pub fn summarize(ms: &mut [f64], sent: u32, timeouts: u32, errors: u32, failures: u32) -> Summary {
     ms.sort_by(|a, b| a.total_cmp(b));

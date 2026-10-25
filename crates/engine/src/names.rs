@@ -7,10 +7,10 @@
 use std::net::IpAddr;
 
 /// The most names one list may hold. Each round asks one name, so more names only spread the samples thinner.
-pub const MAX_NAMES: usize = 50;
+pub(crate) const MAX_NAMES: usize = 50;
 
 /// What the Cached test asks unless the list is changed.
-pub fn defaults() -> Vec<String> {
+pub(crate) fn defaults() -> Vec<String> {
     crate::bench::CACHED_NAMES.iter().map(|s| s.to_string()).collect()
 }
 

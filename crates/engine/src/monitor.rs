@@ -34,6 +34,18 @@ impl Default for MonitorConfig {
     }
 }
 
+impl MonitorConfig {
+    /// Within sane bounds, as [`crate::ntp_monitor::NtpMonitorConfig::clamped`]: a resolver at most once, at most 24 of them.
+    pub fn clamped(mut self) -> Self {
+        self.interval_min = self.interval_min.clamp(1, 1440);
+        self.retention_days = self.retention_days.clamp(1, 365);
+        let mut seen = std::collections::HashSet::new();
+        self.resolvers.retain(|id| seen.insert(id.clone()));
+        self.resolvers.truncate(24);
+        self
+    }
+}
+
 pub fn spawn(app: Arc<AppState>) {
     tokio::spawn(async move {
         let mut last_cycle = 0i64;
@@ -444,7 +456,7 @@ impl HistoryBuilder {
 
 /// Nearest-rank quantile over sorted µs, in ms.
 fn pct(sorted: &[u32], q: f64) -> Option<f64> {
-    (!sorted.is_empty()).then(|| sorted[((sorted.len() - 1) as f64 * q).round() as usize] as f64 / 1000.0)
+    crate::stats::nearest_rank(sorted, q).map(|us| us as f64 / 1000.0)
 }
 
 #[cfg(test)]

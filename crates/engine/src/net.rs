@@ -57,7 +57,7 @@ pub struct Reply {
 }
 
 /// Router hops an answer crossed, assuming the sender used a common initial TTL.
-pub fn hops(ttl: u8) -> u8 {
+pub(crate) fn hops(ttl: u8) -> u8 {
     let initial = if ttl > 128 {
         255
     } else if ttl > 64 {
@@ -117,7 +117,7 @@ pub trait Exchanger: Send {
 
 /// Open a transport for `ep`. Stream transports connect (and handshake) here, outside
 /// of any timed query.
-pub fn open(ep: &Endpoint, timeout: Duration) -> Result<Box<dyn Exchanger>, XErr> {
+pub(crate) fn open(ep: &Endpoint, timeout: Duration) -> Result<Box<dyn Exchanger>, XErr> {
     Ok(match ep.transport {
         Transport::Udp => Box::new(UdpX::connect(ep.addr).map_err(io_err)?),
         Transport::Tcp => {
@@ -157,7 +157,7 @@ const MAX_MSG: usize = 65535;
 
 #[cfg(unix)]
 impl UdpX {
-    pub fn connect(addr: SocketAddr) -> io::Result<Self> {
+    pub(crate) fn connect(addr: SocketAddr) -> io::Result<Self> {
         use socket2::{Domain, Protocol, Socket, Type};
         let sock = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP))?;
         sock.set_nonblocking(true)?;
@@ -168,7 +168,7 @@ impl UdpX {
         Ok(UdpX { sock, kernel_ts, buf: vec![0u8; MAX_MSG].into_boxed_slice(), cmsg: [0u64; 32] })
     }
 
-    pub fn kernel_timestamps(&self) -> bool {
+    pub(crate) fn kernel_timestamps(&self) -> bool {
         self.kernel_ts
     }
 
@@ -247,7 +247,7 @@ pub(crate) fn enable_rx_timestamps_fd(fd: libc::c_int) -> bool {
 }
 
 /// Ask the kernel to stamp datagrams arriving on a plain std socket (see [`recv_stamped`]). False where unsupported.
-pub fn stamp_arrivals(sock: &std::net::UdpSocket) -> bool {
+pub(crate) fn stamp_arrivals(sock: &std::net::UdpSocket) -> bool {
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
@@ -284,7 +284,7 @@ unsafe fn arrival_stamp(c: *const libc::cmsghdr) -> Option<u64> {
 
 /// Receive one datagram on a std socket, with the kernel's arrival stamp when [`stamp_arrivals`] worked: the moment the
 /// packet came in, not the moment this thread got scheduled to read it. Honours the socket's read timeout.
-pub fn recv_stamped(sock: &std::net::UdpSocket, buf: &mut [u8]) -> io::Result<(usize, Option<u64>)> {
+pub(crate) fn recv_stamped(sock: &std::net::UdpSocket, buf: &mut [u8]) -> io::Result<(usize, Option<u64>)> {
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
@@ -437,7 +437,7 @@ mod win {
     }
 
     /// Ask the stack to stamp datagrams as they arrive. False where unsupported (older Windows 10).
-    pub fn enable_rx_timestamps(s: SOCKET) -> bool {
+    pub(crate) fn enable_rx_timestamps(s: SOCKET) -> bool {
         let cfg = TIMESTAMPING_CONFIG { Flags: TIMESTAMPING_FLAG_RX, TxTimestampsBuffered: 0 };
         let mut out = 0u32;
         let r = unsafe {
@@ -458,7 +458,7 @@ mod win {
 
     /// Receive one datagram with the stack's arrival stamp (ns, in the [`clock`] domain) when there is one. Honours
     /// the socket's read timeout like `recv`.
-    pub fn recv_stamped(s: SOCKET, buf: &mut [u8]) -> io::Result<(usize, Option<u64>)> {
+    pub(crate) fn recv_stamped(s: SOCKET, buf: &mut [u8]) -> io::Result<(usize, Option<u64>)> {
         let len = buf.len().min(i32::MAX as usize);
         let Some(wsa_recv_msg) = recv_msg(s) else {
             let n = unsafe { recv(s, buf.as_mut_ptr(), len as i32, 0) };
@@ -514,14 +514,14 @@ pub struct UdpX {
 
 #[cfg(windows)]
 impl UdpX {
-    pub fn connect(addr: SocketAddr) -> io::Result<Self> {
+    pub(crate) fn connect(addr: SocketAddr) -> io::Result<Self> {
         let bind: SocketAddr = unspecified(&addr.ip()).parse().unwrap();
         let sock = std::net::UdpSocket::bind(bind)?;
         sock.connect(addr)?;
         let kernel_ts = stamp_arrivals(&sock);
         Ok(UdpX { sock, kernel_ts, buf: vec![0u8; MAX_MSG].into_boxed_slice() })
     }
-    pub fn kernel_timestamps(&self) -> bool {
+    pub(crate) fn kernel_timestamps(&self) -> bool {
         self.kernel_ts
     }
 }

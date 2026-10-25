@@ -33,14 +33,14 @@ const NS: i128 = 1_000_000_000;
 pub const MAX_SAMPLES: u32 = 8;
 /// The least time between two queries to one address. ntpd's own default is to rate-limit a client whose average is
 /// faster than one query in 8 seconds, and NIST has asked for no more than one in 4, so this stays inside both.
-pub const MIN_SPACING: Duration = Duration::from_secs(8);
+pub(crate) const MIN_SPACING: Duration = Duration::from_secs(8);
 /// A host the user typed is theirs to test, so it may be asked faster than a public server (a monitor needs an answer in
 /// seconds); a server that says stop is still believed.
 pub const CUSTOM_SPACING: Duration = Duration::from_secs(2);
 const CUSTOM_COOLDOWN: Duration = Duration::from_secs(30);
 /// A name asked within this long is left alone. At 8 queries a run that is at most 48 packets an hour to an address,
 /// fewer than the 56 an ordinary client polling every 64 seconds sends.
-pub const COOLDOWN: Duration = Duration::from_secs(600);
+pub(crate) const COOLDOWN: Duration = Duration::from_secs(600);
 /// How long a server that told us to slow down (RATE) is left alone, and one that told us to go away (DENY, RSTR).
 const KISS_RATE_BACKOFF: Duration = Duration::from_secs(3600);
 const KISS_DENY_BACKOFF: Duration = Duration::from_secs(7 * 86_400);
@@ -109,7 +109,7 @@ pub enum NtpError {
 
 impl NtpError {
     /// A short, stable name for why a query failed, for scripts and for telling failures apart in the UI.
-    pub fn kind(&self) -> &'static str {
+    pub(crate) fn kind(&self) -> &'static str {
         match self {
             NtpError::Timeout => "timeout",
             NtpError::Kiss(_) => "kiss",
@@ -264,7 +264,7 @@ fn exchange(sock: &UdpSocket, timeout: Duration, make: &dyn Fn(u64) -> Vec<u8>, 
 }
 
 /// One plain NTP exchange on a socket already connected to the server.
-pub fn query(sock: &UdpSocket, timeout: Duration) -> Result<Sample, NtpError> {
+pub(crate) fn query(sock: &UdpSocket, timeout: Duration) -> Result<Sample, NtpError> {
     exchange(sock, timeout, &|sent| request(sent).to_vec(), &mut |_, _| Ok(()))
 }
 
@@ -350,7 +350,7 @@ pub struct AddrStats {
 }
 
 /// Summarizes the outcome of each query to one address.
-pub fn summarize(ip: &str, results: &[Result<Sample, NtpError>]) -> AddrStats {
+pub(crate) fn summarize(ip: &str, results: &[Result<Sample, NtpError>]) -> AddrStats {
     let ok: Vec<&Sample> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
     let mut s = AddrStats { ip: ip.to_string(), sent: results.len() as u32, ok: ok.len() as u32, ..Default::default() };
     s.kiss = results.iter().find_map(|r| if let Err(NtpError::Kiss(k)) = r { Some(k.clone()) } else { None });
@@ -591,7 +591,8 @@ fn ke_session(host: &str, port: u16, timeout: Duration) -> (NtsKe, Option<NtsKey
 }
 
 /// The key exchange alone, as far as telling whether `host` offers NTS goes.
-pub fn nts_ke(host: &str, port: u16, timeout: Duration) -> NtsKe {
+#[cfg(test)]
+fn nts_ke(host: &str, port: u16, timeout: Duration) -> NtsKe {
     ke_session(host, port, timeout).0
 }
 
@@ -851,7 +852,7 @@ fn median_of(v: impl Iterator<Item = Option<f64>>) -> Option<f64> {
 
 impl ServerResult {
     /// How far this server's offset can be from UTC: its root distance, or just the path bound if that is missing.
-    pub fn reach_ms(&self) -> Option<f64> {
+    pub(crate) fn reach_ms(&self) -> Option<f64> {
         self.distance_ms.or(self.bound_ms)
     }
 
@@ -1127,7 +1128,7 @@ fn independence_groups(items: &[(&str, Option<&str>)]) -> Vec<usize> {
 /// can both be right if the gap is within what each one's error bound allows. The consensus's own bound is the
 /// tightest of the voters', since servers reached over the same path share its error and agreeing with each other
 /// doesn't shrink it.
-pub fn consensus(results: &mut [ServerResult]) -> Option<Consensus> {
+pub(crate) fn consensus(results: &mut [ServerResult]) -> Option<Consensus> {
     let votes = |r: &ServerResult| {
         !r.custom
             && r.offset_ms.is_some()
@@ -1316,9 +1317,15 @@ pub struct Skipped {
     pub kiss: Option<String>,
 }
 
+/// Whole minutes until `until` (Unix milliseconds), rounded up and at least one, and the ending "minute" takes for it.
+pub fn minutes_until(until: i64) -> (i64, &'static str) {
+    let n = until.saturating_sub(crate::bench::now_ms()).max(0) / 60_000 + 1;
+    (n, if n == 1 { "" } else { "s" })
+}
+
 /// Splits `entries` into those that may be asked now and those that may not: a name asked in the last ten minutes, or one
 /// that sent a Kiss-o'-Death and is still being left alone.
-pub fn guard(entries: &[Entry], ledger: &Ledger, now: i64) -> (Vec<Entry>, Vec<Skipped>) {
+pub(crate) fn guard(entries: &[Entry], ledger: &Ledger, now: i64) -> (Vec<Entry>, Vec<Skipped>) {
     let (mut ask, mut skip) = (Vec::new(), Vec::new());
     for e in entries {
         let key = if e.nts_only { e.nts.as_deref().unwrap_or(&e.host) } else { &e.host };
@@ -1338,7 +1345,7 @@ pub fn guard(entries: &[Entry], ledger: &Ledger, now: i64) -> (Vec<Entry>, Vec<S
 
 /// Notes that these servers are being asked now (so a second run straight after leaves them be), and forgets anything
 /// older than a month.
-pub fn stamp(ledger: &mut Ledger, entries: &[Entry], now: i64) {
+pub(crate) fn stamp(ledger: &mut Ledger, entries: &[Entry], now: i64) {
     for e in entries {
         let key = if e.nts_only { e.nts.clone().unwrap_or_else(|| e.host.clone()) } else { e.host.clone() };
         let a = ledger.entry(key).or_default();
@@ -1352,7 +1359,7 @@ pub fn stamp(ledger: &mut Ledger, entries: &[Entry], now: i64) {
 }
 
 /// Remembers who told us to stop: RATE for an hour, DENY and RSTR for a week.
-pub fn remember_kisses(ledger: &mut Ledger, results: &[ServerResult], now: i64) {
+pub(crate) fn remember_kisses(ledger: &mut Ledger, results: &[ServerResult], now: i64) {
     for r in results {
         let Some(k) = &r.kiss else { continue };
         let back = if k == "RATE" { KISS_RATE_BACKOFF } else { KISS_DENY_BACKOFF };
@@ -1366,6 +1373,12 @@ pub fn remember_kisses(ledger: &mut Ledger, results: &[ServerResult], now: i64) 
 /// Most names have one address.
 pub fn most_packets(names: usize, samples: u32) -> usize {
     names * 6 * samples.min(MAX_SAMPLES) as usize
+}
+
+/// The longest wait between queries to one address in a run of `entries`: [`MIN_SPACING`], or [`CUSTOM_SPACING`] when
+/// every server is one you typed (see [`Plan::for_custom`]).
+pub fn run_spacing(entries: &[Entry]) -> Duration {
+    if entries.iter().all(|e| e.kind == "custom") { CUSTOM_SPACING } else { MIN_SPACING }
 }
 
 /// One server in the catalog: who runs it, and what its operator says about it. What can be measured is
@@ -1427,12 +1440,26 @@ pub fn with_references(mut entries: Vec<Entry>) -> (Vec<Entry>, Vec<String>) {
 }
 
 /// Most hosts a person may add to one run.
-pub const MAX_CUSTOM: usize = 4;
+pub(crate) const MAX_CUSTOM: usize = 4;
+
+/// Adds the server `name` names to `entries` unless it is there already: a catalog id or, when `own` is set, any other
+/// server you typed (see [`custom_entry`]).
+pub fn add_pick(entries: &mut Vec<Entry>, name: &str, own: bool) -> Result<(), String> {
+    let e = match catalog().into_iter().find(|e| e.id == name) {
+        Some(e) => e,
+        None if own => custom_entry(name)?,
+        None => return Err(format!("Unknown time server: {name}.")),
+    };
+    if !entries.iter().any(|x| x.id == e.id) {
+        entries.push(e);
+    }
+    Ok(())
+}
 
 /// A server the user typed: `host`, `host:port`, `1.2.3.4:port` or `[2001:db8::1]:port`. It is measured like any other
 /// and shown beside the rest, but it never votes: only a person can say it is a good reference. A host that is in the
 /// catalog (on the default port) is that catalog entry.
-pub fn custom_entry(text: &str) -> Result<Entry, String> {
+pub(crate) fn custom_entry(text: &str) -> Result<Entry, String> {
     let t = text.trim();
     let bad = |why: &str| Err(format!("\u{201c}{}\u{201d} isn't a time server address: {why}.", t.chars().take(60).collect::<String>()));
     if t.is_empty() {

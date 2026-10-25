@@ -132,13 +132,13 @@ fn resolv_conf(path: &str) -> Vec<IpAddr> {
 /// The interface traffic to the Internet leaves through, and whether it is Wi-Fi.
 /// Interception features on access points (UniFi DNS Assistance, for example) apply
 /// per SSID, so knowing the link helps explain a result.
-pub fn link() -> Option<serde_json::Value> {
+pub(crate) fn link() -> Option<serde_json::Value> {
     let (iface, wifi) = link_platform()?;
     Some(serde_json::json!({ "interface": iface, "wifi": wifi }))
 }
 
 /// This computer's default gateway, the router its Internet traffic leaves through.
-pub fn default_gateway() -> Option<IpAddr> {
+pub(crate) fn default_gateway() -> Option<IpAddr> {
     gateway_platform()
 }
 
@@ -239,7 +239,7 @@ mod bsd {
     }
 
     /// The default route: 0.0.0.0/0, not scoped to one interface.
-    pub fn default_route() -> Option<Route> {
+    pub(crate) fn default_route() -> Option<Route> {
         let mut mib = [libc::CTL_NET, libc::PF_ROUTE, 0, libc::AF_INET, libc::NET_RT_DUMP, 0];
         let mut len = 0usize;
         // SAFETY: a NULL buffer asks for the size; the second call fills a buffer of that size.
@@ -260,7 +260,7 @@ mod bsd {
     /// Walks the `rt_msghdr` records for the first unscoped, up route to 0.0.0.0/0, the one the kernel
     /// picks: through a gateway, or a link route (a tunnel) with none. Split defaults (0/1 and 128/1)
     /// aren't 0/0.
-    pub fn parse(buf: &[u8]) -> Option<(Option<Ipv4Addr>, u16)> {
+    pub(crate) fn parse(buf: &[u8]) -> Option<(Option<Ipv4Addr>, u16)> {
         let u16_at = |b: &[u8], i: usize| u16::from_ne_bytes([b[i], b[i + 1]]);
         let i32_at = |b: &[u8], i: usize| i32::from_ne_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
         let mut off = 0;
@@ -388,12 +388,12 @@ mod bsd {
 /// is on (its "Software Timestamp" advanced property, off by default); macOS and Linux stamp every receive
 /// in the kernel.
 #[cfg(windows)]
-pub fn adapter_rx_stamps() -> bool {
+pub(crate) fn adapter_rx_stamps() -> bool {
     win::best().is_some_and(|a| a.rx_stamps)
 }
 
 #[cfg(not(windows))]
-pub fn adapter_rx_stamps() -> bool {
+pub(crate) fn adapter_rx_stamps() -> bool {
     true
 }
 
@@ -452,7 +452,7 @@ mod win {
 
     /// The adapter a packet to 1.1.1.1 leaves through; failing that, the first adapter that is up
     /// and has a gateway.
-    pub fn best() -> Option<Adapter> {
+    pub(crate) fn best() -> Option<Adapter> {
         let mut dest: SOCKADDR_IN = unsafe { std::mem::zeroed() };
         dest.sin_family = AF_INET;
         dest.sin_addr.S_un.S_addr = u32::from(Ipv4Addr::new(1, 1, 1, 1)).to_be();

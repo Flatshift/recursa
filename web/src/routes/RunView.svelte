@@ -8,6 +8,7 @@
   import { TEST_HINT, TEST_LABEL, TRANSPORT_LABEL, duration, label, ms, plural, checkMs, runEstimateMs, when } from '../lib/format';
   import { menu, SEPARATOR } from '../lib/menu.svelte';
   import { reduceMotion } from '../lib/motion';
+  import { isCheck, phaseTab } from '../lib/phases';
   import { status } from '../lib/status.svelte';
   import { onResolverContext } from '../lib/resolverMenu';
   import Toolbar from '../components/Toolbar.svelte';
@@ -128,7 +129,7 @@
   const placeholders = $derived(run && !run.targets.length ? run.resolvers.length || run.config.resolvers.length || 6 : 0);
   const leader = $derived(running ? rank(rows).find((r) => !r.baseline && (r.eligible || (r.measured && !r.intercepted))) : null);
   // The checks after the latency rounds: the ranking holds, the picks still wait on them.
-  const checking = $derived(running && ['path', 'probes', 'cdn', 'intel'].includes(run?.phase ?? ''));
+  const checking = $derived(running && isCheck(run?.phase ?? ''));
   const liveVerdict = $derived.by(() => {
     if (!run || !running) return null;
     // Name a leader only once every target has answered and the leader has a few answers, not after one lucky query.
@@ -199,9 +200,8 @@
 
   // The tab whose content is filling while the run works: a dot marks it, so a view the run isn't on still says where
   // the action is.
-  const LIVE_TAB: Record<string, RunView> = { path: 'path', probes: 'caps', cdn: 'cdn', intel: 'caps' };
   // Intel ends by naming the CDN edges' networks, which shows on the CDN view.
-  const liveTab = $derived(running && run ? (run.phase === 'intel' && run.cdn ? 'cdn' : (LIVE_TAB[run.phase] ?? 'latency')) : null);
+  const liveTab = $derived(running && run ? (run.phase === 'intel' ? (run.cdn ? 'cdn' : 'caps') : (phaseTab(run.phase) ?? 'latency')) : null);
 
   // The phone folds Numbers into Overview.
   const PHONE_VIEWS = RUN_VIEWS.filter((v) => v !== 'numbers');

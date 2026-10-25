@@ -1,4 +1,5 @@
 import type { Resolver, Transport, TestKind } from './types';
+import { checksOf } from './phases';
 
 export const TEST_LABEL: Record<TestKind, string> = {
   cached: 'Cached',
@@ -91,12 +92,13 @@ export function runEstimateMs(
 
 /** How long each check after the latency rounds should take, in run order: the yardstick once the checks begin. */
 export function checkMs(resolvers: number, c: { probes: boolean; cdn: boolean }): Record<string, number> {
-  return {
+  const each: Record<string, number> = {
     path: 1500,
-    ...(c.probes ? { probes: Math.ceil(resolvers / 8) * 2500 + 3000 } : {}),
-    ...(c.cdn ? { cdn: 5000 + resolvers * 300 } : {}),
+    probes: Math.ceil(resolvers / 8) * 2500 + 3000,
+    cdn: 5000 + resolvers * 300,
     intel: 2000,
   };
+  return Object.fromEntries(checksOf(c).map((id) => [id, each[id]]));
 }
 
 /** Resolvers the catalog documents, so published claims apply. */

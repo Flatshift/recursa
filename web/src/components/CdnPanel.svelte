@@ -3,8 +3,9 @@
   import { app } from '../lib/store.svelte';
   import { mobile } from '../lib/api';
   import { holder, label, list, ms } from '../lib/format';
-  import { cellPenalty, ecsByAuthority, edgeIps, level, youOf } from '../lib/cdn';
+  import { cellPenalty, ecsByAuthority, edgeIps, edgeNets, level, youOf } from '../lib/cdn';
   import CdnLogo from './CdnLogo.svelte';
+  import EdgeNets from './EdgeNets.svelte';
   import Info from './Info.svelte';
 
   let { run, cdn, onopen }: { run: RunState; cdn: CdnReport; onopen: (id: string) => void } = $props();
@@ -43,18 +44,7 @@
   const onNet = $derived(edges.filter((e) => e.on_net));
 
   // The networks the edges sit in, largest first, your ISP's ahead.
-  const nets = $derived.by(() => {
-    const m = new Map<string, { key: string; name: string; n: number; you: boolean }>();
-    for (const e of edges) {
-      if (e.asn == null) continue;
-      const key = String(e.asn);
-      const x = m.get(key) ?? { key, name: holder(e.holder) || `AS${e.asn}`, n: 0, you: false };
-      x.n++;
-      x.you ||= e.on_net;
-      m.set(key, x);
-    }
-    return [...m.values()].sort((a, b) => Number(b.you) - Number(a.you) || b.n - a.n);
-  });
+  const nets = $derived(edgeNets(edges, true));
 
   /** What a resolver tells CDNs about you, short enough for a column. */
   function ecs(id: string): { text: string; title: string; tone: 'you' | 'other' | 'none' } {
@@ -204,14 +194,7 @@
         <p><b>{name(x.id)}</b> sends your subnet, yet got farther {list(x.cdns)} edges than your own address did.</p>
       {/each}
     </div>
-    {#if nets.length}
-      <div class="nets">
-        <span class="nets-h">Edge networks</span>
-        {#each nets as x (x.key)}
-          <span class="net" class:you={x.you}>{x.name} <span class="num nn">{x.n}</span>{#if x.you}<span class="nyou">your ISP</span>{/if}</span>
-        {/each}
-      </div>
-    {/if}
+    <EdgeNets {nets} />
   </header>
 
   {#if mobile}
@@ -638,39 +621,6 @@
     padding: 0 4px;
     border-radius: 4px;
     border: 1px solid var(--good);
-  }
-  .nets {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    font-size: var(--t-xs);
-    color: var(--ink-2);
-  }
-  .nets-h {
-    margin-right: 4px;
-    color: var(--ink-3);
-    font-weight: 600;
-  }
-  .net {
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: var(--surface-2);
-    border: 1px solid var(--rule);
-    white-space: nowrap;
-  }
-  .nn {
-    color: var(--ink-3);
-    margin-left: 2px;
-  }
-  .net.you {
-    border-color: var(--good);
-    color: var(--ink);
-  }
-  .nyou {
-    margin-left: 6px;
-    color: var(--good);
-    font-weight: 600;
   }
   .foot {
     display: grid;
