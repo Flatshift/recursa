@@ -4,8 +4,9 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 
 ## 0.3.13 (2026-10-24)
 
-- **Pick cards.** The Overview picks are compact cards: goal, resolver, deciding figure and a short note, with the
-  full sentence on hover.
+- **Pick sheet.** The Overview picks are one row per goal: resolver, deciding figure, a short note and the graph the
+  goal was decided on, with the full sentence on hover. Best from here closes the sheet as the total with the terms it
+  adds up; a finished run's Overview no longer repeats the ranking, and a tall, wide window adds a query timeline.
 - **Cache and fresh-lookup picks.** Two more picks name the fastest resolver on cached answers and on fresh lookups; the
   speed score is the average of the two.
 - **Failed answers cost.** Error replies and network failures count against the speed score like timeouts. A failure

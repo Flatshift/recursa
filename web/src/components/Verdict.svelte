@@ -4,6 +4,10 @@
   import { pct } from '../lib/format';
   import { app } from '../lib/store.svelte';
   import Provenance from './Provenance.svelte';
+  import PickGraph from './PickGraph.svelte';
+  import RunTimeline from './RunTimeline.svelte';
+  import type { Sample } from '../lib/types';
+  import { logDomain } from '../lib/scale';
   import Info from './Info.svelte';
   import Icon from './Icon.svelte';
   import Mark from './Mark.svelte';
@@ -16,6 +20,7 @@
     live = null,
     cdn = false,
     caution = null,
+    samples = [],
     onopen,
     children,
   }: {
@@ -24,6 +29,8 @@
     live?: { sentence: string; detail: string } | null;
     cdn?: boolean;
     caution?: string | null;
+    /** Every answer in the run, for the picks' dot graphs. */
+    samples?: Sample[];
     onopen: (id: string) => void;
     children?: Snippet;
   } = $props();
@@ -33,6 +40,36 @@
   // Phone: a long explanation shows three lines until asked for the rest, so the ranking reaches the first screen.
   let more = $state(false);
   const clamp = $derived(mobile && !more && detail.length > 150);
+  // One log axis for every dot graph in the sheet, so the speed picks read against each other.
+  const domain = $derived.by(() => {
+    let lo = Infinity;
+    let hi = 0;
+    const want = (v?.picks ?? []).flatMap((p) => (p.graph?.kind === 'dots' ? [p.graph] : []));
+    for (const s of samples) {
+      if (s.o !== 'ok' || !want.some((g) => g.target === s.t && g.tests.includes(s.k))) continue;
+      lo = Math.min(lo, s.us / 1000);
+      hi = Math.max(hi, s.us / 1000);
+    }
+    return logDomain(lo, hi);
+  });
+  // The parts list doubles as the Best from here bar's legend.
+  const swatch = (p: NonNullable<Verdict['picks']>[number], k: string) => (p.graph?.kind === 'stack' ? p.graph.terms.find((t) => t.label === k)?.c : undefined);
+  // The timeline follows the fastest pick, the one whose dots the sheet draws first.
+  const lead = $derived(v?.picks.find((p) => p.graph?.kind === 'dots'));
+  // One tooltip per row, lifted above it: the pick's evidence, or the part of its graph under the pointer.
+  type Tip = { x: number; y: number; h: string; v?: string; s?: string; body?: string };
+  let tip = $state<Tip | null>(null);
+  function hover(e: PointerEvent, p: NonNullable<Verdict['picks']>[number]) {
+    if (e.pointerType !== 'mouse') return;
+    const top = (e.currentTarget as HTMLElement).getBoundingClientRect().top;
+    const x = Math.min(Math.max(e.clientX, 170), innerWidth - 170);
+    const d = ((e.target as Element).closest('[data-h]') as HTMLElement | SVGElement | null)?.dataset;
+    tip = d ? { x, y: top, h: d.h!, v: d.v, s: d.s } : { x, y: top, h: p.goal, body: p.evidence };
+  }
+  // The privacy checks get more height when wide, for their names over the squares.
+  const tall = (p: NonNullable<Verdict['picks']>[number]) => p.graph?.kind === 'checks';
+  // The last speed row labels the log axis the speed rows share.
+  const axisAt = $derived((v?.picks ?? []).map((p) => p.graph?.kind).lastIndexOf('dots'));
   const ghostGoals = $derived(['Fastest answers', 'Fastest cache', 'Fastest fresh lookups', ...(cdn ? ['Nearest CDN edges'] : []), 'Best protection', 'Most private', 'Steadiest']);
 </script>
 
@@ -109,26 +146,41 @@
 
     {#if v?.picks.length}
       <dl class="picks">
-        {#each v.picks as p}
-          <div class="pick" title={p.evidence}>
+        {#each v.picks as p, i}
+          <!-- svelte-ignore a11y_no_static_element_interactions (pointer tooltip only; the evidence is also in the row's text) -->
+          <div class="pick" class:sum={p.parts} class:tall={tall(p)} onpointermove={(e) => hover(e, p)} onpointerleave={() => (tip = null)}>
             <dt>{p.goal}</dt>
             <dd>
               <button class="name" onclick={() => onopen(p.resolverId)}>{p.name}</button>
-              <span class="fig" class:num={/^[\d±+]/.test(p.figure)}><Provenance kind={p.verified ? 'verified' : 'published'} />{p.figure}</span>
-              {#if p.note}<span class="note">{p.note}</span>{/if}
+              <span class="fig"><Provenance kind={p.verified ? 'verified' : 'published'} titled={false} />{p.figure}</span>
+              <span class="graph">{#if p.graph}<PickGraph g={p.graph} {samples} {domain} axis={i === axisAt} />{/if}</span>
+              <span class="note">{p.note}</span>
+              <span class="visually-hidden">{p.evidence}</span>
+              {#if p.parts?.length}
+                <ul class="parts">
+                  {#each p.parts as [k, val]}
+                    {@const c = swatch(p, k)}
+                    <li>{#if c}<i class="sw {c}"></i>{/if}<span class="k">{k}</span> {val}</li>
+                  {/each}
+                </ul>
+              {/if}
             </dd>
           </div>
         {/each}
       </dl>
+      {#if lead?.graph?.kind === 'dots'}
+        <div class="timeline"><RunTimeline {samples} target={lead.graph.target} name={lead.name} /></div>
+      {/if}
     {:else if !v}
       <dl class="picks" aria-hidden="true">
         {#each ghostGoals as g, i}
           <div class="pick">
             <dt>{g}</dt>
             <dd>
-              <span class="ghost" style:width="{90 + ((i * 41) % 50)}px" style:height="12px" style:margin="3px 0 5px"></span>
-              <span class="ghost" style:width="{48 + ((i * 17) % 20)}px" style:height="13px" style:margin="0 0 5px"></span>
-              <span class="ghost" style:width="{60 + ((i * 29) % 30)}%" style:height="8px"></span>
+              <span class="ghost" style:width="{90 + ((i * 41) % 50)}px" style:height="12px"></span>
+              <span class="ghost g-fig" style:width="{48 + ((i * 17) % 20)}px" style:height="12px"></span>
+              <span class="graph"></span>
+              <span class="ghost g-note" style:width="{60 + ((i * 29) % 30)}%" style:height="8px"></span>
             </dd>
           </div>
         {/each}
@@ -139,6 +191,15 @@
   </div>
 </section>
 
+{#if tip}
+  <div class="chart-tip pick-tip" style:left="{tip.x}px" style:top="{tip.y}px" role="tooltip">
+    <div class="tt-h">{tip.h}</div>
+    {#if tip.v}<div class="tt-v num">{tip.v}</div>{/if}
+    {#if tip.s}<div class="tt-s">{tip.s}</div>{/if}
+    {#if tip.body}<div class="tt-b">{tip.body}</div>{/if}
+  </div>
+{/if}
+
 <style>
   .verdict {
     /* Sized by the card, not the window: an open inspector narrows it too. */
@@ -146,10 +207,12 @@
     container: verdict / inline-size;
     padding: 10px 4px 0;
   }
+  /* The sheet sits under the lead at every width: beside it, the names and notes wrap in a narrow column while
+     the space under the headline stays empty. */
   .grid {
     display: grid;
-    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
-    gap: 24px 40px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
   }
   .eyebrow {
     display: flex;
@@ -208,37 +271,42 @@
     font-size: var(--t-xs);
     color: var(--ink-3);
   }
-  /* One small card per goal: the goal, who wins it, the deciding figure, a short note. The full sentence is the
-     card's title; the cards wrap to whatever the width allows. */
+  /* The pick sheet: one hairline row per goal in the ranking table's own vocabulary. The goal, who wins it, the
+     deciding figure, a short note; the full sentence is the row's title. The rows share their columns through the
+     subgrid, so the figures stand in one column down the sheet. In two columns the note drops under the name. */
   .picks {
-    margin: 0;
+    margin: 0 -4px;
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 8px;
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
     align-content: start;
   }
   .pick {
+    grid-column: 1 / -1;
     display: grid;
-    align-content: start;
-    gap: 4px;
+    grid-template-columns: subgrid;
+    column-gap: 14px;
+    align-items: baseline;
     min-width: 0;
-    padding: 10px 12px 11px;
-    background: var(--surface);
-    border: 1px solid var(--rule);
-    border-radius: var(--r-lg);
+    padding: 5px 4px;
+    border-top: 1px solid var(--rule);
+  }
+  .pick:first-child {
+    border-top: 0;
+  }
+  .pick:hover {
+    background: var(--surface-2);
+  }
+  dd {
+    display: contents;
   }
   dt {
     font-size: var(--t-xs);
     color: var(--ink-3);
-  }
-  dd {
-    margin: 0;
-    display: grid;
-    gap: 3px;
-    min-width: 0;
+    line-height: 1.3;
   }
   .name {
     justify-self: start;
+    min-width: 0;
     padding: 0;
     border: 0;
     background: none;
@@ -253,20 +321,91 @@
     text-decoration-color: var(--rule-2);
     text-underline-offset: 3px;
   }
+  .fig,
+  .g-fig {
+    justify-self: end;
+  }
   .fig {
-    display: flex;
+    display: inline-flex;
     align-items: baseline;
     gap: 6px;
-    margin-top: 2px;
-    font-size: var(--t-base);
+    font-size: var(--t-sm);
     font-weight: 600;
     letter-spacing: -0.01em;
-    line-height: 1.2;
+    line-height: 1.3;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
-  .note {
+  .note,
+  .g-note {
+    grid-column: 2 / -1;
     font-size: var(--t-xs);
     color: var(--ink-2);
     line-height: 1.35;
+  }
+  /* Best from here adds the rows above it up, so it closes the sheet under a double rule as the total: its figure
+     one step larger, the terms it sums on a line beneath. */
+  .pick.sum {
+    margin-top: 3px;
+    padding-top: 7px;
+    border-top: 3px double var(--rule-2);
+  }
+  .sum dt {
+    color: var(--ink-2);
+  }
+  .sum .fig {
+    font-size: var(--t-md);
+    letter-spacing: -0.015em;
+  }
+  .parts {
+    grid-column: 1 / -1;
+    margin: 1px 0 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 16px;
+    font-size: var(--t-xs);
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.35;
+  }
+  .k {
+    color: var(--ink-3);
+  }
+  /* Each row's graph: what that goal was decided on. In two columns it takes its own line under the note; with the
+     sheet's full width it is a column between the figure and the note. */
+  .graph {
+    grid-column: 2 / -1;
+    order: 1;
+    min-width: 0;
+    align-self: center;
+  }
+  .graph:empty {
+    display: none;
+  }
+  .parts {
+    order: 2;
+  }
+  .sw {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-right: 5px;
+    border-radius: 1.5px;
+    vertical-align: 0;
+  }
+  .sw.cached {
+    background: var(--s-cached);
+  }
+  .sw.uncached {
+    background: var(--s-uncached);
+  }
+  .sw.neutral {
+    background: var(--s-neutral);
+  }
+  .sw.tld {
+    background: var(--s-tld);
   }
   /* Wide: the headline and its detail side by side, the picks in one row of columns, so no
      column runs long beside an empty one. */
@@ -292,14 +431,91 @@
       margin-top: 3px;
     }
     .picks {
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: max-content fit-content(240px) max-content minmax(160px, 1fr) fit-content(40ch);
       margin-top: 2px;
+      /* The graphs take the spare width, so they get more height too. */
+      --pg-h: 24px;
+    }
+    .pick {
+      padding-block: 7px;
+    }
+    .pick.tall {
+      --pg-h: 34px;
+    }
+    .note,
+    .g-note,
+    .graph {
+      grid-column: auto;
+      order: 0;
+    }
+    .graph:empty {
+      display: block;
+    }
+    .parts {
+      grid-column: 2 / -1;
     }
   }
+  /* Below wide: the note in its own column, the graph taking the spare width. */
+  @container verdict (width < 1060px) {
+    .picks {
+      grid-template-columns: max-content fit-content(240px) max-content minmax(120px, 1fr) fit-content(36ch);
+      --pg-h: 24px;
+    }
+    .note,
+    .g-note,
+    .graph {
+      grid-column: auto;
+      order: 0;
+    }
+    .graph:empty {
+      display: block;
+    }
+    .parts {
+      grid-column: 2 / -1;
+    }
+  }
+  /* The run in time only where the window has room to spare: wide, and tall enough that it sits on the first screen
+     under the sheet. Anywhere smaller it is left out, not squeezed. */
+  .timeline {
+    display: none;
+    margin-top: 6px;
+  }
+  @media (min-height: 900px) {
+    @container verdict (min-width: 1060px) {
+      .timeline {
+        display: block;
+      }
+    }
+  }
+  /* Narrow: the note takes what the name and figure leave, the graph a short column. */
   @container verdict (max-width: 760px) {
-    .grid {
-      grid-template-columns: minmax(0, 1fr);
-      gap: 20px;
+    .picks {
+      grid-template-columns: max-content fit-content(200px) max-content minmax(80px, 150px) minmax(0, 1fr);
+      --pg-h: 16px;
+    }
+  }
+  /* Narrower still (five columns would leave the note a sliver): the goal above, the name and figure on one line, the
+     note beneath. */
+  @container verdict (max-width: 660px) {
+    .picks {
+      grid-template-columns: minmax(0, 1fr) max-content;
+      --pg-h: 24px;
+    }
+    .pick {
+      padding: 7px 4px;
+    }
+    dt,
+    .note,
+    .g-note,
+    .graph,
+    .parts {
+      grid-column: 1 / -1;
+    }
+    .graph {
+      order: 1;
+    }
+    .graph:empty {
+      display: none;
     }
   }
   @media (max-width: 900px) {
@@ -307,8 +523,8 @@
       padding: 4px 0 0;
     }
   }
-  /* Phone: the sentence, then the ranking, then the picks as one row per goal with their evidence in full. The
-     lead's parts join the grid so the ranking can sit between the sentence and the picks. */
+  /* Phone: the sentence, then the ranking, then the sheet. The lead's parts join the grid so the ranking can sit
+     between the sentence and the picks. */
   :global(html.mobile) .verdict {
     padding: 0;
   }
@@ -381,19 +597,37 @@
   }
   :global(html.mobile) .picks {
     order: 3;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
+    grid-template-columns: minmax(0, 1fr) max-content;
+    --pg-h: 24px;
+    margin: 0;
   }
   :global(html.mobile) .pick {
-    padding: 10px 12px;
+    padding: 8px 0;
+  }
+  :global(html.mobile) dt,
+  :global(html.mobile) .note,
+  :global(html.mobile) .g-note,
+  :global(html.mobile) .graph,
+  :global(html.mobile) .parts {
+    grid-column: 1 / -1;
   }
   :global(html.mobile) dt {
     font-size: var(--t-sm);
   }
-  :global(html.mobile) .name {
+  :global(html.mobile) .name,
+  :global(html.mobile) .fig {
     font-size: var(--t-base);
   }
-  :global(html.mobile) .note {
+  :global(html.mobile) .note,
+  :global(html.mobile) .parts {
     font-size: var(--t-sm);
+  }
+  .pick-tip {
+    white-space: normal;
+    max-width: 40ch;
+  }
+  .tt-b {
+    margin-top: 2px;
+    line-height: 1.4;
   }
 </style>
