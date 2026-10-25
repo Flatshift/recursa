@@ -11,7 +11,7 @@ use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Emitter, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
 use tauri_plugin_autostart::ManagerExt;
 
-pub const MAIN: &str = "main";
+use crate::MAIN;
 pub const SETTINGS: &str = "settings";
 
 /// Menu items whose state mirrors the engine or the system.
@@ -181,8 +181,7 @@ fn on_menu(app: &AppHandle, id: &str) {
     }
 }
 
-/// The Settings window (⌘,): one at a time, brought forward if already open.
-/// Open Settings, on `section` (a pane id the page knows) when given.
+/// Open the Settings window (⌘,), on `section` (a pane id the page knows) when given: one at a time, brought forward if already open.
 pub fn show_settings(app: &AppHandle, section: Option<&str>) {
     // A pane id is a short slug; anything else from IPC is ignored rather than spliced into a URL.
     let section =
@@ -298,8 +297,7 @@ fn dev_url(app: &AppHandle) -> Option<Url> {
 /// Any other server on this computer, `localhost` included, opens in the browser, not in a Recursa window.
 fn is_internal(url: &Url, dev: Option<&Url>) -> bool {
     match (url.scheme(), url.host_str(), url.port()) {
-        ("tauri" | "asset" | "ipc", _, _) => true,
-        ("http" | "https", Some("tauri.localhost" | "ipc.localhost"), None) => true,
+        ("tauri" | "asset" | "ipc", _, _) | ("http" | "https", Some("tauri.localhost" | "ipc.localhost"), None) => true,
         _ => dev.is_some_and(|d| d.origin() == url.origin()),
     }
 }
@@ -393,7 +391,7 @@ fn sync_menus(app: &AppHandle) {
     let cfg = app.state::<Arc<AppState>>().monitor.borrow().clone();
     let _ = t.monitor.set_checked(cfg.enabled);
     let _ = t.monitor.set_text(if cfg.enabled { format!("Monitoring Every {} min", cfg.interval_min) } else { "Monitoring".into() });
-    let login = app.autolaunch().is_enabled().unwrap_or(false);
+    let login = login_enabled(app);
     for item in &t.login {
         let _ = item.set_checked(login);
     }

@@ -53,10 +53,9 @@ fn udp_probe(ip: &str) -> (Option<f64>, Option<u8>) {
 fn chaos(ip: &str, tcp: bool) -> (Option<String>, Option<String>) {
     let Ok(addr) = format!("{ip}:53").parse::<SocketAddr>() else { return (None, None) };
     let ask = |name: &str| -> Option<String> {
-        let ep = Endpoint { transport: if tcp { Transport::Tcp } else { Transport::Udp }, addr, host: None, url: None };
+        let ep = Endpoint::new(if tcp { Transport::Tcp } else { Transport::Udp }, addr);
         let mut x = net::open(&ep, Duration::from_millis(1000)).ok()?;
-        let m = dns::ask(x.as_mut(), &QuerySpec::chaos_txt(name), Duration::from_millis(1000)).ok()?.msg;
-        m.txt_answers().into_iter().map(|t| crate::forwarder::clean(&t)).find(|t| !t.is_empty())
+        crate::forwarder::chaos_txt(x.as_mut(), name, Duration::from_millis(1000))
     };
     (ask("version.bind"), ask("id.server"))
 }

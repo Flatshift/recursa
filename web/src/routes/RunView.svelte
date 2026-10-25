@@ -5,10 +5,10 @@
   import { shortcut } from '../lib/keys';
   import { HIT_SHARE, blendRows, buildRows, rank, verdict, type Row, type SortKey } from '../lib/verdict';
   import type { RunState, TestKind, Transport } from '../lib/types';
-  import { TEST_HINT, TEST_LABEL, TRANSPORT_LABEL, duration, label, ms, plural, checkMs, runEstimateMs, when } from '../lib/format';
-  import { menu, SEPARATOR } from '../lib/menu.svelte';
+  import { TEST_HINT, TRANSPORT_LABEL, duration, label, ms, plural, checkMs, resolverCount, runEstimateMs, when } from '../lib/format';
+  import { menu } from '../lib/menu.svelte';
   import { reduceMotion } from '../lib/motion';
-  import { isCheck, phaseTab } from '../lib/phases';
+  import { TEST_LABEL, isCheck, phaseTab } from '../lib/phases';
   import { status } from '../lib/status.svelte';
   import { onResolverContext } from '../lib/resolverMenu';
   import Toolbar from '../components/Toolbar.svelte';
@@ -26,7 +26,7 @@
   import Shortlist, { type Pick } from '../components/Shortlist.svelte';
   import Info from '../components/Info.svelte';
   import Icon from '../components/Icon.svelte';
-  import { mobile } from '../lib/api';
+  import { mobile, SEPARATOR } from '../lib/api';
   import { showConditions } from '../components/InstrumentStrip.svelte';
 
   const run = $derived(app.run);
@@ -144,7 +144,7 @@
           : `${ms(leader.composite)} speed score on the rounds run so far. The ranking and the picks settle once every round has run.`,
       };
     }
-    const n = new Set(run.targets.map((t) => t.resolver_id)).size || run.config.resolvers.length;
+    const n = resolverCount(run.targets) || run.config.resolvers.length;
     return { sentence: `Measuring ${plural(n, 'resolver')} from this network.`, detail: checking ? 'Latency is measured. The picks settle as the remaining checks finish.' : `${waiting}.` };
   });
   const warns = $derived(run?.notes.filter((n) => n.level === 'warn') ?? []);
@@ -169,7 +169,7 @@
   // While measuring, say how long is left, and why when the run outlasts its estimate.
   function elapsed(r: RunState): string {
     const spent = now - r.started_at;
-    const checks = checkMs(new Set(r.targets.map((t) => t.resolver_id)).size, r.config);
+    const checks = checkMs(resolverCount(r.targets), r.config);
     const order = Object.keys(checks);
     const at = order.indexOf(r.phase);
     if (at >= 0) {
@@ -178,7 +178,7 @@
     }
     // Never less than the checks still to come, so time left doesn't jump when they begin.
     const later = order.reduce((a, k) => a + checks[k], 0);
-    const left = runEstimateMs(r.targets.length, new Set(r.targets.map((t) => t.resolver_id)).size, r.config) - spent;
+    const left = runEstimateMs(r.targets.length, resolverCount(r.targets), r.config) - spent;
     const timeouts = r.samples.filter((s) => s.o === 'timeout').length;
     if (left >= later || !timeouts) return `${duration(spent)}, about ${duration(Math.max(left, later))} left`;
     return `${duration(spent)}, longer than estimated: ${plural(timeouts, 'query', 'queries')} waited out the timeout`;
@@ -188,7 +188,7 @@
     run
       ? [
           when(run.started_at),
-          plural(new Set(run.targets.map((t) => t.resolver_id)).size, 'resolver'),
+          plural(resolverCount(run.targets), 'resolver'),
           `${run.samples.length.toLocaleString()} queries`,
           running ? elapsed(run) : duration((run.finished_at ?? now) - run.started_at),
           run.status === 'cancelled' ? 'partial results' : '',
@@ -413,21 +413,19 @@
                     </details>
                   {/if}
                 {:else if running}
-                  <div>
-                    <Verdict v={null} live={liveVerdict} cdn={run.config.cdn} onopen={open}>
-                      <RankList
-                        rows={rank(rows)}
-                        samples={run.samples}
-                        tests={run.config.tests}
-                        {multi}
-                        live
-                        warm={run.warm ?? []}
-                        {placeholders}
-                        onopen={open}
-                        onmore={() => app.setRunView('latency')}
-                      />
-                    </Verdict>
-                  </div>
+                  <Verdict v={null} live={liveVerdict} cdn={run.config.cdn} onopen={open}>
+                    <RankList
+                      rows={rank(rows)}
+                      samples={run.samples}
+                      tests={run.config.tests}
+                      {multi}
+                      live
+                      warm={run.warm ?? []}
+                      {placeholders}
+                      onopen={open}
+                      onmore={() => app.setRunView('latency')}
+                    />
+                  </Verdict>
                 {/if}
 
                 {#if infos.length}

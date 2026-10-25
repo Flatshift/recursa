@@ -334,7 +334,7 @@ pub struct Cell(pub i64, pub u32, pub u32, pub Option<f64>, pub Option<f64>, pub
 
 /// Latency histogram bins: an eighth of a decade each on a log-ms axis, bin 0 starting at
 /// 0.32 ms. The last bin, from 1.78 s, runs to the 2 s timeout.
-pub(crate) const HIST_BINS: usize = 31;
+const HIST_BINS: usize = 31;
 
 fn bin(ms: f64) -> usize {
     ((ms.log10() * 8.0).floor() as i64 + 4).clamp(0, HIST_BINS as i64 - 1) as usize

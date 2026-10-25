@@ -390,7 +390,6 @@ describe('verdict: Best from here', () => {
     const lab = from(run, HIT_SHARE.lab);
     expect(lab.pick.evidence).toContain('Lab mix');
     expect(lab.v.best!.target.idx).toBe(home.v.best!.target.idx);
-    expect(lab.v.tie).toBe(home.v.tie);
     expect(lab.v.sentence).toBe(home.v.sentence);
   });
 });

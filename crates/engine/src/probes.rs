@@ -122,7 +122,7 @@ struct Ctx<'a> {
 
 impl Ctx<'_> {
     fn ask(&mut self, spec: &QuerySpec) -> Result<dns::Message, XErr> {
-        dns::ask(self.ex, spec, self.timeout).map(|a| a.msg)
+        dns::ask_msg(self.ex, spec, self.timeout)
     }
 }
 
@@ -318,7 +318,7 @@ pub fn probe(resolver_id: &str, via: &str, ex: &mut dyn Exchanger, timeout: Dura
                 )),
                 _ => rep.checks.push(check("cookies", Status::Info, Some(false), "Not supported", "no server cookie in response")),
             }
-            rep.nsid = m.nsid();
+            rep.nsid = m.nsid().map(|n| crate::forwarder::clean(&n)).filter(|n| !n.is_empty());
             if let Some(n) = &rep.nsid {
                 rep.checks.push(check("nsid", Status::Info, Some(true), n.clone(), format!("NSID option: {n}")));
             } else {
@@ -334,7 +334,7 @@ pub fn probe(resolver_id: &str, via: &str, ex: &mut dyn Exchanger, timeout: Dura
     // Anycast site identity via CHAOS TXT.
     for name in ["id.server", "hostname.bind"] {
         if let Ok(m) = c.ask(&QuerySpec::chaos_txt(name))
-            && let Some(t) = m.txt_answers().into_iter().find(|t| !t.is_empty())
+            && let Some(t) = m.txt_answers().into_iter().map(|t| crate::forwarder::clean(&t)).find(|t| !t.is_empty())
         {
             rep.pop = Some(t);
             break;

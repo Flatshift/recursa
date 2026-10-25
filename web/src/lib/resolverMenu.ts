@@ -1,8 +1,8 @@
 // The right-click menu for a resolver row, wherever it appears.
 
 import { app } from './store.svelte';
-import { copyText } from './api';
-import { menu, SEPARATOR } from './menu.svelte';
+import { copyText, SEPARATOR } from './api';
+import { menu } from './menu.svelte';
 import { label } from './format';
 import { blocker, run } from './checks.svelte';
 

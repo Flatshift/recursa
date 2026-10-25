@@ -1,7 +1,7 @@
 <script lang="ts">
   import { app } from '../lib/store.svelte';
   import type { LiveBlocking, LiveCategory } from '../lib/types';
-  import { ago, label } from '../lib/format';
+  import { ago, resolverName } from '../lib/format';
   import { results, LIVE_SAMPLE_TTL_MS } from '../lib/checks.svelte';
   import { expectsBlock } from '../lib/verdict';
 
@@ -51,11 +51,10 @@
     return Object.entries(results.live)
       .filter(([, c]) => c.sample_taken_at === live.sample_taken_at)
       .map(([pid, c]) => {
-        const r = app.resolvers.find((x) => x.id === pid);
         const cats = CATS.map((k) => c.categories[k.key]);
         const blocked = cats.reduce((n, f) => n + (f?.blocked ?? 0), 0);
         const tested = cats.reduce((n, f) => n + (f?.tested ?? 0), 0);
-        return { id: pid, name: r ? label(r.provider, r.variant) : pid, cats, rate: tested ? blocked / tested : -1 };
+        return { id: pid, name: resolverName(app.resolvers, pid), cats, rate: tested ? blocked / tested : -1 };
       })
       .sort((a, b) => b.rate - a.rate);
   });

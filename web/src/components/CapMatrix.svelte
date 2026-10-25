@@ -14,7 +14,7 @@
   import { mobile } from '../lib/api';
   import type { Resolver, RunState } from '../lib/types';
   import type { Row, Verdict } from '../lib/verdict';
-  import { capCell, cdnCell, egressCell, roaCell, rovCell, type Cell as C } from '../lib/cells';
+  import { capCell, cdnCell, egressCell, isBlank, roaCell, rovCell, type Cell as C } from '../lib/cells';
   import { CAP, CAP_KEYS } from '../lib/caps';
   import { label } from '../lib/format';
   import Cell from './Cell.svelte';
@@ -80,7 +80,6 @@
   const busy = (key: string) => running && (key === 'cdn' ? run.phase === 'cdn' : INTEL.has(key) && run.phase === 'intel');
 
   type Built = { line: Line; cells: C[]; wait: boolean[]; same: boolean; blank: boolean };
-  const isBlank = (c: C) => c.prov === 'unknown' && (c.text === '—' || c.text === '');
   const built = $derived(
     groups.map(([k, title, lines]) => ({
       k,

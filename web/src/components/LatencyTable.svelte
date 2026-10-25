@@ -6,7 +6,8 @@
   import type { Row } from '../lib/verdict';
   import { CDN_ROUND_TRIPS, BLIP_RULE, CONNECTION_SHARE, HIT_SHARE, MIX_LABEL, RELIABLE, TESTS, TIMEOUT_COST_MS, WEIGHTS, failureCost } from '../lib/verdict';
   import type { TestKind } from '../lib/types';
-  import { TEST_LABEL, label, ms, pct } from '../lib/format';
+  import { label, ms, pct } from '../lib/format';
+  import { TEST_LABEL } from '../lib/phases';
 
   const NAME: Record<TestKind, string> = { cached: 'cached', uncached: 'uncached', tld: 'TLD' };
   const LIMITED_TITLE = 'Began refusing or stopped answering during this test; the figures from the answered part are not scored.';
@@ -23,16 +24,21 @@
   let asc = $state(true);
 
   const ks = $derived(TESTS.filter((k) => tests.includes(k)));
+  const iqr = (r: Row) => {
+    const d = r.dist.uncached.n ? r.dist.uncached : r.dist.cached;
+    return d.p75 != null && d.p25 != null ? d.p75 - d.p25 : null;
+  };
+  const costTitle = (r: Row) => {
+    const c = failureCost(r);
+    return c >= 0.05 ? `Includes ${ms(c)} for timeouts and failed answers` : undefined;
+  };
   const val = (r: Row, k: Key): number | string => {
     if (k === 'name') return `${label(r.target.provider, r.target.variant)} ${r.target.transport}`;
     if (k === 'composite') return r.composite ?? Infinity;
     if (k === 'perlookup') return r.perLookup ?? Infinity;
     if (k === 'success') return r.success;
     if (k === 'setup') return r.target.setup_ms ?? Infinity;
-    if (k === 'iqr') {
-      const d = r.dist.uncached.n ? r.dist.uncached : r.dist.cached;
-      return d.p75 != null && d.p25 != null ? d.p75 - d.p25 : Infinity;
-    }
+    if (k === 'iqr') return iqr(r) ?? Infinity;
     const [t, p] = k.split('-') as [TestKind, 'p50' | 'p95'];
     return r.dist[t][p] ?? Infinity;
   };
@@ -56,10 +62,6 @@
     }
   }
   const aria = (k: Key) => (sortKey === k ? (asc ? 'ascending' : 'descending') : 'none');
-  const iqr = (r: Row) => {
-    const d = r.dist.uncached.n ? r.dist.uncached : r.dist.cached;
-    return d.p75 != null && d.p25 != null ? d.p75 - d.p25 : null;
-  };
   // Phone: the sort keys a row card shows, as chips.
   const sortKeys = $derived<[Key, string][]>([
     ['composite', 'Score'],
@@ -93,7 +95,7 @@
             {#if r.baseline}<BaselineChip what={r.forwarder} />{/if}
             {#if r.intercepted}<span class="warn">answered locally</span>{/if}
           </span>
-          <span class="cscore num" title={failureCost(r) >= 0.05 ? `Includes ${ms(failureCost(r))} for timeouts and failed answers` : undefined}>{ms(r.composite, false)}<small>score</small></span>
+          <span class="cscore num" title={costTitle(r)}>{ms(r.composite, false)}<small>score</small></span>
           <span class="stats">
             <span><span class="k">Per lookup</span><span class="v num">{ms(r.perLookup, false)}</span></span>
             {#each ks as k}
@@ -140,7 +142,7 @@
               {#if r.intercepted}<span class="warn">answered locally</span>{/if}
             </button>
           </th>
-          <td class="num strong" title={failureCost(r) >= 0.05 ? `Includes ${ms(failureCost(r))} for timeouts and failed answers` : undefined}>{ms(r.composite, false)}</td>
+          <td class="num strong" title={costTitle(r)}>{ms(r.composite, false)}</td>
           <td
             class="num"
             title={r.cdnTerm == null ? "No CDN term: edges weren't mapped for this resolver" : r.cdnTerm >= 0.05 ? `Includes ${ms(r.cdnTerm)} for CDN edges` : undefined}>{ms(r.perLookup, false)}</td>

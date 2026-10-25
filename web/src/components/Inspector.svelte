@@ -124,23 +124,6 @@
   :global(html.mobile) .inspector.pulling {
     transition: none;
   }
-  .sheet-scrim {
-    position: fixed;
-    inset: 0;
-    z-index: var(--z-backdrop);
-    background: var(--backdrop);
-    animation: fadein 320ms var(--ease-out);
-  }
-  @keyframes rise {
-    from {
-      transform: translateY(100%);
-    }
-  }
-  @keyframes fadein {
-    from {
-      opacity: 0;
-    }
-  }
   @media (prefers-reduced-motion: reduce) {
     :global(html.mobile) .inspector {
       animation: fadein 160ms linear;
@@ -153,25 +136,11 @@
     padding: 0 16px calc(32px + env(safe-area-inset-bottom));
     overscroll-behavior: contain;
   }
-  :global(html.mobile) .inner > :global(*) {
-    order: 3;
-  }
   :global(html.mobile) .inner > .head {
-    order: 0;
     position: sticky;
     padding: 22px 0 12px;
     border-radius: 14px 14px 0 0;
     touch-action: none;
-  }
-  .grabber {
-    position: absolute;
-    top: 7px;
-    left: 50%;
-    width: 36px;
-    height: 5px;
-    margin-left: -18px;
-    border-radius: 3px;
-    background: var(--rule-2);
   }
   .done {
     align-self: flex-start;

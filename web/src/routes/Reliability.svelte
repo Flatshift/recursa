@@ -3,9 +3,9 @@
   import { app } from '../lib/store.svelte';
   import { mobile } from '../lib/api';
   import { status, stateLabel, stateGlyph, localNote } from '../lib/status.svelte';
-  import { resolverMonitor } from '../lib/monitor.svelte';
+  import { RESOLVER_INTERVAL_MIN, RETENTION_DAYS, resolverMonitor } from '../lib/monitor.svelte';
   import type { MonitorHist } from '../lib/types';
-  import { ago, day, documented, label, list, ms, pct, plural, when } from '../lib/format';
+  import { ago, day, documented, list, ms, pct, plural, resolverName, when } from '../lib/format';
   import Glyph from '../components/Glyph.svelte';
   import Icon from '../components/Icon.svelte';
   import Toolbar from '../components/Toolbar.svelte';
@@ -43,10 +43,7 @@
     refreshing = false;
   }
   const resolvers = $derived(app.resolvers);
-  const nameOf = (id: string) => {
-    const r = resolvers.find((x) => x.id === id);
-    return r ? label(r.provider, r.variant) : id;
-  };
+  const nameOf = (id: string) => resolverName(resolvers, id);
   const feeds = $derived(status.data?.live.feeds ?? []);
   const feedless = $derived(
     [...new Set(resolvers.filter((r) => documented(r) && !r.status_feed).map((r) => r.provider))],
@@ -211,13 +208,13 @@
           <label class="inline">
             every
             <select value={mon.cfg.interval_min} onchange={(e) => mon.save({ ...mon.cfg!, interval_min: Number((e.currentTarget as HTMLSelectElement).value) })}>
-              {#each [1, 5, 10, 15, 30, 60] as m}<option value={m}>{m} min</option>{/each}
+              {#each RESOLVER_INTERVAL_MIN as m}<option value={m}>{m} min</option>{/each}
             </select>
           </label>
           <label class="inline">
             keep
             <select value={mon.cfg.retention_days} onchange={(e) => mon.save({ ...mon.cfg!, retention_days: Number((e.currentTarget as HTMLSelectElement).value) })}>
-              {#each [7, 30, 90, 365] as d}<option value={d}>{d} days</option>{/each}
+              {#each RETENTION_DAYS as d}<option value={d}>{d} days</option>{/each}
             </select>
           </label>
           <details class="pickers">

@@ -78,7 +78,7 @@
   }
   function tEnd(e: TouchEvent) {
     if (!touch) return;
-    const { open, w, x, t } = touch;
+    const { w, x, t } = touch;
     touch = null;
     if (drag === null) return;
     const dx = e.changedTouches[0].clientX - x;

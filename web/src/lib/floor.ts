@@ -21,7 +21,6 @@ export function split(wire: number | null | undefined, cached: number | null | u
   return { wire, cached: c, uncached: u, resolver: c == null ? null : c - wire, recursion: u == null ? null : u - base };
 }
 
-
 /** One sentence under the strip. `name` is the resolver as the user knows it. */
 export function sentence(name: string, s: Split): string {
   const wire = `${score(s.wire)} ms wire`;

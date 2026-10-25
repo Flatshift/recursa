@@ -18,6 +18,7 @@
 use crate::clock;
 use crate::dns::{self, QuerySpec, RData};
 use crate::net::{self, Endpoint, Exchanger, Transport};
+use crate::stats::median;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
@@ -248,11 +249,6 @@ pub struct CdnReport {
 /// Resolver id → CDN id → hostname → mapping.
 pub type Answers = BTreeMap<String, BTreeMap<String, BTreeMap<String, HostMapping>>>;
 
-fn median(v: &mut [f64]) -> Option<f64> {
-    v.sort_by(|a, b| a.total_cmp(b));
-    (!v.is_empty()).then(|| crate::stats::quantile(v, 0.5))
-}
-
 fn round2(v: f64) -> f64 {
     (v * 100.0).round() / 100.0
 }
@@ -451,7 +447,7 @@ pub fn references(ex: &mut dyn Exchanger, targets: &BTreeMap<String, String>, ti
 
 fn reference(ex: &mut dyn Exchanger, name: &str, timeout: Duration, tcp: bool) -> Result<Reference, String> {
     let ask = |ex: &mut dyn Exchanger, spec: QuerySpec| -> Result<dns::Message, String> {
-        dns::ask(ex, &spec, timeout).map(|a| a.msg).map_err(|e| e.to_string())
+        dns::ask_msg(ex, &spec, timeout).map_err(|e| e.to_string())
     };
     // The zone that holds `name`: an NS query for it either answers (it's a zone apex)
     // or returns the enclosing zone's SOA in the authority section.
@@ -473,19 +469,8 @@ fn reference(ex: &mut dyn Exchanger, name: &str, timeout: Duration, tcp: bool) -
     fastrand::shuffle(&mut servers);
     let mut last = String::from("no nameserver answered");
     for host in servers.iter().take(3) {
-        // The resolver under test picks this address: never one on this computer or its network.
-        let Some(addr) = ask(ex, QuerySpec::new(host.as_str(), dns::TYPE_A))
-            .ok()
-            .and_then(|m| m.ipv4_answers().into_iter().find(|a| !crate::catalog::is_local_or_special(&IpAddr::V4(*a))))
-        else {
-            continue;
-        };
-        let ep = Endpoint {
-            transport: if tcp { Transport::Tcp } else { Transport::Udp },
-            addr: SocketAddr::new(IpAddr::V4(addr), 53),
-            host: None,
-            url: None,
-        };
+        let Some(addr) = dns::routable_a(ex, host, timeout) else { continue };
+        let ep = Endpoint::new(if tcp { Transport::Tcp } else { Transport::Udp }, SocketAddr::new(IpAddr::V4(addr), 53));
         let mut spec = QuerySpec::new(name, dns::TYPE_A);
         spec.rd = false;
         // Ask a few times: CDNs rotate a client between clusters of the same mapping.
@@ -591,17 +576,12 @@ fn run_pass(jobs: &[(usize, SocketAddr, Duration)], tick: &(dyn Fn(usize, &Probe
     })
 }
 
-/// Time TCP handshakes to every edge's HTTPS port: a throwaway warm-up, then three shuffled
-/// passes over a pool of threads, keeping every sample. An address that times out in the first
-/// pass is dropped from the rest; later passes wait only a few times the best round trip.
+/// Time TCP handshakes to `port` of every edge (443 in a run; the test uses a listener of its own): a throwaway
+/// warm-up, then three shuffled passes over a pool of threads, keeping every sample. An address that times out in
+/// the first pass is dropped from the rest; later passes wait only a few times the best round trip.
 /// `progress` runs after each handshake; its `total` shrinks once the first pass has found
 /// the unreachable addresses.
-pub fn time_edges(ips: &BTreeSet<String>, progress: &(dyn Fn(Tick) + Sync)) -> BTreeMap<String, Edge> {
-    time_port(ips, 443, progress)
-}
-
-/// `time_edges` against any port, so the test can use a listener of its own.
-fn time_port(ips: &BTreeSet<String>, port: u16, progress: &(dyn Fn(Tick) + Sync)) -> BTreeMap<String, Edge> {
+pub fn time_edges(ips: &BTreeSet<String>, port: u16, progress: &(dyn Fn(Tick) + Sync)) -> BTreeMap<String, Edge> {
     let mut edges: BTreeMap<String, Edge> = ips.iter().map(|ip| (ip.clone(), Edge { ip: ip.clone(), ..Default::default() })).collect();
     let mut order: Vec<(String, SocketAddr)> =
         ips.iter().filter_map(|ip| ip.parse().ok().map(|a: IpAddr| (ip.clone(), SocketAddr::new(a, port)))).collect();
@@ -654,7 +634,7 @@ fn time_port(ips: &BTreeSet<String>, port: u16, progress: &(dyn Fn(Tick) + Sync)
     }
     for e in edges.values_mut() {
         e.rtt_ms = e.samples.iter().copied().reduce(f64::min);
-        e.median_ms = median(&mut e.samples.clone());
+        e.median_ms = median(e.samples.iter().copied());
     }
     edges
 }
@@ -692,8 +672,7 @@ pub fn mark_unreachable(answers: &mut Answers, edges: &BTreeMap<String, Edge>) {
 
 /// Median over the edges of each one's best round trip.
 fn rtt_of(edges: &BTreeMap<String, Edge>, ips: &[String]) -> Option<f64> {
-    let mut rtts: Vec<f64> = ips.iter().filter_map(|ip| edges.get(ip).and_then(|e| e.rtt_ms)).collect();
-    median(&mut rtts)
+    median(ips.iter().filter_map(|ip| edges.get(ip).and_then(|e| e.rtt_ms)))
 }
 
 /// How one hostname's edges compare with the CDN's own pick for this computer.
@@ -834,8 +813,6 @@ pub fn score(mut answers: Answers, mut refs: BTreeMap<String, Reference>, edges:
 /// One resolver's CDN: the median over its Ok hostnames.
 fn cdn_score(cdn: &Cdn, hosts: &BTreeMap<String, HostMapping>) -> CdnScore {
     let ok: Vec<(&String, &HostMapping)> = hosts.iter().filter(|(_, m)| m.status == HostStatus::Ok && m.rtt_ms.is_some()).collect();
-    let mut s: Vec<f64> = ok.iter().filter_map(|(_, m)| m.rtt_ms).collect();
-    let mut p: Vec<f64> = ok.iter().filter_map(|(_, m)| m.penalty_ms).collect();
     let worst_host = ok.iter().filter_map(|(h, m)| m.penalty_ms.map(|p| ((*h).clone(), p))).max_by(|a, b| a.1.total_cmp(&b.1));
     let judged: Vec<AsYou> = ok.iter().filter_map(|(_, m)| m.as_you).collect();
     let share = |f: fn(&AsYou) -> bool| judged.iter().filter(|a| f(a)).count() * 2 >= judged.len();
@@ -857,8 +834,8 @@ fn cdn_score(cdn: &Cdn, hosts: &BTreeMap<String, HostMapping>) -> CdnScore {
         Some(format!("only {used} of {} hostnames usable", cdn.hosts.len()))
     };
     CdnScore {
-        rtt_ms: median(&mut s),
-        penalty_ms: if used >= 2 { median(&mut p).map(round2) } else { None },
+        rtt_ms: median(ok.iter().filter_map(|(_, m)| m.rtt_ms)),
+        penalty_ms: if used >= 2 { median(ok.iter().filter_map(|(_, m)| m.penalty_ms)).map(round2) } else { None },
         as_you,
         worst_host,
         hosts_used: used as u8,
@@ -872,14 +849,6 @@ fn cdn_score(cdn: &Cdn, hosts: &BTreeMap<String, HostMapping>) -> CdnScore {
 mod tests {
     use super::*;
     use crate::net::{Reply, XErr};
-
-    #[test]
-    fn median_sorts_and_averages_the_middle_pair() {
-        assert_eq!(median(&mut []), None);
-        assert_eq!(median(&mut [7.0]), Some(7.0));
-        assert_eq!(median(&mut [9.0, 1.0, 5.0]), Some(5.0));
-        assert_eq!(median(&mut [8.0, 2.0, 6.0, 4.0]), Some(5.0));
-    }
 
     fn cdn_by(id: &str) -> &'static Cdn {
         CDNS.iter().find(|c| c.id == id).unwrap()
@@ -1218,7 +1187,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let ips = BTreeSet::from(["127.0.0.1".to_string()]);
-        let e = &time_port(&ips, port, &|_| {})["127.0.0.1"];
+        let e = &time_edges(&ips, port, &|_| {})["127.0.0.1"];
         assert_eq!(e.samples.len(), 3);
         assert!(!e.refused);
         assert!(e.rtt_ms.is_some() && e.median_ms.is_some());

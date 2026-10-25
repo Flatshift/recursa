@@ -136,7 +136,6 @@ fn reload<T: Clone + PartialEq>(tx: &watch::Sender<T>, saved: Option<T>) {
 struct MonitorResp<C, H> {
     config: C,
     last: Option<i64>,
-    paused: bool,
     history: H,
 }
 
@@ -327,8 +326,9 @@ impl AppState {
         self.store.put("ntp_asked", &ledger);
     }
 
-    /// Start an NTP run: servers from the catalog, asked in parallel, eight seconds apart. Shares the one measurement
-    /// slot with benchmarks and monitoring, so nothing else is on the network while it times.
+    /// Start an NTP run: servers from the catalog, asked in parallel, each address queried eight seconds apart (two for a
+    /// server you typed). Shares the one measurement slot with benchmarks and monitoring, so nothing else is on the
+    /// network while it times.
     async fn start_ntp(self: &Arc<Self>, req: NtpRequest) -> Result<Value, ApiError> {
         let mut entries: Vec<crate::ntp::Entry> = Vec::new();
         for id in &req.servers {
@@ -347,7 +347,7 @@ impl AppState {
             return Err(ApiError::new(400, "Pick at least one time server."));
         }
         let (entries, added) = crate::ntp::with_references(entries);
-        let samples = req.samples.clamp(2, crate::ntp::MAX_SAMPLES);
+        let samples = req.samples.clamp(1, crate::ntp::MAX_SAMPLES);
         let held = self.claim_measuring().await?;
         // Servers asked a few minutes ago, or that said stop, are left alone; if that is all of them, there is nothing to do.
         let (entries, skipped) = self.ntp_guard(&entries);
@@ -752,7 +752,7 @@ impl AppState {
         let store = self.store.clone();
         let (history, last) =
             tokio::task::spawn_blocking(move || (history(&store), last(&store))).await.map_err(|e| ApiError::new(500, e.to_string()))?;
-        let resp = MonitorResp { config, last, paused: self.run_active.load(Ordering::SeqCst), history };
+        let resp = MonitorResp { config, last, history };
         serde_json::to_string(&resp).map_err(|e| ApiError::new(500, e.to_string()))
     }
 
@@ -1213,7 +1213,7 @@ mod tests {
         };
         a.store.ntp_record(&[row(now - 7_200_000, 1.0), row(now - 3_600_000, 2.0)], None);
         let v = get("1").await;
-        assert_eq!((v["history"]["cycles"].as_u64(), v["history"]["servers"][0]["stats"]["ok"].as_u64()), (Some(2), Some(2)));
+        assert_eq!((v["history"]["cycles"].as_u64(), v["history"]["servers"][0]["stats"]["up_pct"].as_f64()), (Some(2), Some(100.0)));
         assert_eq!(v["last"].as_i64(), Some(now - 3_600_000));
         a.call("DELETE", "/api/ntp/monitor/history", Value::Null).await.unwrap();
         assert_eq!(get("1").await["history"]["cycles"].as_u64(), Some(0));

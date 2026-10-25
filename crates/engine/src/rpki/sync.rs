@@ -50,7 +50,7 @@ pub(super) fn engine_version() -> String {
 }
 
 fn config(cache: &Path) -> Config {
-    let mut c = Config::default_with_paths(cache.join("routinator.conf"), cache.join("validator"));
+    let mut c = Config::default_with_paths(cache.join("routinator.conf"), cache.join(super::VALIDATOR_DIR));
     c.disable_rsync = true;
     // Most of a run is waiting on the network, and a few dozen small repositories are dead or filtered.
     c.validation_threads = 8;

@@ -10,6 +10,9 @@ export interface Cell {
   evidence?: string;
 }
 
+/** A cell with nothing measured or published to show. */
+export const isBlank = (c: Cell): boolean => c.prov === 'unknown' && (c.text === '—' || c.text === '');
+
 /** A capability value: measured beats published beats unknown. */
 export function capCell(run: RunState | null, r: Resolver, key: string): Cell {
   let c = run ? check(run, r.id, key) : undefined;

@@ -482,6 +482,17 @@ export type PickGraph =
   /** Each probed resolver a column, each privacy property a row, filled where it holds; the winner's column first. */
   | { kind: 'checks'; rows: string[]; cols: { name: string; on: boolean[]; win: boolean }[] };
 
+/** The goals a verdict picks for, in the order the picks list them. */
+export const GOAL = {
+  fastest: 'Fastest answers',
+  cache: 'Fastest cache',
+  fresh: 'Fastest fresh lookups',
+  cdn: 'Nearest CDN edges',
+  protection: 'Best protection',
+  private: 'Most private',
+  steadiest: 'Steadiest',
+} as const;
+
 interface Pick {
   goal: string;
   resolverId: string;
@@ -501,10 +512,6 @@ interface Pick {
 export interface Verdict {
   /** The fastest pick: the lowest speed score among reliable resolvers that aren't your own forwarder. */
   best: Row | null;
-  /** The next resolver from another provider. */
-  runnerUp: Row | null;
-  /** Whether this run can't tell `best` and `runnerUp` apart. */
-  tie: boolean;
   sentence: string;
   detail: string;
   picks: Pick[];
@@ -535,8 +542,6 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
   if (!best) {
     return {
       best: null,
-      runnerUp: null,
-      tie: false,
       sentence: rows.some((r) => r.measured) ? 'No resolver answered reliably enough to recommend.' : 'Nothing has been measured yet.',
       detail: rows.some((r) => r.measured)
         ? `Every measured resolver dropped more than ${pct(1 - RELIABLE, 0)} of queries or was intercepted. See the notes below.`
@@ -578,7 +583,7 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
 
   const next = runnerUp ? nameOfRow(runnerUp) : '';
   picks.push({
-    goal: 'Fastest answers',
+    goal: GOAL.fastest,
     resolverId: best.target.resolver_id,
     name,
     figure: ms(best.composite),
@@ -590,8 +595,8 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
 
   // The two halves of the speed score as picks of their own. A resolver with no figure for a half is left out of it.
   const halves = [
-    { goal: 'Fastest cache', part: PART_WEIGHTS.cache, what: 'on cached answers', tests: ['cached'] as TestKind[] },
-    { goal: 'Fastest fresh lookups', part: PART_WEIGHTS.fresh, what: 'on fresh lookups (uncached and TLD)', tests: ['uncached', 'tld'] as TestKind[] },
+    { goal: GOAL.cache, part: PART_WEIGHTS.cache, what: 'on cached answers', tests: ['cached'] as TestKind[] },
+    { goal: GOAL.fresh, part: PART_WEIGHTS.fresh, what: 'on fresh lookups (uncached and TLD)', tests: ['uncached', 'tld'] as TestKind[] },
   ];
   for (const { goal, part, what, tests } of halves) {
     const partScorer: Scorer = (dist, tests) => compositeOf(dist, tests, part);
@@ -632,7 +637,7 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
               : ['CDNs map it by its own location', 'by its own location'];
       const onBest = top.c.penalty_ms! < 0.05;
       picks.push({
-        goal: 'Nearest CDN edges',
+        goal: GOAL.cdn,
         resolverId: top.id,
         name: nameOf(top.id),
         figure: onBest ? 'best edges' : `+${ms(top.c.penalty_ms)}`,
@@ -664,7 +669,7 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
   if (protective[0]) {
     const hit = run.probes[protective[0]]?.filtering?.malware?.samples.filter((s) => s.blocked).map((s) => s.domain) ?? [];
     picks.push({
-      goal: 'Best protection',
+      goal: GOAL.protection,
       resolverId: protective[0],
       name: nameOfRow(rowOf(protective[0])),
       figure: 'blocks malware',
@@ -692,7 +697,7 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
     const count = (id: string) => held(id).filter(Boolean).length;
     const probed = named.filter((id) => check(run, id, 'ecs') != null).sort((a, b) => Number(b === priv[0]) - Number(a === priv[0]) || count(b) - count(a));
     picks.push({
-      goal: 'Most private',
+      goal: GOAL.private,
       resolverId: priv[0],
       name: nameOfRow(rowOf(priv[0])),
       figure: 'no client subnet',
@@ -710,7 +715,7 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
   const steady = [...per.values()].sort((a, b) => b.success - a.success || (spread(a) ?? Infinity) - (spread(b) ?? Infinity));
   if (steady[0]) {
     picks.push({
-      goal: 'Steadiest',
+      goal: GOAL.steadiest,
       resolverId: steady[0].target.resolver_id,
       name: label(steady[0].target.provider, steady[0].target.variant),
       figure: `±${ms(spread(steady[0]))}`,
@@ -780,13 +785,13 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
   if (runnerUp && gap != null && !tie) detail += ` ${next} is next, ${ms(gap)} slower.`;
   // The quickest answer can send you to slower edges, and every new connection pays for that.
   // Under a millisecond a round trip, the difference isn't worth a sentence.
-  const near = per.get(picks.find((p) => p.goal === 'Nearest CDN edges')?.resolverId ?? '');
+  const near = per.get(picks.find((p) => p.goal === GOAL.cdn)?.resolverId ?? '');
   if (near && near.target.resolver_id !== best.target.resolver_id && near.cdn != null && best.cdn != null && best.cdn - near.cdn >= 1 && near.composite != null && best.composite != null) {
     const slower = tie && near.target.resolver_id === runnerUp?.target.resolver_id ? '' : ` answers ${ms(Math.max(0, near.composite - best.composite))} slower but`;
     detail += ` ${nameOfRow(near)}${slower} sends you to CDN edges ${ms(best.cdn - near.cdn)} nearer, and every new connection pays that at least ${CDN_ROUND_TRIPS} times.`;
   }
   const also = picks.slice(1).filter((p) => p.resolverId === best.target.resolver_id).map((p) => p.goal[0].toLowerCase() + p.goal.slice(1));
-  if (also.length) detail += ` It is also the pick for ${also.length > 1 ? `${also.slice(0, -1).join(', ')} and ${also[also.length - 1]}` : also[0]}.`;
+  if (also.length) detail += ` It is also the pick for ${list(also)}.`;
 
-  return { best, runnerUp, tie, sentence, detail, picks, caveats };
+  return { best, sentence, detail, picks, caveats };
 }

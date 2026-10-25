@@ -2,7 +2,7 @@
   import type { CdnInfo, CdnReport, Mapping, Reference, Resolver, RunState } from '../lib/types';
   import { app } from '../lib/store.svelte';
   import { mobile } from '../lib/api';
-  import { holder, label, list, ms } from '../lib/format';
+  import { holder, label, list, ms, resolverName } from '../lib/format';
   import { cellPenalty, ecsByAuthority, edgeIps, edgeNets, level, youOf } from '../lib/cdn';
   import CdnLogo from './CdnLogo.svelte';
   import EdgeNets from './EdgeNets.svelte';
@@ -11,10 +11,7 @@
   let { run, cdn, onopen }: { run: RunState; cdn: CdnReport; onopen: (id: string) => void } = $props();
 
   const byId = $derived(new Map(run.resolvers.map((r) => [r.id, r])));
-  const name = (id: string) => {
-    const r = byId.get(id);
-    return r ? label(r.provider, r.variant) : id;
-  };
+  const name = (id: string) => resolverName(run.resolvers, id);
 
   // DNS-steered CDNs get a column each. Anycast controls come last, marked as such, and
   // stay out of the findings and the penalty.
@@ -108,7 +105,7 @@
   const span = (x: { lo: number; hi: number }) => (x.hi - x.lo < 0.5 ? ms(x.hi) : `${ms(x.lo, false)}–${ms(x.hi)}`);
   // Where the CDN's own pick for you was slow: what did the resolvers that send your
   // subnet get on those same hosts? Counted, not explained: maps shift between lookups.
-  const ecsSenders = $derived(rows.filter(({ r }) => (r.ecs || r.ecs_akamai) && r.ecs_is_client !== false && r.basis !== 'on_net'));
+  const ecsSenders = $derived(rows.filter(({ r }) => r.ecs && r.ecs_is_client !== false && r.basis !== 'on_net'));
   const slowCols = $derived(steered.filter((c) => (you(c)?.penalty_ms ?? 0) >= 3));
   const outcome = $derived.by(() => {
     let same = 0;

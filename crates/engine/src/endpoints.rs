@@ -68,16 +68,13 @@ fn lookup_servers(r: &Resolver, plain: bool) -> Vec<(Endpoint, String)> {
     }
     let own = r.any_ip().filter(|_| r.udp).map(|ip| (ip, format!("{} itself", r.label())));
     let public = ["1.1.1.1", "9.9.9.9", "8.8.8.8"].into_iter().map(|s| (s.parse::<IpAddr>().unwrap(), s.to_string()));
-    own.into_iter()
-        .chain(public)
-        .map(|(ip, via)| (Endpoint { transport: Transport::Udp, addr: SocketAddr::new(ip, 53), host: None, url: None }, via))
-        .collect()
+    own.into_iter().chain(public).map(|(ip, via)| (Endpoint::new(Transport::Udp, SocketAddr::new(ip, 53)), via)).collect()
 }
 
 /// Plain DNS (UDP or TCP) on port 53 of the resolver's primary address.
 pub fn plain(r: &Resolver, t: Transport, want_v6: bool) -> Option<Endpoint> {
     let ip = r.primary(want_v6)?;
-    Some(Endpoint { transport: t, addr: SocketAddr::new(ip, 53), host: None, url: None })
+    Some(Endpoint::new(t, SocketAddr::new(ip, 53)))
 }
 
 /// The DoT or DoH endpoint the resolver publishes, with its address bootstrapped.

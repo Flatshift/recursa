@@ -3,7 +3,8 @@
   // further left is faster; a steep curve is consistent.
   import type { Dist } from '../lib/verdict';
   import type { TestKind } from '../lib/types';
-  import { TEST_LABEL, ms } from '../lib/format';
+  import { ms } from '../lib/format';
+  import { TEST_LABEL } from '../lib/phases';
   import { logInvert, logScale, logTicks } from '../lib/scale';
   import { mobile } from '../lib/api';
 

@@ -10,6 +10,7 @@ use crate::app::{AppState, StopOnDrop};
 use crate::bench;
 use crate::lock;
 use crate::ntp::{self, Consensus, Entry, Plan, Selection, ServerResult, quantile, sorted};
+use crate::stats::median;
 use crate::store::{NtpClockRow, NtpRow};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -197,8 +198,6 @@ pub struct Point {
     pub offset_ms: Option<f64>,
     pub lo_ms: Option<f64>,
     pub hi_ms: Option<f64>,
-    /// The widest error bound (± the path) among them.
-    pub bound_ms: Option<f64>,
     pub delay_ms: Option<f64>,
     pub sent: u32,
     pub ok: u32,
@@ -206,8 +205,6 @@ pub struct Point {
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
 pub struct Stats {
-    pub sent: u32,
-    pub ok: u32,
     /// The share of cycles answered, 0 to 100.
     pub up_pct: f64,
     /// How often it went from answering to silent or back.
@@ -226,7 +223,6 @@ pub struct Stats {
     pub last_ts: Option<i64>,
     pub last_ok: Option<bool>,
     pub last_kind: Option<String>,
-    pub stratum: Option<u8>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -240,8 +236,6 @@ pub struct ServerHistory {
 pub struct ClockPoint {
     pub ts: i64,
     pub median_ms: f64,
-    pub bound_ms: f64,
-    pub independent: u32,
 }
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
@@ -259,7 +253,6 @@ pub struct ClockHistory {
 pub struct History {
     pub since: i64,
     pub until: i64,
-    pub bucket_ms: i64,
     pub cycles: u32,
     pub servers: Vec<ServerHistory>,
     pub clock: ClockHistory,
@@ -267,10 +260,6 @@ pub struct History {
 
 /// At most this many points per series, whatever the window.
 const MAX_POINTS: i64 = 240;
-
-fn median(v: impl Iterator<Item = f64>) -> Option<f64> {
-    quantile(&sorted(v), 0.5)
-}
 
 /// Builds what the page shows from the recorded rows in `since..until`.
 pub fn history(rows: &[NtpRow], clock: &[NtpClockRow], since: i64, until: i64) -> History {
@@ -286,7 +275,7 @@ pub fn history(rows: &[NtpRow], clock: &[NtpClockRow], since: i64, until: i64) -
         .map(|(id, rs)| ServerHistory { id: id.to_string(), stats: stats(&rs), points: points(&rs, since, bucket) })
         .collect();
     let cycles = rows.iter().map(|r| r.ts).collect::<std::collections::BTreeSet<_>>().len() as u32;
-    History { since, until, bucket_ms: bucket, cycles, servers, clock: clock_history(clock, since, bucket) }
+    History { since, until, cycles, servers, clock: clock_history(clock, since, bucket) }
 }
 
 fn points(rs: &[&NtpRow], since: i64, bucket: i64) -> Vec<Point> {
@@ -302,7 +291,6 @@ fn points(rs: &[&NtpRow], since: i64, bucket: i64) -> Vec<Point> {
                 offset_ms: median(off.iter().copied()),
                 lo_ms: off.iter().copied().min_by(f64::total_cmp),
                 hi_ms: off.iter().copied().max_by(f64::total_cmp),
-                bound_ms: g.iter().filter_map(|r| r.bound_ms).max_by(f64::total_cmp),
                 delay_ms: median(g.iter().filter_map(|r| r.delay_ms)),
                 sent: g.len() as u32,
                 ok: g.iter().filter(|r| r.ok).count() as u32,
@@ -330,21 +318,18 @@ fn stats(rs: &[&NtpRow]) -> Stats {
     }
     let last = rs.last();
     Stats {
-        sent,
-        ok,
         up_pct: if sent == 0 { 0.0 } else { ok as f64 * 100.0 / sent as f64 },
         flaps,
         offset_median_ms: quantile(&offsets, 0.5),
         offset_spread_ms: quantile(&offsets, 0.75).zip(quantile(&offsets, 0.25)).map(|(a, b)| a - b),
         delay_median_ms: quantile(&delays, 0.5),
-        delay_p95_ms: if delays.len() >= 8 { quantile(&delays, 0.95) } else { None },
+        delay_p95_ms: if delays.len() >= ntp::MAX_SAMPLES as usize { quantile(&delays, 0.95) } else { None },
         delay_by_hour: hours.into_iter().map(|h| median(h.into_iter())).collect(),
         falseticks: rs.iter().filter(|r| r.sel.as_deref() == Some("falseticker")).count() as u32,
         voted: rs.iter().filter(|r| r.sel.is_some()).count() as u32,
         last_ts: last.map(|r| r.ts),
         last_ok: last.map(|r| r.ok),
         last_kind: last.and_then(|r| r.kind.clone()),
-        stratum: rs.iter().rev().find_map(|r| r.stratum),
     }
 }
 
@@ -355,12 +340,7 @@ fn clock_history(clock: &[NtpClockRow], since: i64, bucket: i64) -> ClockHistory
     }
     let points = b
         .into_iter()
-        .map(|(k, g)| ClockPoint {
-            ts: since + k * bucket + bucket / 2,
-            median_ms: median(g.iter().map(|c| c.median_ms)).unwrap_or(0.0),
-            bound_ms: g.iter().map(|c| c.bound_ms).fold(0.0, f64::max),
-            independent: g.iter().map(|c| c.independent).min().unwrap_or(0),
-        })
+        .map(|(k, g)| ClockPoint { ts: since + k * bucket + bucket / 2, median_ms: median(g.iter().map(|c| c.median_ms)).unwrap_or(0.0) })
         .collect();
     let meds = sorted(clock.iter().map(|c| c.median_ms));
     let span_h = clock.last().zip(clock.first()).map_or(0.0, |(l, f)| (l.ts - f.ts) as f64 / 3_600_000.0);
@@ -444,7 +424,7 @@ mod tests {
         ];
         let h = history(&rows, &[], 0, 4 * H);
         let s = &h.servers[0].stats;
-        assert_eq!((s.sent, s.ok, s.flaps), (4, 3, 2));
+        assert_eq!(s.flaps, 2);
         assert_eq!(s.up_pct, 75.0);
         assert_eq!(s.last_ok, Some(true));
         assert!((s.offset_median_ms.unwrap() - 1.0).abs() < 1e-9);

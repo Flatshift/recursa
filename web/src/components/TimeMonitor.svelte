@@ -2,15 +2,14 @@
   // The Time page's "Over time" view: a light background check of a few time servers, kept for weeks, so what one run
   // can't show comes through: how steady each server is, whether it drops out, and whether this computer's clock wanders.
   import { app } from '../lib/store.svelte';
-  import { monitor } from '../lib/monitor.svelte';
+  import { RETENTION_DAYS, monitor } from '../lib/monitor.svelte';
   import type { NtpEntry, NtpMonitorConfig, NtpMonitorPoint, NtpMonitorResp, NtpMonitorServer } from '../lib/types';
   import { ago, ms, signedMs, when } from '../lib/format';
-  import { MAX_CUSTOM, idMap, nameOf } from '../lib/ntp';
+  import { MAX_CUSTOM, MAX_SERVERS, idMap, nameOf } from '../lib/ntp';
   import Icon from './Icon.svelte';
 
   let { catalog }: { catalog: NtpEntry[] } = $props();
 
-  const MAX_SERVERS = 8;
   const W = 240;
 
   let days = $state(7);
@@ -131,7 +130,7 @@
       <label class="inline">
         Keep
         <select value={mon.cfg.retention_days} onchange={(e) => mon.save({ ...mon.cfg!, retention_days: Number((e.currentTarget as HTMLSelectElement).value) })}>
-          {#each [7, 30, 90, 365] as d}<option value={d}>{d} days</option>{/each}
+          {#each RETENTION_DAYS as d}<option value={d}>{d} days</option>{/each}
         </select>
       </label>
       <details class="pickers">

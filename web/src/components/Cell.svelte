@@ -1,11 +1,11 @@
 <script lang="ts">
-  import type { Cell } from '../lib/cells';
+  import { isBlank, type Cell } from '../lib/cells';
   import Glyph from './Glyph.svelte';
   import Provenance from './Provenance.svelte';
   // `sheet`: in the capability sheet, where measured is the default and says so once in the legend, the value may wrap
   // and only a published value carries its mark.
   let { c, compact = false, sheet = false }: { c: Cell; compact?: boolean; sheet?: boolean } = $props();
-  const blank = $derived(c.prov === 'unknown' && (c.text === '—' || c.text === ''));
+  const blank = $derived(isBlank(c));
 </script>
 
 {#if blank}

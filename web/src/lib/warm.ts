@@ -1,5 +1,6 @@
 // Warm-up answers, drawn as hollow rings while a run warms up. They are never recorded.
 
+import { sinFrac } from './motion';
 import type { TestKind, WarmSample } from './types';
 
 /** Warm-up answers per target and test, in arrival order, for the tests shown. */
@@ -16,6 +17,5 @@ export function warmByTarget(warm: WarmSample[], tests: TestKind[]): Map<number,
 
 /** A stable value in [-1, 1) for the i-th warm-up answer of a test on a target. */
 export function warmJitter(t: number, k: TestKind, i: number): number {
-  const h = Math.sin((t + 1) * 12.9898 + (i + 1) * 78.233 + (k === 'cached' ? 4 : k === 'uncached' ? 5 : 6) * 37.719) * 43758.5453;
-  return (h - Math.floor(h)) * 2 - 1;
+  return sinFrac((t + 1) * 12.9898 + (i + 1) * 78.233 + (k === 'cached' ? 4 : k === 'uncached' ? 5 : 6) * 37.719) * 2 - 1;
 }

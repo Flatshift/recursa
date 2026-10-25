@@ -14,7 +14,7 @@ pub fn install(app: &AppHandle) {
         let line: String = serde_json::from_str(e.payload()).unwrap_or_default();
         eprintln!("[smoke] {line}");
         if line == "menu?" {
-            let _ = handle.emit_to(crate::shell::MAIN, "recursa:menu", "go:/reliability");
+            let _ = handle.emit_to(crate::MAIN, "recursa:menu", "go:/reliability");
         } else if line.starts_with("PASS") {
             handle.exit(0);
         } else if line.starts_with("FAIL") {
@@ -42,7 +42,7 @@ const SCRIPT: &str = r#"(async () => {
     const failed = () => /can.t reach its engine/.test(text());
     const booted = await until(() => text().includes('Test plan') || failed(), 15000);
     if (!booted || failed()) return say('FAIL boot: ' + text().slice(0, 300));
-    say('boot ok, desktop class ' + document.documentElement.classList.contains('desktop') + ', page scrolls ' + (document.scrollingElement.scrollHeight > innerHeight));
+    say('boot ok, page scrolls ' + (document.scrollingElement.scrollHeight > innerHeight));
     let env = null;
     for (let i = 0; i < 50 && !env?.calibration; i++, await new Promise((r) => setTimeout(r, 100))) {
       env = await T.invoke('api', { method: 'GET', path: '/api/env', body: null });

@@ -5,7 +5,8 @@
   import { shortcut, shortcutParts } from '../lib/keys';
   import type { Check, Resolver, TestKind, Transport } from '../lib/types';
   import CachedNames from './CachedNames.svelte';
-  import { TEST_HINT, TEST_LABEL, TRANSPORT_LABEL, documented, duration, label, ms, runEstimateMs } from '../lib/format';
+  import { TEST_HINT, TRANSPORT_LABEL, documented, duration, label, ms, runEstimateMs } from '../lib/format';
+  import { TEST_LABEL } from '../lib/phases';
   import { onResolverContext } from '../lib/resolverMenu';
   import { latestChecks } from '../lib/measured';
   import Icon from './Icon.svelte';
@@ -997,33 +998,6 @@
     overflow: auto;
     overscroll-behavior: contain;
     padding: 0 16px calc(32px + env(safe-area-inset-bottom));
-  }
-  .grabber {
-    position: absolute;
-    top: 7px;
-    left: 50%;
-    width: 36px;
-    height: 5px;
-    margin-left: -18px;
-    border-radius: 3px;
-    background: var(--rule-2);
-  }
-  .sheet-scrim {
-    position: fixed;
-    inset: 0;
-    z-index: var(--z-backdrop);
-    background: var(--backdrop);
-    animation: fadein 320ms var(--ease-out);
-  }
-  @keyframes rise {
-    from {
-      transform: translateY(100%);
-    }
-  }
-  @keyframes fadein {
-    from {
-      opacity: 0;
-    }
   }
   @media (prefers-reduced-motion: reduce) {
     :global(html.mobile) .plan-sheet {

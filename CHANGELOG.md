@@ -6,6 +6,8 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 
 - **Hardening.** Run CSV exports defuse cells that start like a spreadsheet formula, and the launch link Recursa
   opens no longer appears on the opener's command line.
+- **Leaner runs.** A run checks its helper resolvers once rather than once per test, and the CLI states the current
+  score weights.
 
 ## 0.4.0 (2026-10-25)
 

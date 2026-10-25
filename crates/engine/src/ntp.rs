@@ -752,7 +752,7 @@ fn nts_check(host: &str, port: u16, plan: &Plan, cancel: &AtomicBool) -> NtsKe {
     }
     let ip = addr.ip().to_string();
     let Ok(sock) = connect(addr) else { return ke };
-    let spacing = plan.spacing.max(plan.floor);
+    let spacing = plan.spacing;
     if !plan.stagger.is_zero() {
         pause(Duration::from_millis(fastrand::u64(0..plan.stagger.as_millis() as u64)), cancel);
     }
@@ -777,7 +777,7 @@ fn nts_check(host: &str, port: u16, plan: &Plan, cancel: &AtomicBool) -> NtsKe {
         }
         misses = if r.is_ok() { 0 } else { misses + 1 };
         // A reply that fails to verify, or a Kiss-o'-Death, ends it: no point asking again.
-        let stop = matches!(r, Err(NtpError::Kiss(_)) | Err(NtpError::Nts(..))) || misses >= GIVE_UP_AFTER;
+        let stop = matches!(r, Err(NtpError::Kiss(_) | NtpError::Nts(..))) || misses >= GIVE_UP_AFTER;
         results.push(r);
         if stop {
             break;
@@ -847,7 +847,7 @@ pub struct ServerResult {
 }
 
 fn median_of(v: impl Iterator<Item = Option<f64>>) -> Option<f64> {
-    quantile(&sorted(v.flatten()), 0.5)
+    crate::stats::median(v.flatten())
 }
 
 impl ServerResult {
@@ -895,10 +895,8 @@ impl ServerResult {
 pub struct Plan {
     /// Queries per address.
     pub samples: u32,
-    /// Between queries to one address; never less than [`MIN_SPACING`].
+    /// Between queries to one address: [`MIN_SPACING`] for public servers, [`CUSTOM_SPACING`] for a host you typed.
     pub spacing: Duration,
-    /// The shortest `spacing` honoured: [`MIN_SPACING`] for public servers.
-    pub floor: Duration,
     /// Each address waits a random time up to this before its first query, so a run isn't one burst at every server at once.
     pub stagger: Duration,
     pub timeout: Duration,
@@ -908,21 +906,14 @@ pub struct Plan {
 
 impl Default for Plan {
     fn default() -> Self {
-        Plan {
-            samples: 4,
-            spacing: MIN_SPACING,
-            floor: MIN_SPACING,
-            stagger: MIN_SPACING,
-            timeout: Duration::from_millis(2500),
-            ipv6: true,
-        }
+        Plan { samples: 4, spacing: MIN_SPACING, stagger: MIN_SPACING, timeout: Duration::from_millis(2500), ipv6: true }
     }
 }
 
 impl Plan {
     /// The plan for a host the user typed: asked [`CUSTOM_SPACING`] apart, with no stagger.
     fn for_custom(&self) -> Plan {
-        Plan { spacing: CUSTOM_SPACING, floor: CUSTOM_SPACING, stagger: Duration::ZERO, ..self.clone() }
+        Plan { spacing: CUSTOM_SPACING, stagger: Duration::ZERO, ..self.clone() }
     }
 }
 
@@ -943,7 +934,7 @@ fn aaaa(host: &str, port: u16) -> Option<SocketAddr> {
 
 /// Queries one address `plan.samples` times.
 fn measure_addr(addr: SocketAddr, plan: &Plan, cancel: &AtomicBool) -> AddrStats {
-    let spacing = plan.spacing.max(plan.floor);
+    let spacing = plan.spacing;
     let sock = match connect(addr) {
         Ok(s) => s,
         Err(e) => {
@@ -1389,7 +1380,8 @@ pub struct Entry {
     /// What to call it.
     pub name: String,
     pub operator: String,
-    /// service (a company's public NTP), lab (a national time service) or pool (volunteer servers).
+    /// service (a company's public NTP), lab (a national time service), pool (volunteer servers) or custom (a host the
+    /// user typed).
     pub kind: String,
     pub host: String,
     /// The UDP port, when it isn't 123 (a host the user typed).
@@ -1924,6 +1916,7 @@ mod tests {
 
     #[test]
     fn the_advised_set_is_diverse_and_the_avoid_list_says_why() {
+        use Selection::*;
         let entry = |id: &str, operator: &str, kind: &str, leap: Option<&str>| -> Entry {
             serde_json::from_value(serde_json::json!({
                 "id": id, "name": id, "operator": operator, "kind": kind, "host": format!("{id}.example"), "leap": leap
@@ -1950,7 +1943,6 @@ mod tests {
             selection: Some(sel),
             ..Default::default()
         };
-        use Selection::*;
         let mut results = vec![
             srv("near", 1, "GPS", 2.0, Truechimer),
             srv("twin", 1, "GPS", 3.0, Truechimer),
@@ -2501,9 +2493,9 @@ mod nts_tests {
         assert_eq!(list.len(), 5);
         let (list, added) = with_references(vec![catalog().remove(0), custom_entry("ntp.lan").unwrap()]);
         assert_eq!((list.len(), added.len()), (2, 0));
-        // The plan for a host of your own is quick; the public plan keeps its floor.
+        // The plan for a host of your own is quick; the public plan keeps its spacing.
         let p = Plan::default();
-        assert_eq!((p.floor, p.for_custom().spacing, p.for_custom().stagger), (MIN_SPACING, CUSTOM_SPACING, Duration::ZERO));
+        assert_eq!((p.spacing, p.for_custom().spacing, p.for_custom().stagger), (MIN_SPACING, CUSTOM_SPACING, Duration::ZERO));
     }
 
     #[test]

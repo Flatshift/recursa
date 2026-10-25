@@ -1,8 +1,6 @@
 import type { Resolver, Transport, TestKind } from './types';
 import { checksOf } from './phases';
 
-export { TEST_LABEL } from './phases';
-
 export const TEST_HINT: Record<TestKind, string> = {
   cached: 'Popular names the resolver already holds: network round trip plus front-end time.',
   uncached: 'Random names under wildcard zones: forces the resolver to ask the authoritative servers.',
@@ -97,11 +95,20 @@ export function checkMs(resolvers: number, c: { probes: boolean; cdn: boolean })
   return Object.fromEntries(checksOf(c).map((id) => [id, each[id]]));
 }
 
+/** How many distinct resolvers a run's targets cover (a resolver may have several transports). */
+export const resolverCount = (targets: { resolver_id: string }[]): number => new Set(targets.map((t) => t.resolver_id)).size;
+
 /** Resolvers the catalog documents, so published claims apply. */
 export const documented = (r: Resolver) => r.group === 'public' || r.group === 'legacy';
 
 export function label(provider: string, variant: string): string {
   return variant ? `${provider} ${variant}` : provider;
+}
+
+/** A resolver's name from its id, in the given list; the id itself if the list doesn't have it. */
+export function resolverName(resolvers: Resolver[], id: string): string {
+  const r = resolvers.find((x) => x.id === id);
+  return r ? label(r.provider, r.variant) : id;
 }
 
 /** Scores and short latencies: one decimal under 10, whole numbers above. */

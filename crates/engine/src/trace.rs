@@ -46,11 +46,6 @@ pub struct Hop {
 /// Probes that were never sent are left out.
 type RoundProbes = Vec<(u8, Option<(IpAddr, f64)>)>;
 
-/// RFC 1918, 100.64/10, link-local and loopback (IPv6: ULA, link-local, loopback): the user's own network.
-pub(crate) fn is_private(ip: IpAddr) -> bool {
-    crate::catalog::is_private(&ip)
-}
-
 fn round1(ms: f64) -> f64 {
     (ms * 10.0).round() / 10.0
 }
@@ -87,7 +82,7 @@ fn fold(rounds: &[RoundProbes], target: IpAddr) -> (Vec<Hop>, bool) {
             let got: Vec<f64> = samples_ms.iter().flatten().copied().collect();
             Hop {
                 ttl,
-                private: addrs.first().is_some_and(|a| is_private(*a)),
+                private: addrs.first().is_some_and(crate::catalog::is_private),
                 addrs,
                 asn: None,
                 holder: None,
@@ -219,10 +214,10 @@ mod tests {
     #[test]
     fn private_ranges() {
         for p in ["192.168.1.1", "10.0.0.1", "172.20.20.4", "100.64.0.1", "169.254.1.1", "127.0.0.1", "fd00::1", "fe80::1", "::1"] {
-            assert!(is_private(ip(p)), "{p}");
+            assert!(crate::catalog::is_private(&ip(p)), "{p}");
         }
         for p in ["1.1.1.1", "100.128.0.1", "172.32.0.1", "151.181.161.97", "2606:4700:4700::1111"] {
-            assert!(!is_private(ip(p)), "{p}");
+            assert!(!crate::catalog::is_private(&ip(p)), "{p}");
         }
     }
 

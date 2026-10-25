@@ -105,7 +105,7 @@ export function localNote(f: StatusFeed): string | null {
   }
 }
 
-export function stateGlyph(s: string): 'pass' | 'partial' | 'fail' | 'unknown' | 'info' {
+export function stateGlyph(s: string): 'pass' | 'partial' | 'fail' | 'unknown' {
   if (s === 'operational') return 'pass';
   if (s === 'degraded_performance' || s === 'under_maintenance') return 'partial';
   if (s === 'partial_outage' || s === 'major_outage') return 'fail';
