@@ -961,6 +961,13 @@ html.mobile .segmented button {
     opacity: 0;
   }
 }
+/* A chip or dot that appears: grows in from small (CDN edges and their networks). */
+@keyframes pop {
+  from {
+    scale: 0.4;
+    opacity: 0;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .skel.now,
   .arrive {

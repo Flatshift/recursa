@@ -58,12 +58,6 @@
     color: var(--good);
     font-weight: 600;
   }
-  @keyframes pop {
-    from {
-      scale: 0.4;
-      opacity: 0;
-    }
-  }
   @media (prefers-reduced-motion: reduce) {
     .net.live {
       animation: none;

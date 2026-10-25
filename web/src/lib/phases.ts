@@ -1,4 +1,12 @@
 import type { RunView } from './store.svelte';
+import type { TestKind } from './types';
+
+/** The latency rounds' names. */
+export const TEST_LABEL: Record<TestKind, string> = {
+  cached: 'Cached',
+  uncached: 'Uncached',
+  tld: 'TLD',
+};
 
 interface Phase {
   id: string;
@@ -17,9 +25,9 @@ interface Phase {
 const PHASES: Phase[] = [
   { id: 'setup', name: 'Setup', lead: true },
   { id: 'warmup', name: 'Warm-up', lead: true },
-  { id: 'cached', name: 'Cached' },
-  { id: 'uncached', name: 'Uncached' },
-  { id: 'tld', name: 'TLD' },
+  { id: 'cached', name: TEST_LABEL.cached },
+  { id: 'uncached', name: TEST_LABEL.uncached },
+  { id: 'tld', name: TEST_LABEL.tld },
   { id: 'path', name: 'Path check', check: true, tab: 'path' },
   { id: 'probes', name: 'Probes', check: true, opt: 'probes', tab: 'caps' },
   { id: 'cdn', name: 'CDN mapping', check: true, opt: 'cdn', tab: 'cdn' },

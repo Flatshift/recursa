@@ -1,18 +1,21 @@
 import { untrack } from 'svelte';
-import { RERANK_GAP, reduceMotion } from './motion';
+import { RERANK_GAP, orderOf, reduceMotion } from './motion';
 
-/** A ranked list's displayed order. It follows `want`, but while `live` re-ranks at most once per `RERANK_GAP`, so each
+/** A ranked list's displayed order. It follows `ids`, but while `live` re-ranks at most once per `RERANK_GAP`, so each
  *  slide finishes before the next one starts and near-tied rows don't trade places on every refresh. A change in which
- *  rows are listed applies at once. `want` should return the same array until the order changes (`orderOf`). */
-export function pacedOrder(want: () => number[], live: () => boolean) {
-  let shown = $state.raw(untrack(want));
+ *  rows are listed applies at once, and rows that left drop out at once. The order is the same array until it really
+ *  changes (`orderOf`). */
+export function pacedOrder(ids: () => number[], live: () => boolean) {
+  const keepWant = orderOf();
+  const want = $derived(keepWant(ids()));
+  let shown = $state.raw(untrack(() => want));
   let at = 0;
   const show = (next: number[]) => {
     shown = next;
     at = performance.now();
   };
   $effect.pre(() => {
-    const next = want();
+    const next = want;
     const pace = live() && !reduceMotion;
     let timer: ReturnType<typeof setTimeout> | undefined;
     untrack(() => {
@@ -24,9 +27,14 @@ export function pacedOrder(want: () => number[], live: () => boolean) {
     });
     return () => clearTimeout(timer);
   });
+  const keepShown = orderOf();
+  const current = $derived.by(() => {
+    const listed = new Set(want);
+    return keepShown(shown.filter((k) => listed.has(k)));
+  });
   return {
     get current() {
-      return shown;
+      return current;
     },
   };
 }
