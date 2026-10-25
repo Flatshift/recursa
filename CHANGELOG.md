@@ -2,6 +2,11 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- **Hardening.** Run CSV exports defuse cells that start like a spreadsheet formula, and the launch link Recursa
+  opens no longer appears on the opener's command line.
+
 ## 0.4.0 (2026-10-25)
 
 - **Blocking tests.** Malware and phishing now show whether blocking was confirmed on the services' own test names;

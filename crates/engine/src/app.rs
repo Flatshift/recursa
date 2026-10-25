@@ -939,7 +939,7 @@ impl AppState {
         let empty = Vec::new();
         let targets = v["targets"].as_array().unwrap_or(&empty);
         let samples = v["samples"].as_array().unwrap_or(&empty);
-        let q = |x: &Value| format!("\"{}\"", x.as_str().unwrap_or("").replace('"', "\"\""));
+        let q = |x: &Value| crate::ntp_report::csv_field(x.as_str().unwrap_or(""));
         let mut out = String::with_capacity(64 + samples.len() * 96);
         out.push_str("resolver_id,provider,variant,transport,family,ip,test,round,outcome,rtt_ms,at_ms,excused\n");
         for s in samples {
@@ -1304,6 +1304,21 @@ mod tests {
         assert_eq!(a.call("POST", "/api/runs", cfg["defaults"].clone()).await.unwrap_err().error, "Pick at least one test.");
         let bad = a.call("POST", "/api/resolvers", json!({"ip": "not-an-ip"})).await.unwrap_err();
         assert_eq!((bad.status, bad.error.as_str()), (400, "That isn't an IPv4 or IPv6 address."));
+        for ext in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{ext}", a.store.path.display()));
+        }
+    }
+
+    #[tokio::test]
+    async fn the_run_csv_defuses_names_that_look_like_formulas() {
+        let a = app();
+        let body = json!({
+            "targets": [{ "resolver_id": "custom-1", "provider": "=HYPERLINK(\"x\")", "variant": "@home, v2", "transport": "udp", "family": "v4", "ip": "192.0.2.1" }],
+            "samples": [{ "t": 0, "us": 1500, "k": "cached", "i": 0, "o": "ok", "at": 10, "x": false }],
+        });
+        a.store.save_run("r1", bench::now_ms(), None, "done", &json!({}), &body.to_string());
+        let csv = a.export("r1", true).unwrap().body;
+        assert_eq!(csv.lines().nth(1), Some("custom-1,\"'=HYPERLINK(\"\"x\"\")\",\"'@home, v2\",udp,v4,192.0.2.1,cached,0,ok,1.500,10,0"));
         for ext in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{ext}", a.store.path.display()));
         }
