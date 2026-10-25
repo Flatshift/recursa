@@ -368,18 +368,7 @@
                 {/each}
 
                 {#if v}
-                  <Verdict {v} cdn={!!run.cdn} {caution} onopen={open}>
-                    {#if rows.some((r) => r.measured)}
-                      <RankList
-                        rows={rank(rows)}
-                        samples={run.samples}
-                        tests={run.config.tests}
-                        multi={transports.length > 1}
-                        onopen={open}
-                        onmore={() => app.setRunView('latency')}
-                      />
-                    {/if}
-                  </Verdict>
+                  <Verdict {v} cdn={!!run.cdn} {caution} samples={run.samples} onopen={open} />
                   {#if mobile && v.caveats.length}
                     <details class="notes">
                       <summary>{v.caveats.length === 1 ? 'One caveat' : `${v.caveats.length} caveats`}</summary>

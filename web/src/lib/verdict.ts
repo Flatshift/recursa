@@ -298,10 +298,24 @@ export function compositeOf(dist: Record<TestKind, Dist>, tests: TestKind[], wei
   return w ? sum / w + (sent ? (TIMEOUT_COST_MS * to) / sent : 0) : null;
 }
 
+/** The terms behind a per-lookup figure: what a cached and a fresh lookup cost, what timeouts and failed answers add,
+ *  and the CDN edge penalty, with their sum. */
+export interface PerLookupTerms {
+  /** The cached figure corrected for answers that were really fresh lookups; null when the cached test did not run. */
+  hit: number | null;
+  /** The uncached and TLD figures blended by their weights; null when neither test ran. */
+  miss: number | null;
+  /** What timeouts and failed answers add, in ms. */
+  failures: number;
+  /** What CDN edge distance adds on lookups that open a new connection; null without CDN mapping. */
+  cdn: number | null;
+  total: number;
+}
+
 /** What one lookup costs on average at a traffic mix: the cached figure, corrected
  *  for answers that were really fresh lookups when the cache-hit rate is known, and the uncached and TLD figures for the
  *  rest, plus the cost of timeouts and failed answers and the CDN edge penalty on the lookups that open a new connection. */
-export function perLookupOf(dist: Record<TestKind, Dist>, tests: TestKind[], cacheHits: number | null, cdn: number | null, hitShare: number): number | null {
+export function perLookupTerms(dist: Record<TestKind, Dist>, tests: TestKind[], cacheHits: number | null, cdn: number | null, hitShare: number): PerLookupTerms | null {
   const typ = (k: TestKind) => (tests.includes(k) ? cost(dist[k]) : null);
   let msum = 0;
   let mw = 0;
@@ -325,7 +339,13 @@ export function perLookupOf(dist: Record<TestKind, Dist>, tests: TestKind[], cac
   const kept = TESTS.filter((k) => !dist[k].limited);
   const to = kept.reduce((a, k) => a + dist[k].timeouts + dist[k].failures, 0);
   const sent = kept.reduce((a, k) => a + dist[k].sent, 0);
-  return sum / w + (sent ? (TIMEOUT_COST_MS * to) / sent : 0) + (cdn == null ? 0 : CDN_ROUND_TRIPS * cdn * CONNECTION_SHARE);
+  const failures = sent ? (TIMEOUT_COST_MS * to) / sent : 0;
+  const edge = cdn == null ? null : CDN_ROUND_TRIPS * cdn * CONNECTION_SHARE;
+  return { hit, miss, failures, cdn: edge, total: sum / w + failures + (edge ?? 0) };
+}
+
+export function perLookupOf(dist: Record<TestKind, Dist>, tests: TestKind[], cacheHits: number | null, cdn: number | null, hitShare: number): number | null {
+  return perLookupTerms(dist, tests, cacheHits, cdn, hitShare)?.total ?? null;
 }
 
 /** The share of a row's composite that timeouts and failed answers cost, in ms. */
@@ -449,6 +469,21 @@ export function check(run: RunState, resolverId: string, key: string): Check | u
   return run.probes[resolverId]?.checks.find((c) => c.key === key);
 }
 
+/** The small graph a pick row draws: what that goal was decided on. */
+export type PickGraph =
+  /** The winner's answered queries on the shared log axis, for the tests the goal counts, with its score as a tick. */
+  | { kind: 'dots'; target: number; tests: TestKind[]; at: number | null }
+  /** Each candidate's distance from the best CDN edges on one axis from zero, winner first; nearer zero wins. */
+  | { kind: 'edges'; cands: { name: string; v: number }[] }
+  /** Each candidate's answer-time spread on one axis from zero, winner first; nearer zero wins. */
+  | { kind: 'spread'; cands: { name: string; v: number; ok: number }[] }
+  /** One square per malware test domain, filled where it was blocked. */
+  | { kind: 'units'; items: { name: string; on: boolean }[] }
+  /** The terms a figure adds up, as one bar; labels match the pick's parts. */
+  | { kind: 'stack'; terms: { label: string; v: number; c: 'cached' | 'uncached' | 'neutral' | 'tld' }[] }
+  /** Each probed resolver a column, each privacy property a row, filled where it holds; the winner's column first. */
+  | { kind: 'checks'; rows: string[]; cols: { name: string; on: boolean[]; win: boolean }[] };
+
 interface Pick {
   goal: string;
   resolverId: string;
@@ -460,6 +495,9 @@ interface Pick {
   /** The full sentence the figure and note abbreviate. */
   evidence: string;
   verified: boolean;
+  /** The terms the figure adds up, as label and value pairs; only Best from here has them. */
+  parts?: [string, string][];
+  graph?: PickGraph;
 }
 
 export interface Verdict {
@@ -549,14 +587,15 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
     note: fastestShort,
     evidence: `${ms(best.composite)} speed score${fastest}`,
     verified: true,
+    graph: { kind: 'dots', target: best.target.idx, tests: run.config.tests, at: best.composite },
   });
 
   // The two halves of the speed score as picks of their own. A resolver with no figure for a half is left out of it.
   const halves = [
-    { goal: 'Fastest cache', part: PART_WEIGHTS.cache, what: 'on cached answers' },
-    { goal: 'Fastest fresh lookups', part: PART_WEIGHTS.fresh, what: 'on fresh lookups (uncached and TLD)' },
+    { goal: 'Fastest cache', part: PART_WEIGHTS.cache, what: 'on cached answers', tests: ['cached'] as TestKind[] },
+    { goal: 'Fastest fresh lookups', part: PART_WEIGHTS.fresh, what: 'on fresh lookups (uncached and TLD)', tests: ['uncached', 'tld'] as TestKind[] },
   ];
-  for (const { goal, part, what } of halves) {
+  for (const { goal, part, what, tests } of halves) {
     const partScorer: Scorer = (dist, tests) => compositeOf(dist, tests, part);
     const scored = [...per.values()]
       .map((r) => ({ r, s: compositeOf(r.dist, run.config.tests, part) }))
@@ -574,6 +613,7 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
       note: l.short,
       evidence: `${ms(first.s)} ${what}${l.text}`,
       verified: true,
+      graph: { kind: 'dots', target: first.r.target.idx, tests: tests.filter((k) => run.config.tests.includes(k)), at: first.s },
     });
   }
 
@@ -601,6 +641,7 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
         note: basisShort,
         evidence: `${onBest ? 'on the best edges' : `${ms(top.c.penalty_ms)} from the best edges`}; ${basis}`,
         verified: true,
+        graph: { kind: 'edges', cands: cdnCands.map((x) => ({ name: nameOf(x.id), v: x.c.penalty_ms! })) },
       });
     }
   }
@@ -632,23 +673,35 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
       note: `${yoursShort(protective[0])}${mal ? 'malware domains, ' : ''}DNSSEC`,
       evidence: `${yours(protective[0])}blocked ${mal ? `${mal.blocked} of ${mal.tested}` : 'most'} malware test domains; validates DNSSEC`,
       verified: true,
+      graph:
+        mal && mal.tested
+          ? {
+              kind: 'units',
+              items: mal.samples.length
+                ? mal.samples.filter((s) => s.blocked != null).map((s) => ({ name: s.domain, on: s.blocked! }))
+                : Array.from({ length: mal.tested }, (_, i) => ({ name: `Test domain ${i + 1}`, on: i < mal.blocked })),
+            }
+          : undefined,
     });
   }
 
   // Blocking trackers keeps them from seeing you at all, so among private resolvers the ones that do come first.
   const tracks = (id: string) => (check(run, id, 'filter_ads')?.present === true ? 1 : 0);
-  const priv = pool
-    .filter((id) => {
-      const r = rowOf(id);
-      return (
-        (r.resolver?.group !== 'system' || r.forwarder != null) &&
-        check(run, id, 'ecs')?.present === false &&
-        check(run, id, 'qmin')?.present === true &&
-        check(run, id, 'dnssec')?.present === true
-      );
-    })
-    .sort((a, b) => tracks(b) - tracks(a) || ownFirst(a, b));
+  const privacy: [string, (id: string) => boolean][] = [
+    ['No client subnet', (id) => check(run, id, 'ecs')?.present === false],
+    ['QNAME minimisation', (id) => check(run, id, 'qmin')?.present === true],
+    ['DNSSEC', (id) => check(run, id, 'dnssec')?.present === true],
+    ['Blocks trackers', (id) => tracks(id) === 1],
+  ];
+  const named = pool.filter((id) => {
+    const r = rowOf(id);
+    return r.resolver?.group !== 'system' || r.forwarder != null;
+  });
+  const priv = named.filter((id) => privacy.slice(0, 3).every(([, has]) => has(id))).sort((a, b) => tracks(b) - tracks(a) || ownFirst(a, b));
   if (priv[0]) {
+    const held = (id: string) => privacy.map(([, has]) => has(id));
+    const count = (id: string) => held(id).filter(Boolean).length;
+    const probed = named.filter((id) => check(run, id, 'ecs') != null).sort((a, b) => Number(b === priv[0]) - Number(a === priv[0]) || count(b) - count(a));
     picks.push({
       goal: 'Most private',
       resolverId: priv[0],
@@ -657,6 +710,11 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
       note: `${yoursShort(priv[0])}QNAME minimisation, DNSSEC${tracks(priv[0]) ? ', blocks trackers' : ''}`,
       evidence: `${yours(priv[0])}no client subnet sent, QNAME minimisation on, validates DNSSEC${tracks(priv[0]) ? ', blocks trackers' : ''}`,
       verified: true,
+      graph: {
+        kind: 'checks',
+        rows: privacy.map(([l]) => l),
+        cols: probed.map((id) => ({ name: nameOfRow(rowOf(id)), on: held(id), win: id === priv[0] })),
+      },
     });
   }
 
@@ -670,6 +728,15 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
       note: `${pct(steady[0].success)} answered`,
       evidence: `${pct(steady[0].success)} answered; answer times vary by only ${ms(spread(steady[0]))} (standard deviation)`,
       verified: true,
+      graph:
+        spread(steady[0]) != null
+          ? {
+              kind: 'spread',
+              cands: steady
+                .filter((r) => spread(r) != null)
+                .map((r) => ({ name: nameOfRow(r), v: spread(r)!, ok: r.success })),
+            }
+          : undefined,
     });
   }
 
@@ -682,6 +749,21 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
     const perLookupScorer: Scorer = (dist, tests, row) => perLookupOf(dist, tests, row.target.cache_hits ?? null, row.cdn, hitShare);
     const l = lead(top, top.perLookup, nextRow, nextRow?.perLookup, perLookupScorer);
     const noCdn = lookups.every((r) => r.cdnTerm == null);
+    const t = perLookupTerms(top.dist, run.config.tests, top.target.cache_hits ?? null, top.cdn, hitShare)!;
+    const parts: [string, string][] = [];
+    if (t.hit != null) parts.push(['Cache hit', t.hit < 0.005 ? '≈0 ms' : ms(t.hit)]);
+    if (t.miss != null) parts.push(['Fresh lookup', ms(t.miss)]);
+    if (t.hit != null && t.miss != null) parts.push(['Mix', `${pct(hitShare, 0)} cached`]);
+    if (top.target.cache_hits != null) parts.push(['Measured hit rate', pct(top.target.cache_hits, 0)]);
+    if (t.failures > 0) parts.push(['Timeouts', `+${ms(t.failures)}`]);
+    if (t.cdn != null) parts.push(['CDN edges', `+${ms(t.cdn)}`]);
+    // The bar shares out the total: the two speed terms at the mix, then what timeouts and CDN edges add.
+    const both = t.hit != null && t.miss != null;
+    const terms: Extract<PickGraph, { kind: 'stack' }>['terms'] = [];
+    if (t.hit != null) terms.push({ label: 'Cache hit', v: both ? t.hit * hitShare : t.hit, c: 'cached' });
+    if (t.miss != null) terms.push({ label: 'Fresh lookup', v: both ? t.miss * (1 - hitShare) : t.miss, c: 'uncached' });
+    if (t.failures > 0) terms.push({ label: 'Timeouts', v: t.failures, c: 'neutral' });
+    if (t.cdn != null) terms.push({ label: 'CDN edges', v: t.cdn, c: 'tld' });
     picks.push({
       goal: 'Best from here',
       resolverId: top.target.resolver_id,
@@ -690,6 +772,8 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
       note: [`${mixLabel(hitShare)} mix`, l.short, noCdn ? 'no CDN term' : ''].filter(Boolean).join(', '),
       evidence: `${ms(top.perLookup)} per lookup at the ${mixLabel(hitShare)} mix${l.text}${noCdn ? ' (no CDN term)' : ''}`,
       verified: true,
+      parts,
+      graph: { kind: 'stack', terms },
     });
   }
 

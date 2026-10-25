@@ -354,6 +354,12 @@ describe('verdict: Best from here', () => {
     expect(pick.evidence).toContain('per lookup at the Home mix');
     expect(pick.evidence).toContain('ahead of A');
     expect(pick.evidence).not.toContain('no CDN term');
+    expect(pick.parts).toEqual([
+      ['Cache hit', '18.0 ms'],
+      ['Fresh lookup', '18.0 ms'],
+      ['Mix', '80% cached'],
+      ['CDN edges', '+1.50 ms'],
+    ]);
   });
 
   it('says level when the figures differ by less than 0.05 ms', () => {

@@ -1,6 +1,7 @@
 <script lang="ts">
   // The provenance mark: ● measured from this network · ○ published by the operator · – unknown.
-  let { kind }: { kind: 'verified' | 'published' | 'unknown' } = $props();
+  // `titled` off where a surrounding tooltip already explains the mark, so two never stack.
+  let { kind, titled = true }: { kind: 'verified' | 'published' | 'unknown'; titled?: boolean } = $props();
   const title = $derived(
     kind === 'verified'
       ? 'Measured from your network in this run'
@@ -10,7 +11,7 @@
   );
 </script>
 
-<span class="prov {kind}" {title} aria-label={title} role="img"></span>
+<span class="prov {kind}" title={titled ? title : undefined} aria-label={title} role="img"></span>
 
 <style>
   .prov {
