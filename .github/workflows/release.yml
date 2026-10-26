@@ -1,7 +1,8 @@
 name: Release
 
-# Push a v* tag to build the installers and attach them to a draft GitHub Release. Both are unsigned
-# (ad-hoc on macOS), so Gatekeeper and SmartScreen will warn until signing is set up.
+# Push a v* tag to build the installers and attach them to a draft GitHub Release. The macOS DMG is
+# Developer ID signed and notarized when the APPLE_* secrets are set (ad-hoc signed otherwise); the
+# Windows installers are unsigned, so SmartScreen will warn.
 on:
   push:
     tags: ['v*']
@@ -45,9 +46,53 @@ jobs:
         run: |
           npm ci
           npm run build
+      # Secrets: APPLE_CERTIFICATE (base64 .p12 of the Developer ID Application identity),
+      # APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY ("Developer ID Application: Name (TEAM)"),
+      # APPLE_API_KEY (key ID), APPLE_API_ISSUER, APPLE_API_KEY_CONTENT (the .p8 text).
+      - name: Signing identity and notarization key
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "No APPLE_CERTIFICATE secret: ad-hoc signing"
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -hex 16)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          security find-identity -v -p codesigning "$keychain"
+          echo "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/AuthKey.p8"
+          {
+            echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
+            echo "APPLE_API_KEY=$APPLE_API_KEY"
+            echo "APPLE_API_ISSUER=$APPLE_API_ISSUER"
+            echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8"
+          } >> "$GITHUB_ENV"
       - name: Universal DMG
         working-directory: crates/desktop
         run: ../../web/node_modules/.bin/tauri build --target universal-apple-darwin --features custom-protocol
+      - name: Notarize the DMG
+        if: env.APPLE_SIGNING_IDENTITY != '-'
+        run: |
+          for dmg in target/universal-apple-darwin/release/bundle/dmg/*.dmg; do
+            xcrun notarytool submit "$dmg" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" \
+              --issuer "$APPLE_API_ISSUER" --wait
+            xcrun stapler staple "$dmg"
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos

@@ -15,19 +15,14 @@ It comes two ways, built from the same engine and interface:
 
 ## Install
 
-Download from the [Releases page](https://github.com/flatshift/recursa/releases). The builds are not yet signed with
-a developer certificate, so each system warns once:
+Download from the [Releases page](https://github.com/flatshift/recursa/releases).
 
 * **macOS** (`Recursa_<version>_universal.dmg`, Apple silicon and Intel): open the DMG and drag Recursa to Applications.
-  The first time, right-click Recursa.app and choose **Open**. If macOS says the app is damaged, clear the download
-  quarantine mark and open it again:
-
-  ```bash
-  xattr -dr com.apple.quarantine /Applications/Recursa.app
-  ```
+  The app is Developer ID signed and notarized by Apple, so it opens without a warning.
 
 * **Windows** (`Recursa_<version>_x64-setup.exe`, or `_arm64-setup.exe` for Windows on ARM): run the installer; it
-  installs for the current user and needs no administrator rights. When SmartScreen appears, choose **More info**, then
+  installs for the current user and needs no administrator rights. The installers are not yet signed with a
+  certificate, so Windows warns once. When SmartScreen appears, choose **More info**, then
   **Run anyway**.
 
 Or build it yourself (Rust 1.88+, Node 22.12+, Python 3):
@@ -87,7 +82,7 @@ cd web && npm ci && cd ..
 python3 -I tools/notices.py                                      # third-party notices, embedded in both builds
 cd web && npm run build && cd ..
 cargo build --release                                            # the CLI
-cd crates/desktop && ../../web/node_modules/.bin/tauri build     # the app (Tauri 2), ad-hoc signed
+cd crates/desktop && ../../web/node_modules/.bin/tauri build     # the app (Tauri 2); see build.sh for signing
 ```
 
 The UI in `web/dist` is embedded into both at compile time. For UI work, run `recursa --no-open` and `npm run dev` in
