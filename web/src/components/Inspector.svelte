@@ -1,13 +1,17 @@
 <script lang="ts">
+  // One resolver beside the list or the run: its name and addresses, then its six views as tabs. The chosen view stays
+  // when the selection moves to another resolver.
+  import { untrack } from 'svelte';
   import type { Resolver, RunState } from '../lib/types';
   import type { Row } from '../lib/verdict';
   import { shortcut } from '../lib/keys';
   import { label } from '../lib/format';
   import { status } from '../lib/status.svelte';
   import Icon from './Icon.svelte';
-  import ResolverDetail from './ResolverDetail.svelte';
-  import { app } from '../lib/store.svelte';
+  import ResolverDetail, { RESOLVER_VIEW_LABEL, VIEW_CHECK } from './ResolverDetail.svelte';
+  import { app, RESOLVER_VIEWS, type ResolverView } from '../lib/store.svelte';
   import { mobile } from '../lib/api';
+  import { RUN_ALL_TITLE, allKinds, blocker, isRunning, runAll, runningAll } from '../lib/checks.svelte';
 
   let {
     resolver,
@@ -44,10 +48,22 @@
     pull = null;
     if (fast || dy > (sheet?.offsetHeight ?? 600) / 3) onclose();
   }
-
-
   const id = $derived(resolver.id);
-  const open = () => app.navigate(`/resolver/${id}`);
+  const stop = $derived(blocker());
+  const setView = (v: ResolverView) => (app.resolverView = v);
+  // A view whose check is running carries the live dot.
+  const working = (v: ResolverView) => {
+    const kind = VIEW_CHECK[v];
+    return !!kind && isRunning(kind, id);
+  };
+  // ⌥⌘1–6 pick a view on the Resolvers page; in a run they pick the run's views.
+  const keyed = $derived(app.route.name === 'resolvers');
+
+  let scroller = $state<HTMLElement>();
+  $effect(() => {
+    app.resolverView;
+    untrack(() => scroller?.scrollTo({ top: 0 }));
+  });
 </script>
 
 {#if mobile}
@@ -63,35 +79,53 @@
   bind:this={sheet}
   ontouchstart={(e) => e.stopPropagation()}
 >
-  <div class="inner scroll">
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <header class="head" ontouchstart={mobile ? pullStart : undefined} ontouchmove={mobile ? pullMove : undefined} ontouchend={mobile ? pullEnd : undefined} ontouchcancel={mobile ? pullEnd : undefined}>
-      {#if mobile}<span class="grabber" aria-hidden="true"></span>{/if}
-      <div>
-        <p class="kicker">
-          {resolver.group === 'system' ? 'Your network' : resolver.group === 'custom' ? 'Custom resolver' : resolver.group === 'legacy' ? 'Legacy resolver' : 'Public resolver'}{resolver.published.jurisdiction ? ` · ${resolver.published.jurisdiction}` : ''}
-        </p>
-        <h2 id="sheet-title">{label(resolver.provider, resolver.variant)}</h2>
-        <p class="addrs mono">
-          {[...resolver.ipv4, ...resolver.ipv6].join(' · ')}
-        </p>
-        {#if resolver.dot || resolver.doh}
-          <p class="addrs mono">
-            {#if resolver.dot}DoT {resolver.dot}{/if}{#if resolver.dot && resolver.doh}&nbsp;·&nbsp;{/if}{#if resolver.doh}DoH {resolver.doh.replace('https://', '')}{/if}
+  <div class="inner scroll" bind:this={scroller}>
+    <div class="bar">
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <header class="head" ontouchstart={mobile ? pullStart : undefined} ontouchmove={mobile ? pullMove : undefined} ontouchend={mobile ? pullEnd : undefined} ontouchcancel={mobile ? pullEnd : undefined}>
+        {#if mobile}<span class="grabber" aria-hidden="true"></span>{/if}
+        <div class="who">
+          <p class="kicker">
+            {resolver.group === 'system' ? 'Your network' : resolver.group === 'custom' ? 'Custom resolver' : resolver.group === 'legacy' ? 'Legacy resolver' : 'Public resolver'}{resolver.published.jurisdiction ? ` · ${resolver.published.jurisdiction}` : ''}
           </p>
-        {/if}
+          <h2 id="sheet-title">{label(resolver.provider, resolver.variant)}</h2>
+          <p class="addrs mono">
+            {[...resolver.ipv4, ...resolver.ipv6].join(' · ')}
+          </p>
+          {#if resolver.dot || resolver.doh}
+            <p class="addrs mono">
+              {#if resolver.dot}DoT {resolver.dot}{/if}{#if resolver.dot && resolver.doh}&nbsp;·&nbsp;{/if}{#if resolver.doh}DoH {resolver.doh.replace('https://', '')}{/if}
+            </p>
+          {/if}
+        </div>
+        <div class="acts">
+          <button class="btn sm runall" disabled={!!stop} title={stop ?? RUN_ALL_TITLE} onclick={() => runAll(id, allKinds(resolver))}>
+            <Icon name="play" size={12} />{runningAll(id) ? 'Running…' : 'Run all checks'}
+          </button>
+          {#if mobile}
+            <button class="done" onclick={onclose}>Done</button>
+          {:else}
+            <button class="tb-icon close" aria-label="Close inspector" title="Close inspector ({shortcut('alt+cmd+I')})" onclick={onclose}><Icon name="close" size={14} /></button>
+          {/if}
+        </div>
+      </header>
+      <div class="segmented tabs" role="tablist" aria-label="Resolver view">
+        {#each RESOLVER_VIEWS as view, i}
+          <button
+            role="tab"
+            aria-selected={app.resolverView === view}
+            aria-controls="inspector-panel"
+            title={keyed ? `${RESOLVER_VIEW_LABEL[view]} (${shortcut(`alt+cmd+${i + 1}`)})` : undefined}
+            onclick={() => setView(view)}
+            >{RESOLVER_VIEW_LABEL[view]}{#if working(view)}<span class="live-dot" aria-hidden="true"></span><span class="visually-hidden">, in progress</span>{/if}</button
+          >
+        {/each}
       </div>
-      <div class="acts">
-        <button class="tb-icon close" aria-label="Open in page" title="Open in page ({shortcut('cmd+Enter')})" onclick={open}><Icon name="external" size={14} /></button>
-        {#if mobile}
-          <button class="done" onclick={onclose}>Done</button>
-        {:else}
-          <button class="tb-icon close" aria-label="Close inspector" title="Close inspector ({shortcut('alt+cmd+I')})" onclick={onclose}><Icon name="close" size={14} /></button>
-        {/if}
-      </div>
-    </header>
+    </div>
 
-    <ResolverDetail {resolver} {run} {rows} runAllButton />
+    <div role="tabpanel" id="inspector-panel" aria-label="{RESOLVER_VIEW_LABEL[app.resolverView]}, {label(resolver.provider, resolver.variant)}">
+      <ResolverDetail {resolver} {run} {rows} view={app.resolverView} onview={setView} />
+    </div>
   </div>
 </aside>
 
@@ -136,10 +170,11 @@
     padding: 0 16px calc(32px + env(safe-area-inset-bottom));
     overscroll-behavior: contain;
   }
-  :global(html.mobile) .inner > .head {
-    position: sticky;
-    padding: 22px 0 12px;
+  :global(html.mobile) .bar {
     border-radius: 14px 14px 0 0;
+  }
+  :global(html.mobile) .head {
+    padding: 22px 0 12px;
     touch-action: none;
   }
   .done {
@@ -157,24 +192,46 @@
     padding: 0 28px 40px;
     height: 100%;
   }
-  .head {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
+  /* The name and the view tabs stay in view while the view scrolls under them. */
+  .bar {
     position: sticky;
     top: 0;
-    padding: 16px 0 12px;
+    z-index: 1;
+    padding-bottom: 10px;
     background: var(--surface);
     border-bottom: 1px solid var(--rule);
-    z-index: 1;
+  }
+  /* The name keeps at least 180px; in a narrow inspector the buttons drop to a row of their own rather than squeeze it. */
+  .head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 8px 12px;
+    padding: 16px 0 12px;
+  }
+  /* Six views across the pane; a narrow pane or a phone scrolls them sideways rather than squeezing them. */
+  .tabs {
+    display: flex;
+    width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tabs button {
+    flex: 1 0 auto;
+    justify-content: center;
   }
   .kicker {
     font-size: var(--t-xs);
     color: var(--ink-3);
   }
+  .who {
+    flex: 1 1 180px;
+    min-width: 0;
+  }
   h2 {
     font-size: var(--t-lg);
     font-weight: 680;
+    overflow-wrap: anywhere;
   }
   .addrs {
     font-size: var(--t-xs);
@@ -199,8 +256,14 @@
   }
   .acts {
     display: flex;
+    align-items: center;
     gap: 2px;
     flex: none;
+    margin-left: auto;
+  }
+  :global(html.mobile) .runall {
+    align-self: flex-start;
+    margin: -10px 0 0;
   }
   @media (max-width: 560px) {
     .inner {

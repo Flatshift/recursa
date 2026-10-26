@@ -101,7 +101,7 @@
 
   <ul class="places">
     {#each places as p}
-      {@const on = app.route.name === p.match || (p.match === 'resolvers' && app.route.name === 'resolver')}
+      {@const on = app.route.name === p.match}
       <li>
         <a href={p.href} class="item" class:on aria-current={on ? 'page' : undefined} onclick={(e) => go(e, p.href)} title={mobile ? undefined : `${p.label} (${shortcut(`cmd+${p.key}`)})`}>
           <span class="ic" data-place={p.match}><Icon name={p.icon} size={mobile ? 18 : 13} /></span>
@@ -514,6 +514,7 @@
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     line-height: 1.25;
   }
   :global(html.mobile) .rt .score {

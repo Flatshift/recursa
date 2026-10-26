@@ -249,11 +249,7 @@
   }
 
   function onKey(e: KeyboardEvent, i: number, row: Row) {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      e.stopPropagation();
-      app.navigate(`/resolver/${row.target.resolver_id}`);
-    } else if (e.key === 'Enter' || e.key === ' ') {
+    if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       onopen(row.target.resolver_id);
     } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {

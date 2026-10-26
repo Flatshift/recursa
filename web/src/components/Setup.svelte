@@ -112,6 +112,7 @@
       draft.tests.map((k) => TEST_LABEL[k]).join(', ') || 'No tests',
       ...(draft.cdn ? ['CDN mapping'] : []),
       ...(draft.probes ? ['probes'] : []),
+      ...(draft.live ? ['live threats'] : []),
     ].join(' · '),
   );
   const filterOn = $derived(filter.trim() !== '');
@@ -506,6 +507,21 @@
             </div>
           {/if}
           <label class="toggle"><input type="checkbox" bind:checked={draft.cdn} /><span>CDN mapping quality</span></label>
+          <label class="toggle"><input type="checkbox" bind:checked={draft.live} /><span>Live threat test</span></label>
+          <div class="sub">
+            <p class="hint">Advanced. Looks up real malware and phishing hosts through every selected resolver.</p>
+            {#if draft.live}
+              <p class="live-warn" role="note">
+                <Icon name="warn" size={14} />
+                <span>
+                  These are real hosts from today's URLhaus, ThreatView and OpenPhish feeds, about 40 per resolver. Recursa only looks up the names, over
+                  DoT or DoH (plain DNS only to your own resolver on this network), and never connects to them. Security tools on your
+                  network, like a gateway's threat management or a corporate firewall, may still flag the lookups or block this computer, and
+                  resolvers with a dashboard (NextDNS, Control D) will list them as blocked threats.
+                </span>
+              </p>
+            {/if}
+          </div>
         </fieldset>
         <p class="hint start-hint">{#each shortcutParts('cmd+Enter') as k, i}{i ? ' ' : ''}<kbd>{k}</kbd>{/each} starts the benchmark.</p>
 {/snippet}
@@ -585,6 +601,25 @@
   }
   .intercept .btn {
     flex: none;
+  }
+  .live-warn {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin-top: 8px;
+    padding: 10px 12px;
+    max-width: 62ch;
+    border-radius: var(--r-md);
+    background: var(--warn-soft);
+    border: 1px solid color-mix(in oklch, var(--warning) 45%, transparent);
+    font-size: var(--t-xs);
+    line-height: 1.5;
+    color: var(--ink-2);
+  }
+  .live-warn :global(svg) {
+    flex: none;
+    margin-top: 2px;
+    color: var(--warning);
   }
   .pick {
     flex: 1;
@@ -1084,7 +1119,8 @@
   :global(html.mobile) .sub {
     padding-left: 34px;
   }
-  :global(html.mobile) .limits p {
+  :global(html.mobile) .limits p,
+  :global(html.mobile) .live-warn {
     font-size: var(--t-sm);
   }
   :global(html.mobile) .start-hint {

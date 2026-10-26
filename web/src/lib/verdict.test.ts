@@ -393,3 +393,128 @@ describe('verdict: Best from here', () => {
     expect(lab.v.sentence).toBe(home.v.sentence);
   });
 });
+
+describe('verdict: Best protection', () => {
+  const all30 = (x: number) => ({ cached: same(30, x), uncached: same(30, x), tld: same(30, x) });
+  const entries = [
+    { id: 'a', provider: 'A', ms: all30(15) },
+    { id: 'b', provider: 'B', ms: all30(18) },
+    { id: 'c', provider: 'C', ms: all30(20) },
+  ];
+  /** Probe results as the engine reports them: a pass or fail per check, DNSSEC and rebinding as presence. */
+  type Held = { malware?: boolean; phishing?: boolean; dnssec?: boolean; rebind?: boolean };
+  const probe = (h: Held) => ({
+    checks: [
+      ...(h.malware == null ? [] : [{ key: 'filter_malware', status: h.malware ? 'pass' : 'fail', value: '', present: h.malware }]),
+      ...(h.phishing == null ? [] : [{ key: 'filter_phishing', status: h.phishing ? 'pass' : 'fail', value: '', present: h.phishing }]),
+      ...(h.dnssec == null ? [] : [{ key: 'dnssec', status: h.dnssec ? 'pass' : 'fail', value: '', present: h.dnssec }]),
+      ...(h.rebind == null ? [] : [{ key: 'rebind', status: 'info', value: '', present: h.rebind }]),
+    ],
+    filtering: h.malware ? { malware: { samples: [{ domain: 'malware.wicar.org', blocked: true }] } } : {},
+  });
+  const cat = (blocked: number, tested: number) => ({ blocked, tested, samples: [], source: '' });
+  const live = (m: [number, number], p: [number, number]) => ({ categories: { malware: cat(...m), phishing: cat(...p) } });
+  const withProbes = (probes: Record<string, Held>, liveByResolver?: Record<string, ReturnType<typeof live>>, own?: string) => {
+    const run = fakeRun(entries);
+    run.probes = Object.fromEntries(Object.entries(probes).map(([id, h]) => [id, probe(h)])) as unknown as RunState['probes'];
+    if (liveByResolver) run.live = liveByResolver as unknown as RunState['live'];
+    if (own) run.resolvers.find((r) => r.id === own)!.group = 'system';
+    return run;
+  };
+  const pick = (run: RunState) => verdict(run, buildRows(run, [], HIT_SHARE.home), HIT_SHARE.home).picks.find((p) => p.goal === 'Best protection');
+
+  describe('with the live threat test', () => {
+    it('picks the resolver that blocked the larger share, and draws the share strip winner first', () => {
+      const run = withProbes(
+        { a: { dnssec: true }, b: { dnssec: true }, c: { dnssec: true } },
+        { a: live([10, 20], [5, 20]), b: live([18, 20], [15, 20]), c: live([2, 20], [0, 20]) },
+      );
+      const p = pick(run)!;
+      expect(p.resolverId).toBe('b');
+      expect(p.figure).toBe('blocked 33 of 40');
+      expect(p.note).toBe('live malware 18 of 20, phishing 15 of 20, DNSSEC');
+      expect(p.evidence).toContain("today's URLhaus, ThreatView and OpenPhish feeds; next best A 15 of 40");
+      expect(p.graph).toEqual({
+        kind: 'share',
+        cands: [
+          { name: 'B', blocked: 33, tested: 40 },
+          { name: 'A', blocked: 15, tested: 40 },
+          { name: 'C', blocked: 2, tested: 40 },
+        ],
+      });
+    });
+
+    it('ranks on live results even when test names would say otherwise', () => {
+      const run = withProbes(
+        { a: { malware: true, phishing: true, dnssec: true, rebind: true }, b: { malware: false, dnssec: true } },
+        { a: live([1, 20], [0, 20]), b: live([15, 20], [10, 20]) },
+      );
+      expect(pick(run)!.resolverId).toBe('b');
+    });
+
+    it('names no pick when nothing blocked a live threat', () => {
+      const run = withProbes({ a: { dnssec: true }, b: { dnssec: true } }, { a: live([0, 20], [0, 20]), b: live([0, 20], [0, 20]) });
+      expect(pick(run)).toBeUndefined();
+    });
+
+    it('leaves out a resolver that fails DNSSEC', () => {
+      const run = withProbes(
+        { a: { dnssec: false }, b: { dnssec: true } },
+        { a: live([20, 20], [20, 20]), b: live([10, 20], [10, 20]) },
+      );
+      const p = pick(run)!;
+      expect(p.resolverId).toBe('b');
+      expect((p.graph as { cands: unknown[] }).cands).toHaveLength(1);
+    });
+
+    it('gives a tie to the faster cached answers, even over your own resolver', () => {
+      const tie = { a: live([10, 20], [10, 20]), b: live([10, 20], [10, 20]) };
+      expect(pick(withProbes({ a: { dnssec: true }, b: { dnssec: true } }, tie, 'b'))!.resolverId).toBe('a');
+      const p = pick(withProbes({ a: { dnssec: true }, b: { dnssec: true } }, tie, 'a'))!;
+      expect(p.resolverId).toBe('a');
+      expect(p.evidence).toContain('already your resolver, no change needed');
+    });
+  });
+
+  describe('without live data', () => {
+    it('picks the resolver holding the most protections, and draws the protections grid', () => {
+      const run = withProbes({
+        a: { malware: true, phishing: false, dnssec: true, rebind: false },
+        b: { malware: true, phishing: true, dnssec: true, rebind: true },
+        c: { malware: false, dnssec: true },
+      });
+      const p = pick(run)!;
+      expect(p.resolverId).toBe('b');
+      expect(p.figure).toBe('4 of 4 held');
+      expect(p.note).toBe('DNSSEC, rebinding protection; test names');
+      expect(p.evidence).toContain('Test names show blocking is on, not how much it catches');
+      expect(p.graph).toEqual({
+        kind: 'checks',
+        rows: ['Malware', 'Phishing', 'DNSSEC', 'Rebinding'],
+        cols: [
+          { name: 'B', on: [true, true, true, true], win: true },
+          { name: 'A', on: [true, false, true, false], win: false },
+          { name: 'C', on: [false, false, true, false], win: false },
+        ],
+      });
+    });
+
+    it('lets a resolver holding more beat a faster one, and the faster cached answers win a tie', () => {
+      const probes = {
+        a: { malware: true, phishing: false, dnssec: true },
+        b: { malware: true, phishing: true, dnssec: true },
+      };
+      expect(pick(withProbes(probes, undefined, 'a'))!.resolverId).toBe('b');
+      expect(pick(withProbes({ ...probes, b: probes.a }, undefined, 'b'))!.resolverId).toBe('a');
+    });
+
+    it('needs malware blocking and DNSSEC to name a pick', () => {
+      const run = withProbes({ a: { malware: true, dnssec: false }, b: { malware: false, dnssec: true } });
+      expect(pick(run)).toBeUndefined();
+    });
+
+    it('counts the protections the pick holds', () => {
+      expect(pick(withProbes({ a: { malware: true, phishing: false, dnssec: true } }))!.figure).toBe('2 of 4 held');
+    });
+  });
+});

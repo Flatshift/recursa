@@ -5,7 +5,7 @@
   import { results, LIVE_SAMPLE_TTL_MS } from '../lib/checks.svelte';
   import { expectsBlock } from '../lib/verdict';
 
-  let { rid, live }: { rid: string; live: LiveBlocking | null } = $props();
+  let { rid, live, fromRun = {} }: { rid: string; live: LiveBlocking | null; fromRun?: Record<string, LiveBlocking> } = $props();
 
   /** The host square last tapped or clicked, shown under its category; `cat` is `resolver:category`. */
   let picked = $state<{ cat: string; text: string } | null>(null);
@@ -15,27 +15,13 @@
     { key: 'phishing', label: 'Phishing' },
   ];
 
-  const DAY = 86_400_000;
-  const AGES = [
-    { label: 'Listed under a day ago', max: DAY },
-    { label: '1–7 days ago', max: 7 * DAY },
-    { label: '7–30 days ago', max: 30 * DAY },
-    { label: 'Over 30 days ago', max: Infinity },
-  ];
-
   const tally = (hs: { blocked: boolean | null }[]) => ({
     blocked: hs.filter((h) => h.blocked === true).length,
     tested: hs.filter((h) => h.blocked != null).length,
   });
 
-  /** A category's hosts, newest listing first, grouped by how long the feed had listed them when the sample was taken. */
-  function byAge(fc: LiveCategory, at: number) {
-    const hosts = fc.samples.map((s) => ({ ...s, listed: fc.listed_at[s.domain] ?? null }));
-    hosts.sort((a, b) => (b.listed ?? -Infinity) - (a.listed ?? -Infinity));
-    const groups = [...AGES.map((a) => ({ label: a.label, hosts: [] as typeof hosts })), { label: 'Not dated', hosts: [] as typeof hosts }];
-    for (const h of hosts) groups[h.listed == null ? AGES.length : AGES.findIndex((a) => at - h.listed! < a.max)].hosts.push(h);
-    return groups.filter((g) => g.hosts.length).map((g) => ({ ...g, ...tally(g.hosts) }));
-  }
+  /** A category's hosts as one row of squares, with how many were blocked. */
+  const hostRow = (fc: LiveCategory) => ({ label: 'Live hosts', hosts: fc.samples, ...tally(fc.samples) });
 
   // Allowing a host is only a miss for a resolver that blocks that category.
   const expects = (rId: string, cat: string) => {
@@ -48,7 +34,7 @@
   // Every resolver checked against this same sample, most blocked first.
   const peers = $derived.by(() => {
     if (!live) return [];
-    return Object.entries(results.live)
+    return Object.entries({ ...fromRun, ...results.live })
       .filter(([, c]) => c.sample_taken_at === live.sample_taken_at)
       .map(([pid, c]) => {
         const cats = CATS.map((k) => c.categories[k.key]);
@@ -81,32 +67,30 @@
           <p class="rate"><span class="pct">Not tested</span></p>
         {/if}
         {#if fc?.samples.length}
+          {@const g = hostRow(fc)}
           <div class="ages">
-            {#each byAge(fc, live.sample_taken_at) as g}
-              <span class="age">{g.label}</span>
-              <span class="cells">
-                {#each g.hosts as h}
-                  {@const detail = `${h.domain}: ${h.blocked === true ? 'blocked' : h.blocked === false ? 'resolved' : 'no answer'} · ${h.how}${h.listed != null ? ` · listed ${ago(h.listed)}` : ''}`}
-                  <button
-                    type="button"
-                    class="cell"
-                    class:b={h.blocked === true}
-                    class:a={h.blocked === false}
-                    class:on={picked?.cat === `${rid}:${c.key}` && picked.text === detail}
-                    title={detail}
-                    aria-label={detail}
-                    onclick={() => (picked = { cat: `${rid}:${c.key}`, text: detail })}
-                  ></button>
-                {/each}
-              </span>
-              <span class="num muted">{g.tested ? `${g.blocked}/${g.tested}` : '—'}</span>
-            {/each}
+            <span class="age">{g.label}</span>
+            <span class="cells">
+              {#each g.hosts as h}
+                {@const detail = `${h.domain}: ${h.blocked === true ? 'blocked' : h.blocked === false ? 'resolved' : 'no answer'} · ${h.how}`}
+                <button
+                  type="button"
+                  class="cell"
+                  class:b={h.blocked === true}
+                  class:a={h.blocked === false}
+                  class:on={picked?.cat === `${rid}:${c.key}` && picked.text === detail}
+                  title={detail}
+                  aria-label={detail}
+                  onclick={() => (picked = { cat: `${rid}:${c.key}`, text: detail })}
+                ></button>
+              {/each}
+            </span>
+            <span class="num muted">{g.tested ? `${g.blocked}/${g.tested}` : '—'}</span>
           </div>
           <p class="pick" aria-live="polite">{picked?.cat === `${rid}:${c.key}` ? picked.text : ''}</p>
         {/if}
         <p class="src">
-          {fc?.source ?? (c.key === 'malware' ? 'URLhaus' : 'OpenPhish')}{#if fc?.fetched_at}, feed downloaded {ago(fc.fetched_at)}{/if}.
-          {#if c.key === 'phishing' && fc}OpenPhish doesn't date its entries; it lists pages seen recently.{/if}
+          {fc?.source ?? (c.key === 'malware' ? 'URLhaus and ThreatView' : 'OpenPhish')}{#if fc?.fetched_at}, feed downloaded {ago(fc.fetched_at)}{/if}.
         </p>
       </div>
     {/each}
@@ -126,8 +110,7 @@
               <li>
                 <span class="mono">{s.domain}</span>
                 <span class:blocked={s.blocked === true} class="muted"
-                  >{s.blocked === true ? 'Blocked' : s.blocked === false ? 'Resolved' : 'No answer'} · {s.how}{#if fc.listed_at[s.domain]}
-                    · listed {ago(fc.listed_at[s.domain])}{/if}</span
+                  >{s.blocked === true ? 'Blocked' : s.blocked === false ? 'Resolved' : 'No answer'} · {s.how}</span
                 >
               </li>
             {/each}
@@ -144,7 +127,7 @@
           {#each peers as p (p.id)}
             <tr class:me={p.id === rid}>
               <td>
-                {#if p.id === rid}{p.name}{:else}<button class="name" onclick={() => app.navigate(`/resolver/${p.id}`)}>{p.name}</button>{/if}
+                {#if p.id === rid}{p.name}{:else}<button class="name" onclick={() => app.showResolver(p.id)}>{p.name}</button>{/if}
               </td>
               {#each p.cats as f, i}
                 <td class:miss={expects(p.id, CATS[i].key)}>

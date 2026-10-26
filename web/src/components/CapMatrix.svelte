@@ -14,8 +14,8 @@
   import { mobile } from '../lib/api';
   import type { Resolver, RunState } from '../lib/types';
   import type { Row, Verdict } from '../lib/verdict';
-  import { capCell, cdnCell, egressCell, isBlank, roaCell, rovCell, type Cell as C } from '../lib/cells';
-  import { CAP, CAP_KEYS } from '../lib/caps';
+  import { capCell, cdnCell, egressCell, isBlank, liveCell, roaCell, rovCell, type Cell as C } from '../lib/cells';
+  import { CAP, CAP_KEYS, LIVE_CAPS } from '../lib/caps';
   import { label } from '../lib/format';
   import Cell from './Cell.svelte';
   import Glyph from './Glyph.svelte';
@@ -53,11 +53,16 @@
 
   type Line = { key: string; label: string; title: string; ref?: string; cell: (r: Resolver) => C };
   const cap = (key: string): Line => ({ key, label: CAP[key].label, title: CAP[key].explain, ref: CAP[key].ref, cell: (r) => capCell(run, r, key) });
+  // The live threat test's rows join Blocking once any resolver has a result.
+  const hasLive = $derived(Object.values(run.live ?? {}).some((l) => Object.values(l.categories).some((c) => c.tested > 0)));
+  const liveLines = $derived(
+    hasLive ? LIVE_CAPS.map((c): Line => ({ key: c.key, label: c.label, title: c.explain, cell: (r) => liveCell(run, r, c.category) })) : [],
+  );
   // Capabilities run down the page and resolvers across it, like a spec sheet: seventeen columns never fit, nine
   // resolvers do, and a capability every resolver shares collapses to one line.
   const groups: [Exclude<CapView, 'all'>, string, Line[]][] = $derived([
     ['privacy', 'Privacy & security', CAP_KEYS.privacy.map(cap)],
-    ['blocking', 'Blocking', CAP_KEYS.blocking.map(cap)],
+    ['blocking', 'Blocking', [...CAP_KEYS.blocking.map(cap), ...liveLines]],
     [
       'routing',
       'Routing',
@@ -76,8 +81,15 @@
   const running = $derived(run.status === 'running');
   const INTEL = new Set(['roa', 'rov', 'egress']);
   const waits = (key: string, r: Resolver) =>
-    running && (key === 'cdn' ? !!run.config.cdn && !run.cdn : INTEL.has(key) ? !run.intel?.[r.id] : run.config.probes !== false && !run.probes[r.id]);
-  const busy = (key: string) => running && (key === 'cdn' ? run.phase === 'cdn' : INTEL.has(key) && run.phase === 'intel');
+    running &&
+    (key === 'cdn'
+      ? !!run.config.cdn && !run.cdn
+      : INTEL.has(key)
+        ? !run.intel?.[r.id]
+        : key.startsWith('live_')
+          ? !!run.config.live && !run.live?.[r.id]
+          : run.config.probes !== false && !run.probes[r.id]);
+  const busy = (key: string) => running && (key === 'cdn' ? run.phase === 'cdn' : key.startsWith('live_') ? run.phase === 'live' : INTEL.has(key) && run.phase === 'intel');
 
   type Built = { line: Line; cells: C[]; wait: boolean[]; same: boolean; blank: boolean };
   const built = $derived(
@@ -95,9 +107,13 @@
   );
   const shown = $derived(view === 'all' ? built : built.filter((g) => g.k === view));
 
-  // Ad blocking reads as a share of the common ad hosts tried, so it gets a bar as well as the count. The other
-  // categories use vendors' own test names, which only confirm that blocking happens.
+  // Ad blocking reads as a share of the common ad hosts tried, so it gets a bar as well as the count, and so do the
+  // live threat rows. The other categories use vendors' own test names, which only confirm that blocking happens.
   const share = (key: string, r: Resolver) => {
+    if (key.startsWith('live_')) {
+      const f = run.live?.[r.id]?.categories[key.slice(5)];
+      return f && f.tested ? f : null;
+    }
     if (key !== 'filter_ads') return null;
     const f = run.probes[r.id]?.filtering?.[key.slice(7)];
     return f && f.tested ? f : null;
@@ -134,6 +150,7 @@
       const p = run.phase;
       if (p === 'cdn' || p === 'intel')
         return { sentence: 'Probes are done.', detail: 'The routing rows fill in after the CDN mapping and network intel.', picks: [] };
+      if (p === 'live') return { sentence: 'Probes are done.', detail: 'The live threat rows fill in as each resolver is tested.', picks: [] };
       return {
         sentence: 'Capabilities are probed after the latency tests.',
         detail: 'Probing waits so it never disturbs the timing. Each resolver’s column fills in as it answers.',
@@ -142,6 +159,13 @@
     }
     if (!v) return null;
     const all = built.flatMap((g) => g.lines).filter((l) => !l.blank);
+    if (!probed && hasLive) {
+      return {
+        sentence: 'Probes were off; the live threat test ran.',
+        detail: 'The live threat rows were measured from your network; the others show only what operators publish (○). Turn on Capability probes in the next run’s setup to measure those too.',
+        picks: [],
+      };
+    }
     if (!probed) {
       return {
         sentence: 'Probes were off for this run.',
@@ -155,7 +179,9 @@
     const protect = pick('Best protection');
     const priv = pick('Most private');
     // A run can leave malware blocking off, and then it can't say no resolver blocks.
-    const malwareTested = resolvers.some((r) => run.probes[r.id]?.filtering?.malware);
+    const malwareTested = hasLive || resolvers.some((r) => run.probes[r.id]?.filtering?.malware);
+    // With the live threat test, protection is what a resolver blocked of live hosts, not test names.
+    const lacks = hasLive ? 'blocked a live threat' : 'both blocks malware and validates DNSSEC';
     const sentence = !malwareTested
       ? priv
         ? `${priv.name} is the most private.`
@@ -167,8 +193,8 @@
         : protect
           ? `${protect.name} protects best; no resolver here passes every privacy check.`
           : priv
-            ? `${priv.name} is the most private; no resolver here both blocks malware and validates DNSSEC.`
-            : 'No resolver here both blocks malware and validates DNSSEC, and none passes every privacy check.';
+            ? `${priv.name} is the most private; no resolver here ${lacks}.`
+            : `No resolver here ${lacks}, and none passes every privacy check.`;
 
     const differ = all.filter((l) => !l.same).length;
     let detail = `${all.length} capabilities probed from this network with fresh names no cache can answer; the resolvers differ on ${differ}.`;
@@ -198,7 +224,7 @@
         {
           goal: 'Best protection',
           name: protect?.name ?? (malwareTested ? 'None' : 'Not tested'),
-          ev: protect?.evidence ?? (malwareTested ? 'None both blocks malware and validates DNSSEC' : 'Malware blocking was off for this run'),
+          ev: protect?.evidence ?? (hasLive ? 'None blocked a live threat' : malwareTested ? 'None both blocks malware and validates DNSSEC' : 'Malware blocking was off for this run'),
         },
         { goal: 'Most private', name: priv?.name ?? 'None', ev: priv?.evidence ?? 'None sends no subnet, minimises names and validates DNSSEC' },
         { goal: 'Encrypted DNS', name: of(both.length), ev: without.length ? `answer over DoT and DoH; not ${few(without)}` : 'All answer over DoT and DoH from here' },
@@ -227,7 +253,7 @@
   </section>
 {/if}
 
-{#if mobile && !probed && !running}
+{#if mobile && !probed && !hasLive && !running}
   <!-- Phone: without probes the matrix only repeats what operators publish, which the resolver sheet shows too. -->
   <button class="btn" onclick={withProbes}>New run with probes</button>
 {:else}

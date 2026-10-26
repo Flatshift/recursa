@@ -60,14 +60,14 @@ export const CAPS: CapDef[] = [
     key: 'filter_malware',
     label: 'Malware blocking',
     group: 'Blocking',
-    explain: "Whether the resolver blocked a malware test name that a filtering service publishes (WICAR, Cloudflare, Quad9, Cisco or Google). Each service mostly blocks only its own, so this confirms blocking happens, not how much. Check live feeds, on the resolver's page, measures that against live URLhaus hosts.",
+    explain: "Whether the resolver blocked a malware test name that a filtering service publishes (WICAR, Cloudflare, Quad9, Cisco or Google). Each service mostly blocks only its own, so this confirms blocking happens, not how much. The live threat test, a run option, measures that against live URLhaus and ThreatView hosts; Check live feeds does the same for one resolver on its page.",
     published: (p) => (p.filtering.includes('malware') ? true : p.filtering.length === 0 ? false : null),
   },
   {
     key: 'filter_phishing',
     label: 'Phishing blocking',
     group: 'Blocking',
-    explain: "Whether the resolver blocked a phishing test name that Cloudflare or Cisco OpenDNS publishes. This confirms blocking happens, not how much. Check live feeds, on the resolver's page, measures that against live OpenPhish hosts.",
+    explain: "Whether the resolver blocked a phishing test name that Cloudflare or Cisco OpenDNS publishes. This confirms blocking happens, not how much. The live threat test, a run option, measures that against live OpenPhish hosts; Check live feeds does the same for one resolver on its page.",
     published: (p) => (p.filtering.includes('phishing') ? true : p.filtering.length === 0 ? false : null),
   },
   {
@@ -173,6 +173,15 @@ export const CAP_KEYS = {
   blocking: ['filter_malware', 'filter_phishing', 'filter_ads'],
   protocol: ['ede', 'edns_version', 'cookies', 'tcp', 'dot', 'doh'],
 };
+
+const liveExplain = (feed: string) =>
+  `Real hosts from today's ${feed} that still resolve through an unfiltered resolver, looked up through each resolver by this run's live threat test. Every resolver got the same hosts.`;
+
+/** The rows the run's live threat test adds to the Blocking group, shown only when the run has its results. */
+export const LIVE_CAPS: { key: string; label: string; category: 'malware' | 'phishing'; explain: string }[] = [
+  { key: 'live_malware', label: 'Live malware', category: 'malware', explain: liveExplain('URLhaus and ThreatView malware feeds') },
+  { key: 'live_phishing', label: 'Live phishing', category: 'phishing', explain: liveExplain('OpenPhish phishing feed') },
+];
 
 export const PUBLISHED_ONLY: { key: string; label: string; explain: string; get: (p: Published) => boolean | null | undefined; ref?: string }[] = [
   { key: 'doq', label: 'DNS over QUIC', explain: 'Encrypted DNS over QUIC (UDP 853): TLS-grade privacy with lower handshake cost.', ref: 'RFC 9250', get: (p) => p.doq },

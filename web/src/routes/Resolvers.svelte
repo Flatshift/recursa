@@ -1,15 +1,16 @@
 <script lang="ts">
-  import { app } from '../lib/store.svelte';
+  import { SvelteSet } from 'svelte/reactivity';
+  import { app, RESOLVER_VIEWS } from '../lib/store.svelte';
   import { selectKey } from '../lib/select';
   import { menu } from '../lib/menu.svelte';
-  import { api, mobile } from '../lib/api';
+  import { SEPARATOR, api, mobile } from '../lib/api';
   import { shortcut } from '../lib/keys';
   import type { Resolver, RunState } from '../lib/types';
   import { capCell } from '../lib/cells';
   import { PUBLISHED_ONLY } from '../lib/caps';
   import { HIT_SHARE, buildRows } from '../lib/verdict';
   import { status, stateLabel, stateGlyph, localNote, elsewhereNote } from '../lib/status.svelte';
-  import { TRANSPORT_LABEL, ago, documented } from '../lib/format';
+  import { TRANSPORT_LABEL, ago, documented, ms, pct } from '../lib/format';
   import Cell from '../components/Cell.svelte';
   import Glyph from '../components/Glyph.svelte';
   import Provenance from '../components/Provenance.svelte';
@@ -17,7 +18,9 @@
   import Shortlist, { type Pick } from '../components/Shortlist.svelte';
   import Toolbar from '../components/Toolbar.svelte';
   import Icon from '../components/Icon.svelte';
+  import { faults } from '../components/BehaviourChecks.svelte';
   import { onResolverContext } from '../lib/resolverMenu';
+  import { type CheckKind, batchProgress, blocker, canRun, confirmLive, errorOf, isRunning, results, runBatch, stopBatch } from '../lib/checks.svelte';
 
   let last = $state<RunState | null>(null);
   $effect(() => {
@@ -80,8 +83,84 @@
   const picks = $derived<[string, Pick[]][]>(groups.map(([g, rs]) => [g, rs.map((r) => ({ id: r.id, name: name(r), sub: r.ipv4[0] ?? r.ipv6[0] ?? r.name }))]));
   function onKey(e: KeyboardEvent) {
     if ((e.target as HTMLElement)?.tagName === 'INPUT' || menu.open) return;
-    if (e.key === 'Escape' && app.inspect) app.inspect = null;
+    // ⌥⌘1–6 (Ctrl+Shift+1–6 on Windows) pick the Inspector's view; the desktop menu sends the same commands.
+    if (app.inspect && ((e.altKey && e.metaKey) || (e.ctrlKey && e.shiftKey)) && /^Digit[1-6]$/.test(e.code)) {
+      e.preventDefault();
+      app.resolverView = RESOLVER_VIEWS[Number(e.code.slice(5)) - 1];
+    } else if (e.key === 'Escape' && app.inspect) app.inspect = null;
     else selectKey(e);
+  }
+
+  // Rows ticked for a batch of checks. Ticks outlast the filter, but only listed rows are checked.
+  const picked = new SvelteSet<string>();
+  const ordered = $derived(groups.flatMap(([, rs]) => rs));
+  const chosen = $derived(ordered.filter((r) => picked.has(r.id)));
+  const allPicked = $derived(ordered.length > 0 && chosen.length === ordered.length);
+  function pickAll() {
+    // allPicked recomputes as the set changes, so read it once.
+    const all = allPicked;
+    for (const r of ordered) all ? picked.delete(r.id) : picked.add(r.id);
+  }
+  const togglePick = (id: string) => (picked.has(id) ? picked.delete(id) : picked.add(id));
+
+  // The ticked rows, or every listed one when none are ticked, one resolver at a time.
+  const targets = $derived(chosen.length ? chosen : ordered);
+  const batchLabel = $derived(chosen.length ? `Check ${chosen.length} selected` : filter.trim() ? `Check ${ordered.length} shown` : 'Check all');
+  const progress = $derived(batchProgress());
+  const busyName = $derived.by(() => {
+    const r = progress?.rid ? app.resolvers.find((x) => x.id === progress.rid) : undefined;
+    return r ? name(r) : '';
+  });
+  const stop = $derived(blocker());
+  function batchMenu(e: MouseEvent) {
+    const rs = targets;
+    menu.show(
+      e,
+      [
+        { id: 'all', label: 'Run All Checks' },
+        SEPARATOR,
+        ...(app.env?.trace !== 'unsupported' ? [{ id: 'trace', label: 'Trace Path', enabled: rs.some((r) => canRun('trace', r)) }] : []),
+        { id: 'dive', label: 'Sample 18 Queries' },
+        { id: 'checks', label: 'Check Behaviour' },
+        { id: 'live', label: 'Check Live Feeds', enabled: rs.some((r) => canRun('live', r)) },
+      ],
+      async (pick) => {
+        if (pick === 'live' && !(await confirmLive())) return;
+        void runBatch(rs, pick === 'all' ? ['trace', 'dive', 'checks'] : [pick as CheckKind]);
+      },
+      e.currentTarget as HTMLElement,
+    );
+  }
+
+  // A column for each check that has run on a listed resolver this session.
+  const RESULT_COLS: { kind: CheckKind; label: string; title: string }[] = [
+    { kind: 'dive', label: 'Median', title: 'Median round trip of the 18-query sample' },
+    { kind: 'trace', label: 'Path', title: 'Router hops to the resolver, from Trace path' },
+    { kind: 'checks', label: 'Behaviour', title: 'Faults found by Check behaviour' },
+    { kind: 'live', label: 'Live threats', title: 'Live malicious hosts blocked, from Check live feeds' },
+  ];
+  const touched = (kind: CheckKind, id: string) => !!results[kind][id] || !!errorOf(kind, id) || isRunning(kind, id);
+  const resultCols = $derived(RESULT_COLS.filter((c) => ordered.some((r) => touched(c.kind, r.id))));
+  /** One check's result as a list cell, with the full reading for its tooltip. */
+  function outcome(kind: CheckKind, id: string): { text: string; title?: string; bad?: boolean } | null {
+    if (kind === 'dive') {
+      const d = results.dive[id];
+      return d && { text: d.latency.samples_ms.length ? ms(d.latency.stats.p50) : 'no answers' };
+    }
+    if (kind === 'trace') {
+      const t = results.trace[id];
+      const last = t?.hops[t.hops.length - 1];
+      return t && (t.reached && last ? { text: `${last.ttl} hops` } : { text: 'stopped', title: `Trace stopped after hop ${t.hops.length}` });
+    }
+    if (kind === 'checks') {
+      const c = results.checks[id];
+      const f = c ? faults(c) : [];
+      return c && (f.length ? { text: f.length === 1 ? '1 fault' : `${f.length} faults`, title: f.join(', '), bad: true } : { text: 'no faults' });
+    }
+    const cats = Object.values(results.live[id]?.categories ?? {});
+    const tested = cats.reduce((a, c) => a + c.tested, 0);
+    const blocked = cats.reduce((a, c) => a + c.blocked, 0);
+    return results.live[id] ? (tested ? { text: pct(blocked / tested, 0), title: `Blocked ${blocked} of ${tested} live threats` } : { text: 'none tested' }) : null;
   }
 </script>
 
@@ -96,6 +175,16 @@
           <span class="visually-hidden">Filter</span>
           <input bind:this={filterEl} type="search" bind:value={filter} placeholder="Filter" />
         </label>
+      {/if}
+      {#if progress}
+        <span class="batch" aria-live="polite"
+          >{progress.stopping ? 'Stopping after this check…' : `Checking ${Math.min(progress.done + 1, progress.total)} of ${progress.total}${busyName ? ` · ${busyName}` : ''}…`}</span
+        >
+        <button class="btn sm" disabled={progress.stopping} onclick={stopBatch}>Stop</button>
+      {:else}
+        <button class="btn sm" disabled={!!stop || !targets.length} title={stop ?? 'Run checks on each resolver in turn'} onclick={batchMenu}
+          ><Icon name="play" size={12} />{batchLabel}</button
+        >
       {/if}
       <button
         class="tb-icon"
@@ -126,20 +215,24 @@
               {#each rs as r (r.id)}
                 {@const feed = status.feedFor(r.status_feed)}
                 {@const enc = encrypted(r)}
-                <button class="mrow" class:sel={app.inspect === r.id} data-resolver={r.id} onclick={() => (app.inspect = r.id)}>
-                  <span class="mtop">
-                    <span class="nm">
-                      <b>{name(r)}</b>
-                      {#if inLast(r)}<span class="v"><Provenance kind="verified" /></span>{/if}
+                <div class="mitem" class:sel={app.inspect === r.id} data-resolver={r.id}>
+                  <button class="mrow" onclick={() => (app.inspect = r.id)}>
+                    <span class="mtop">
+                      <span class="nm">
+                        <b>{name(r)}</b>
+                        {#if inLast(r)}<span class="v"><Provenance kind="verified" /></span>{/if}
+                      </span>
+                      {#if feed}<span class="pub"><Glyph status={stateGlyph(feed.state)} size={12} />{stateLabel(feed)}</span>{/if}
                     </span>
-                    {#if feed}<span class="pub"><Glyph status={stateGlyph(feed.state)} size={12} />{stateLabel(feed)}</span>{/if}
-                  </span>
-                  <span class="mono addr">{r.ipv4[0] ?? r.ipv6[0] ?? r.name}{#if !r.udp}<span class="enc"> · encrypted only</span>{/if}</span>
-                  <span class="mcaps">
-                    {#each caps as c}<span class="mc"><span class="mk">{capLabels[c]}</span><Cell c={capCell(last && inLast(r) ? last : null, r, c)} compact /></span>{/each}
-                    {#if enc.length}<span class="mc"><span class="mk">Encrypted</span><span class="t">{enc.map((t) => t.label).join(' · ')}</span></span>{/if}
-                  </span>
-                </button>
+                    <span class="mono addr">{r.ipv4[0] ?? r.ipv6[0] ?? r.name}{#if !r.udp}<span class="enc"> · encrypted only</span>{/if}</span>
+                    <span class="mcaps">
+                      {#each caps as c}<span class="mc"><span class="mk">{capLabels[c]}</span><Cell c={capCell(last && inLast(r) ? last : null, r, c)} compact /></span>{/each}
+                      {#if enc.length}<span class="mc"><span class="mk">Encrypted</span><span class="t">{enc.map((t) => t.label).join(' · ')}</span></span>{/if}
+                      {#each resultCols as c}{#if touched(c.kind, r.id)}<span class="mc"><span class="mk">{c.label}</span>{@render result(c.kind, r.id)}</span>{/if}{/each}
+                    </span>
+                  </button>
+                  <label class="pick"><input type="checkbox" checked={picked.has(r.id)} onchange={() => togglePick(r.id)} /><span class="visually-hidden">Select {name(r)}</span></label>
+                </div>
               {/each}
             {/each}
           </div>
@@ -148,26 +241,47 @@
           <table class="sticky-head">
             <thead>
               <tr>
-                <th class="first">Resolver</th>
+                <th class="first">
+                  <span class="who">
+                    <input
+                      type="checkbox"
+                      checked={allPicked}
+                      indeterminate={chosen.length > 0 && !allPicked}
+                      aria-label="Select all listed resolvers"
+                      onchange={pickAll}
+                    />Resolver
+                  </span>
+                </th>
                 {#each caps as c}<th>{capLabels[c]}</th>{/each}
                 <th title="Encrypted transports: DoT and DoH are checked by probes; DoQ, DNSCrypt and ODoH are as published">Encrypted</th>
                 <th title="The operator's status page, where one is published">Status</th>
+                {#each resultCols as c}<th title={c.title}>{c.label}</th>{/each}
               </tr>
             </thead>
             {#each groups as [g, rs]}
               <tbody>
-                <tr class="grp"><th colspan={3 + caps.length} class="first">{g}</th></tr>
+                <tr class="grp"><th colspan={3 + caps.length + resultCols.length} class="first">{g}</th></tr>
                 {#each rs as r (r.id)}
                   {@const feed = status.feedFor(r.status_feed)}
-                  <tr data-resolver={r.id} class:sel={app.inspect === r.id}>
+                  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions (the first-column button is the keyboard target) -->
+                  <tr data-resolver={r.id} class:sel={app.inspect === r.id} onclick={() => (app.inspect = r.id)}>
                     <th class="first" scope="row">
-                      <button onclick={() => (app.inspect = r.id)}>
-                        <span class="nm">
-                          <b>{name(r)}</b>
-                          {#if inLast(r)}<span class="v" title="Verified in your latest run"><Provenance kind="verified" /></span>{/if}
-                        </span>
-                        <span class="mono addr">{r.ipv4[0] ?? r.ipv6[0] ?? r.name}{#if !r.udp}<span class="enc"> · encrypted only</span>{/if}</span>
-                      </button>
+                      <span class="who">
+                        <input
+                          type="checkbox"
+                          checked={picked.has(r.id)}
+                          aria-label="Select {name(r)}"
+                          onclick={(e) => e.stopPropagation()}
+                          onchange={() => togglePick(r.id)}
+                        />
+                        <button>
+                          <span class="nm">
+                            <b>{name(r)}</b>
+                            {#if inLast(r)}<span class="v" title="Verified in your latest run"><Provenance kind="verified" /></span>{/if}
+                          </span>
+                          <span class="mono addr">{r.ipv4[0] ?? r.ipv6[0] ?? r.name}{#if !r.udp}<span class="enc"> · encrypted only</span>{/if}</span>
+                        </button>
+                      </span>
                     </th>
                     {#each caps as c}<td><Cell c={capCell(last && inLast(r) ? last : null, r, c)} compact /></td>{/each}
                     <td>
@@ -189,6 +303,7 @@
                         <span class="muted">—</span>
                       {/if}
                     </td>
+                    {#each resultCols as c}<td>{@render result(c.kind, r.id)}</td>{/each}
                   </tr>
                 {/each}
               </tbody>
@@ -214,6 +329,21 @@
   </div>
 </div>
 
+<!-- A check's cell: a dot while it runs, its error on hover, or what it found. -->
+{#snippet result(kind: CheckKind, id: string)}
+  {@const o = outcome(kind, id)}
+  {@const err = errorOf(kind, id)}
+  {#if isRunning(kind, id)}
+    <span class="live-dot" title="Checking…"></span><span class="visually-hidden">Checking</span>
+  {:else if err}
+    <span class="muted" title={err}>failed</span>
+  {:else if o}
+    <span class:bad={o.bad} title={o.title}>{o.text}</span>
+  {:else}
+    <span class="muted">—</span>
+  {/if}
+{/snippet}
+
 <style>
   .search {
     position: relative;
@@ -231,6 +361,12 @@
     height: 28px;
     padding-left: 26px;
     font-size: var(--t-xs);
+  }
+  /* A narrow window keeps the Check button and the inspector toggle in view. */
+  @media (max-width: 560px) {
+    .search input {
+      width: 130px;
+    }
   }
   .tablewrap {
     overflow-x: auto;
@@ -332,6 +468,22 @@
     gap: 5px;
     align-items: center;
   }
+  .who {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .bad {
+    color: var(--critical);
+  }
+  .batch {
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--t-xs);
+    color: var(--ink-2);
+  }
   .away {
     display: block;
     padding-left: 17px;
@@ -378,22 +530,34 @@
     color: var(--ink-2);
     border-bottom: 1px solid var(--rule);
   }
+  /* A phone row: the resolver's button, and beside it the tick that selects it for a batch of checks. */
+  .mitem {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    border-bottom: 1px solid var(--rule);
+  }
+  .mitem:active {
+    background: var(--surface-2);
+  }
+  .mitem.sel {
+    background: var(--sel);
+  }
+  .pick {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+  }
   .mrow {
     display: grid;
     gap: 4px;
     width: 100%;
     padding: 12px 2px;
     border: 0;
-    border-bottom: 1px solid var(--rule);
     background: none;
     text-align: left;
     color: var(--ink);
-  }
-  .mrow:active {
-    background: var(--surface-2);
-  }
-  .mrow.sel {
-    background: var(--sel);
   }
   .mtop {
     display: flex;
