@@ -10,7 +10,6 @@ type Route =
   | { name: 'bench' }
   | { name: 'run'; id: string }
   | { name: 'resolvers' }
-  | { name: 'resolver'; id: string }
   | { name: 'reliability' }
   | { name: 'time' }
   | { name: 'method' }
@@ -19,6 +18,10 @@ type Route =
 /** The views a run's results are split into, in order (⌥⌘1–6; Ctrl+Shift+1–6 elsewhere). */
 export const RUN_VIEWS = ['overview', 'latency', 'path', 'cdn', 'caps', 'numbers'] as const;
 export type RunView = (typeof RUN_VIEWS)[number];
+
+/** The Inspector's views of a resolver, in order, on the same keys as the run's. */
+export const RESOLVER_VIEWS = ['overview', 'latency', 'path', 'behaviour', 'blocking', 'service'] as const;
+export type ResolverView = (typeof RESOLVER_VIEWS)[number];
 
 /** The view where a live run's current phase shows its work: the latency rounds on Latency, the path check on Path, the
  *  probes on Capabilities, the CDN mapping on CDN. Network intel is too short to jump for, so it keeps the last one. */
@@ -30,8 +33,6 @@ function liveView(r: Pick<RunState, 'phase'>, from: RunView = 'latency'): RunVie
 function parse(path: string): Route {
   const m = path.match(/^\/run\/([\w-]+)/);
   if (m) return { name: 'run', id: m[1] };
-  const d = path.match(/^\/resolver\/([\w-]+)/);
-  if (d) return { name: 'resolver', id: d[1] };
   if (path.startsWith('/resolvers')) return { name: 'resolvers' };
   if (path.startsWith('/reliability')) return { name: 'reliability' };
   if (path.startsWith('/time')) return { name: 'time' };
@@ -73,6 +74,8 @@ class AppState {
   inspect = $state<string | null>(null);
   /** Which part of a run's results is on screen. */
   runView = $state<RunView>('overview');
+  /** The Inspector's view of a resolver, kept as the selection moves. */
+  resolverView = $state<ResolverView>('overview');
   /** The sidebar is shown (narrow windows hide it until asked). */
   sidebar = $state(readLocal<boolean>('recursa.sidebar', true));
   /** Bumped to ask the current page to focus its filter field (⌘F; Ctrl+F elsewhere). */
@@ -109,6 +112,8 @@ class AppState {
   command(cmd: string) {
     if (cmd.startsWith('go:')) this.navigate(cmd.slice(3));
     else if (cmd === 'export:csv' || cmd === 'export:json') this.exportRun(cmd.slice(7) as 'csv' | 'json');
+    else if (cmd.startsWith('view:') && this.route.name === 'resolvers')
+      this.resolverView = RESOLVER_VIEWS[RUN_VIEWS.indexOf(cmd.slice(5) as RunView)] ?? this.resolverView;
     else if (cmd.startsWith('view:')) this.setRunView(cmd.slice(5) as RunView);
     else if (cmd === 'toggle:sidebar') this.setSidebar(!this.sidebar);
     else if (cmd === 'toggle:inspector') this.toggleInspector();
@@ -190,6 +195,17 @@ class AppState {
   /** Back to the user's own choice (after a narrow window hid the sidebar). */
   restoreSidebar() {
     this.sidebar = readLocal<boolean>('recursa.sidebar', true);
+  }
+
+  /** Show a resolver in the Inspector: beside the run when the run has it, beside the Resolvers list otherwise. */
+  showResolver(id: string) {
+    if (this.route.name === 'run' && this.run?.resolvers.some((r) => r.id === id)) {
+      this.inspect = id;
+      return;
+    }
+    const r = this.resolvers.find((x) => x.id === id || x.aliases?.includes(id) || x.custom_id === id);
+    if (this.route.name !== 'resolvers') this.navigate('/resolvers');
+    this.inspect = r?.id ?? id;
   }
 
   /** Show the inspector for the selected (or first) resolver, or hide it. */
@@ -326,6 +342,12 @@ class AppState {
 
   async startRun() {
     if (!this.draft) return;
+    if (this.draft.live) {
+      const n = this.draft.resolvers.length;
+      const through = n === 1 ? 'the selected resolver' : `each of the ${n} selected resolvers`;
+      const msg = `Run the live threat test? It looks up about 40 real malware and phishing hosts through ${through}. Security tools on your network may flag the lookups.`;
+      if (!(await confirmAction(msg, 'Start run'))) return;
+    }
     this.saveDraft();
     try {
       const { id } = await api.post<{ id: string }>('/api/runs', this.draft);
@@ -507,6 +529,10 @@ class AppState {
         break;
       case 'intel':
         next.intel = { ...cur.intel, [ev.resolver_id]: ev.intel };
+        next.done = ev.done ?? cur.done;
+        break;
+      case 'live':
+        next.live = { ...(cur.live ?? {}), [ev.resolver_id]: ev.live };
         next.done = ev.done ?? cur.done;
         break;
       case 'cdn_cell': {

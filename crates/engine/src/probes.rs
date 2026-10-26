@@ -88,7 +88,7 @@ pub const ADS: &[&str] = &[
 ];
 // Names that blocking services publish for testing their own blocking. They resolve normally through an
 // unfiltered resolver and host nothing harmful, so a run can send them anywhere. Live feed hosts are looked up
-// only from a Deep Dive (`deepdive::live_blocking`).
+// only from a Deep Dive or a run's live threat test (`deepdive::live_blocking`).
 pub const MALWARE: &[&str] = &[
     // WICAR's malware test host, the one name most filters share: Cloudflare 1.1.1.2 and 1.1.1.3, Quad9, AdGuard,
     // Control D and DNS4EU all block it.

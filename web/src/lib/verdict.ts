@@ -477,6 +477,8 @@ export type PickGraph =
   | { kind: 'edges'; cands: { name: string; v: number }[] }
   /** Each candidate's answer-time spread on one axis from zero, winner first; nearer zero wins. */
   | { kind: 'spread'; cands: { name: string; v: number; ok: number }[] }
+  /** Each candidate's share of live threats blocked on one axis from zero to all, winner first; further right wins. */
+  | { kind: 'share'; cands: { name: string; blocked: number; tested: number }[] }
   /** The terms a figure adds up, as one bar; labels match the pick's parts. */
   | { kind: 'stack'; terms: { label: string; v: number; c: 'cached' | 'uncached' | 'neutral' | 'tld' }[] }
   /** Each probed resolver a column, each privacy property a row, filled where it holds; the winner's column first. */
@@ -650,8 +652,8 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
   }
 
   // Protection and privacy are things your own resolver can already give you (a Pi-hole with blocklists, forwarding to
-  // a filtering upstream), so it competes for those picks and keeps them when it meets the bar: no change needed. Only a
-  // local forwarder counts for privacy; an ISP's resolver sees who is asking.
+  // a filtering upstream), so it competes for those picks. It keeps privacy when it meets the bar, as no change is needed;
+  // protection ties go to the faster cache. Only a local forwarder counts for privacy; an ISP's resolver sees who is asking.
   const own = new Map<string, Row>();
   for (const r of rank(rows.filter((x) => x.eligible && x.resolver?.group === 'system'))) {
     if (!own.has(r.target.resolver_id)) own.set(r.target.resolver_id, r);
@@ -662,21 +664,78 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
   const ownFirst = (a: string, b: string) => Number(own.has(b)) - Number(own.has(a)) || speedIn(a) - speedIn(b);
   const yours = (id: string) => (own.has(id) ? 'already your resolver, no change needed; ' : '');
   const yoursShort = (id: string) => (own.has(id) ? 'already yours, ' : '');
+  // Equal protection goes to the faster cached answers, which is most of what you get.
+  const cacheIn = (id: string) => compositeOf(rowOf(id).dist, run.config.tests, PART_WEIGHTS.cache) ?? Infinity;
+  const cacheFirst = (a: string, b: string) => cacheIn(a) - cacheIn(b) || ownFirst(a, b);
 
-  const protective = pool
-    .filter((id) => check(run, id, 'filter_malware')?.status === 'pass' && check(run, id, 'dnssec')?.present === true)
-    .sort(ownFirst);
-  if (protective[0]) {
-    const hit = run.probes[protective[0]]?.filtering?.malware?.samples.filter((s) => s.blocked).map((s) => s.domain) ?? [];
-    picks.push({
-      goal: GOAL.protection,
-      resolverId: protective[0],
-      name: nameOfRow(rowOf(protective[0])),
-      figure: 'blocks malware',
-      note: `${yoursShort(protective[0])}malware blocking, DNSSEC`,
-      evidence: `${yours(protective[0])}blocked ${hit.length ? list(hit) : 'a malware test name'}; validates DNSSEC`,
-      verified: true,
-    });
+  // With the live threat test, protection is the share of live threats a resolver blocked; without it, the test names
+  // only show that blocking is on, so the pick is the resolver holding the most protections and the graph shows them.
+  const dnssecOf = (id: string) => check(run, id, 'dnssec')?.present;
+  const liveOf = (id: string) => {
+    const cats = run.live?.[id]?.categories;
+    const [m, p] = [cats?.malware, cats?.phishing];
+    return { mb: m?.blocked ?? 0, mt: m?.tested ?? 0, pb: p?.blocked ?? 0, pt: p?.tested ?? 0 };
+  };
+  const liveTested = pool.filter((id) => liveOf(id).mt + liveOf(id).pt > 0);
+  if (liveTested.length) {
+    const share = (id: string) => {
+      const { mb, mt, pb, pt } = liveOf(id);
+      return { blocked: mb + pb, tested: mt + pt };
+    };
+    const ranked = liveTested
+      .filter((id) => dnssecOf(id) !== false)
+      .sort((a, b) => share(b).blocked / share(b).tested - share(a).blocked / share(a).tested || cacheFirst(a, b));
+    const win = ranked[0];
+    if (win && share(win).blocked >= 1) {
+      const { mb, mt, pb, pt } = liveOf(win);
+      const { blocked, tested } = share(win);
+      const second = ranked[1];
+      const dnssec = dnssecOf(win) === true;
+      const by = [mt && `malware ${mb} of ${mt}`, pt && `phishing ${pb} of ${pt}`].filter(Boolean);
+      const feeds = [...(mt ? ['URLhaus', 'ThreatView'] : []), ...(pt ? ['OpenPhish'] : [])];
+      picks.push({
+        goal: GOAL.protection,
+        resolverId: win,
+        name: nameOfRow(rowOf(win)),
+        figure: `blocked ${blocked} of ${tested}`,
+        note: `${yoursShort(win)}live ${by.join(', ')}${dnssec ? ', DNSSEC' : ''}`,
+        evidence: `${yours(win)}blocked ${blocked} of ${tested} live hosts from today's ${list(feeds)} feeds${second ? `; next best ${nameOfRow(rowOf(second))} ${share(second).blocked} of ${share(second).tested}` : ''}${dnssec ? '; validates DNSSEC' : ''}`,
+        verified: true,
+        graph: { kind: 'share', cands: ranked.map((id) => ({ name: nameOfRow(rowOf(id)), ...share(id) })) },
+      });
+    }
+  } else {
+    // The bar is malware blocking and DNSSEC; the rest decide between resolvers that clear it.
+    const held = (id: string) => [
+      check(run, id, 'filter_malware')?.status === 'pass',
+      check(run, id, 'filter_phishing')?.status === 'pass',
+      dnssecOf(id) === true,
+      check(run, id, 'rebind')?.present === true,
+    ];
+    const count = (id: string) => held(id).filter(Boolean).length;
+    const protective = pool.filter((id) => held(id)[0] && held(id)[2]).sort((a, b) => count(b) - count(a) || cacheFirst(a, b));
+    const win = protective[0];
+    if (win) {
+      const rebind = held(win)[3];
+      const hit = run.probes[win]?.filtering?.malware?.samples.filter((s) => s.blocked).map((s) => s.domain) ?? [];
+      picks.push({
+        goal: GOAL.protection,
+        resolverId: win,
+        name: nameOfRow(rowOf(win)),
+        figure: `${count(win)} of ${held(win).length} held`,
+        note: `${yoursShort(win)}${rebind ? 'DNSSEC, rebinding protection' : 'DNSSEC'}; test names`,
+        evidence: `${yours(win)}blocked ${hit.length ? list(hit) : 'a malware test name'}; validates DNSSEC${rebind ? '; strips private-address answers' : ''}. Test names show blocking is on, not how much it catches; the live threat test in setup measures that.`,
+        verified: true,
+        graph: {
+          kind: 'checks',
+          rows: ['Malware', 'Phishing', 'DNSSEC', 'Rebinding'],
+          cols: pool
+            .filter((id) => run.probes[id])
+            .sort((a, b) => Number(b === win) - Number(a === win) || count(b) - count(a))
+            .map((id) => ({ name: nameOfRow(rowOf(id)), on: held(id), win: id === win })),
+        },
+      });
+    }
   }
 
   // Blocking trackers keeps them from seeing you at all, so among private resolvers the ones that do come first.

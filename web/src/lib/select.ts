@@ -17,13 +17,8 @@ function stepInspect(dir: 1 | -1) {
       : ids[Math.min(ids.length - 1, Math.max(0, i + dir))];
 }
 
-/** ⌘↵ (Ctrl+↵ off a Mac) opens the selected resolver's page; ↑↓ move the selection. True when handled. */
+/** ↑↓ move the selection. True when handled. */
 export function selectKey(e: KeyboardEvent): boolean {
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && app.inspect) {
-    e.preventDefault();
-    app.navigate(`/resolver/${app.inspect}`);
-    return true;
-  }
   if (
     (e.key === 'ArrowDown' || e.key === 'ArrowUp') &&
     !e.metaKey &&

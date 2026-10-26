@@ -13,7 +13,7 @@ use crate::bench::{ACCURATE_GAP, on_local_network};
 use crate::catalog::Resolver;
 use crate::dns::{self, QuerySpec};
 use crate::endpoints;
-use crate::intel::{FeedHost, ThreatFeeds};
+use crate::intel::ThreatFeeds;
 use crate::net::{self, Endpoint, Exchanger, Transport};
 use crate::probes::{self, FilterCategory, rand_label};
 use crate::stats::{self, Summary};
@@ -354,7 +354,7 @@ pub const LIVE_SAMPLE_TTL_MS: i64 = 30 * 60_000;
 pub struct LiveSample {
     /// When the hosts were confirmed (Unix ms).
     pub taken_at: i64,
-    /// "malware" (URLhaus) and "phishing" (OpenPhish).
+    /// "malware" (URLhaus and ThreatView) and "phishing" (OpenPhish).
     pub categories: BTreeMap<String, SampleCategory>,
     /// Why a category has fewer hosts than asked for, or none.
     pub notes: Vec<String>,
@@ -367,12 +367,12 @@ pub struct SampleCategory {
     pub fetched_at: Option<i64>,
     /// Feed hosts drawn at random; `hosts` are the ones of those that still resolve.
     pub sampled: usize,
-    pub hosts: Vec<FeedHost>,
+    pub hosts: Vec<String>,
 }
 
 /// The live-feed blocking check: hosts from current malware and phishing feeds that still resolve through an
-/// unfiltered resolver, looked up through this one. Opt-in from the Deep Dive page, because security tools on the
-/// network may flag those lookups.
+/// unfiltered resolver, looked up through this one. Opt-in, from the Deep Dive page or as a run's live threat test,
+/// because security tools on the network may flag those lookups.
 #[derive(Clone, Debug, Serialize)]
 pub struct LiveBlocking {
     /// DoT or DoH, or UDP/TCP when plain DNS was allowed.
@@ -390,8 +390,6 @@ pub struct LiveCategory {
     pub result: FilterCategory,
     pub fetched_at: Option<i64>,
     pub sampled: usize,
-    /// When the feed first listed each tested host, for feeds that date entries.
-    pub listed_at: BTreeMap<String, i64>,
 }
 
 /// Whether live threat names may go to `r` over plain DNS: when the user allowed it, or to a system resolver on
@@ -402,7 +400,7 @@ fn live_over_plain(r: &Resolver, allow_plain: bool) -> bool {
 
 /// Draw hosts from each feed and keep those an unfiltered resolver still resolves. The baseline is encrypted: a
 /// blocking box on the path would otherwise make live hosts look dead.
-fn live_sample(feeds: ThreatFeeds, timeout: Duration, cancel: &AtomicBool) -> Result<LiveSample, String> {
+pub(crate) fn live_sample(feeds: ThreatFeeds, timeout: Duration, cancel: &AtomicBool) -> Result<LiveSample, String> {
     let mut base = [("8.8.8.8", "dns.google"), ("1.1.1.1", "one.one.one.one")]
         .iter()
         .find_map(|(ip, host)| {
@@ -416,19 +414,18 @@ fn live_sample(feeds: ThreatFeeds, timeout: Duration, cancel: &AtomicBool) -> Re
         })
         .ok_or("Couldn't reach an unfiltered resolver over DoT (8.8.8.8 or 1.1.1.1) to confirm which feed hosts are live.")?;
     let mut sample = LiveSample { taken_at: crate::bench::now_ms(), categories: BTreeMap::new(), notes: Vec::new() };
-    for (cat, feed, source) in [("malware", feeds.malware, "URLhaus"), ("phishing", feeds.phishing, "OpenPhish")] {
+    for (cat, feed, source) in [("malware", feeds.malware, "URLhaus and ThreatView"), ("phishing", feeds.phishing, "OpenPhish")] {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
         let mut list = feed.hosts;
         if list.is_empty() {
-            sample.notes.push(format!("Couldn't download the {source} feed, so {cat} wasn't tested."));
+            sample.notes.push(format!("Couldn't download {source}, so {cat} wasn't tested."));
             continue;
         }
         fastrand::shuffle(&mut list);
         list.truncate(LIVE_SAMPLE);
-        let names: Vec<String> = list.iter().map(|h| h.host.clone()).collect();
-        let live = probes::validate_live(base.as_mut(), &names, LIVE_WANT, timeout);
+        let live = probes::validate_live(base.as_mut(), &list, LIVE_WANT, timeout);
         if live.len() < 3 {
             sample.notes.push(format!(
                 "Only {} of {} {source} hosts sampled still resolve, so the {cat} result is less certain.",
@@ -436,10 +433,10 @@ fn live_sample(feeds: ThreatFeeds, timeout: Duration, cancel: &AtomicBool) -> Re
                 list.len()
             ));
         }
-        let hosts = live.iter().filter_map(|d| list.iter().find(|h| &h.host == d).cloned()).collect();
-        sample
-            .categories
-            .insert(cat.to_string(), SampleCategory { source: source.into(), fetched_at: feed.fetched_at, sampled: list.len(), hosts });
+        sample.categories.insert(
+            cat.to_string(),
+            SampleCategory { source: source.into(), fetched_at: feed.fetched_at, sampled: list.len(), hosts: live },
+        );
     }
     Ok(sample)
 }
@@ -475,11 +472,10 @@ pub fn live_blocking(
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        let names: Vec<String> = sc.hosts.iter().map(|h| h.host.clone()).collect();
+        let names = &sc.hosts;
         let source = format!("{}: {} live of {} sampled", sc.source, names.len(), sc.sampled);
-        let result = probes::test_category(ex.as_mut(), &names, &source, quick);
-        let listed_at = sc.hosts.iter().filter_map(|h| Some((h.host.clone(), h.listed_at?))).collect();
-        categories.insert(cat.clone(), LiveCategory { result, fetched_at: sc.fetched_at, sampled: sc.sampled, listed_at });
+        let result = probes::test_category(ex.as_mut(), names, &source, quick);
+        categories.insert(cat.clone(), LiveCategory { result, fetched_at: sc.fetched_at, sampled: sc.sampled });
     }
     let out = LiveBlocking {
         transport: transport.to_string(),

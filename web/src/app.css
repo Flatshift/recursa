@@ -412,6 +412,15 @@ input[type='checkbox']:checked {
 input[type='checkbox']:checked::before {
   transform: scale(1);
 }
+/* Some of a list ticked: a bar instead of the tick. */
+input[type='checkbox']:indeterminate {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+input[type='checkbox']:indeterminate::before {
+  clip-path: inset(38% 8%);
+  transform: scale(1);
+}
 input[type='checkbox']:disabled {
   opacity: 0.45;
 }
@@ -934,6 +943,25 @@ html.mobile .segmented button {
   }
 }
 
+/* A check in progress: a small dot that breathes. */
+.live-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: live-breathe 2400ms ease-in-out infinite;
+}
+@keyframes live-breathe {
+  50% {
+    opacity: 0.3;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-dot {
+    animation: none;
+  }
+}
 /* A value still being measured: a grey block at the size the value will take. It breathes only while its own phase
    runs, and holds still under reduced motion. */
 .skel {

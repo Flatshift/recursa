@@ -47,6 +47,17 @@ export function capCell(run: RunState | null, r: Resolver, key: string): Cell {
   return { status: 'unknown', text: '—', prov: 'unknown' };
 }
 
+/** A resolver's result for one category of the run's live threat test: the share of live hosts it blocked. */
+export function liveCell(run: RunState, r: Resolver, category: 'malware' | 'phishing'): Cell {
+  const c = run.live?.[r.id]?.categories[category];
+  if (!c || !c.tested) return { status: 'unknown', text: 'Not tested', prov: 'unknown', evidence: c ? 'No live hosts of this kind in the sample' : 'Not in this run’s live threat test' };
+  const hit = c.samples.filter((s) => s.blocked).slice(0, 3).map((s) => `${s.domain} → ${s.how}`);
+  // As with the other blocking rows, not blocking isn't a failure for a resolver that never claimed to.
+  const pass = c.blocked * 2 >= c.tested;
+  const status: CheckStatus = pass ? 'pass' : r.published.filtering.includes(category) ? 'fail' : 'info';
+  return { status, text: `${c.blocked}/${c.tested} blocked`, prov: 'verified', evidence: `${c.source}${hit.length ? ` · ${hit.join('; ')}` : ''}` };
+}
+
 export function roaCell(run: RunState, id: string): Cell {
   const s = run.intel[id]?.service;
   if (!s) return { status: 'unknown', text: '—', prov: 'unknown' };

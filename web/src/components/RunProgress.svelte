@@ -32,6 +32,7 @@
     probes: 'Asking each resolver what it does: DNSSEC, ECS, QNAME minimisation, blocking',
     cdn: 'Looking up CDN hostnames through every resolver, then timing each edge it sent you to',
     intel: 'Looking up each resolver’s network: RPKI, ROV, where its queries leave',
+    live: 'Looking up live malware and phishing hosts through every resolver',
   };
   // Seconds in the phase tick for the check that reports only at the end, so a silent phase still visibly moves.
   let since = $state(Date.now());
@@ -47,14 +48,14 @@
   });
   // The resolver that reported last in this check, newest key last.
   const latest = $derived.by(() => {
-    const got = run.phase === 'probes' ? run.probes : run.phase === 'intel' ? run.intel : run.phase === 'cdn' && !run.cdn_timing ? Object.fromEntries(Object.entries(run.cdn_lookups ?? {}).filter(([, l]) => l.finished)) : null;
+    const got = run.phase === 'probes' ? run.probes : run.phase === 'intel' ? run.intel : run.phase === 'live' ? (run.live ?? {}) : run.phase === 'cdn' && !run.cdn_timing ? Object.fromEntries(Object.entries(run.cdn_lookups ?? {}).filter(([, l]) => l.finished)) : null;
     const id = got && run.done > 0 ? Object.keys(got).at(-1) : undefined;
     const r = id ? run.resolvers.find((x) => x.id === id) : undefined;
     return r ? label(r.provider, r.variant) : '';
   });
   const count = $derived.by(() => {
     if (run.phase === 'path') return run.done > 0 ? `${run.done} of ${run.total} handshakes` : duration(now - since);
-    if (run.phase === 'probes' || run.phase === 'intel') return run.total > 0 ? `${run.done} of ${run.total} resolvers` : '';
+    if (run.phase === 'probes' || run.phase === 'intel' || run.phase === 'live') return run.total > 0 ? `${run.done} of ${run.total} resolvers` : '';
     // The CDN lookups report per resolver; timing the edges they found comes after the last one.
     if (run.phase === 'cdn') {
       if (run.cdn_timing) {

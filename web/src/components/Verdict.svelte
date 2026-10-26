@@ -66,8 +66,6 @@
     const d = ((e.target as Element).closest('[data-h]') as HTMLElement | SVGElement | null)?.dataset;
     tip = d ? { x, y: top, h: d.h!, v: d.v, s: d.s } : { x, y: top, h: p.goal, body: p.evidence };
   }
-  // The privacy checks get more height when wide, for their names over the squares.
-  const tall = (p: NonNullable<Verdict['picks']>[number]) => p.graph?.kind === 'checks';
   // The last speed row labels the log axis the speed rows share.
   const axisAt = $derived((v?.picks ?? []).map((p) => p.graph?.kind).lastIndexOf('dots'));
   const ghostGoals = $derived([GOAL.fastest, GOAL.cache, GOAL.fresh, ...(cdn ? [GOAL.cdn] : []), GOAL.protection, GOAL.private, GOAL.steadiest]);
@@ -134,10 +132,16 @@
             </p>
           {/if}
           <p>
-            Best protection, Most private and Steadiest first filter on what the resolver did in this run, then take the fastest
-            of those that qualify. Your own resolver keeps Best protection and Most private when it qualifies, since you
-            needn't change anything, and Most private puts resolvers that block trackers first. An ISP's resolver can't be
-            Most private: it sees who is asking.
+            With the live threat test, Best protection ranks by the share of live malware and phishing hosts a resolver blocked,
+            and skips any known not to validate DNSSEC; ties go to the fastest cached answers. Without it, a resolver
+            needs malware blocking and DNSSEC, and the pick holds the most of malware blocking, phishing blocking, DNSSEC and
+            rebinding protection, with ties again going to the fastest cached answers. Test names show that blocking is on, not how much it catches.
+          </p>
+          <p>
+            Most private and Steadiest first filter on what the resolver did in this run, then take the fastest of those that
+            qualify. Your own resolver comes first among equals for Most private, since you needn't change
+            anything, and Most private puts resolvers that block trackers first. An ISP's resolver can't be Most private: it sees
+            who is asking.
           </p>
           <p>Plain-DNS targets that a device on your network answered are listed but never ranked.</p>
         </Info>
@@ -148,7 +152,7 @@
       <dl class="picks">
         {#each v.picks as p, i}
           <!-- svelte-ignore a11y_no_static_element_interactions (pointer tooltip only; the evidence is also in the row's text) -->
-          <div class="pick" class:sum={p.parts} class:tall={tall(p)} onpointermove={(e) => hover(e, p)} onpointerleave={() => (tip = null)}>
+          <div class="pick" class:sum={p.parts} onpointermove={(e) => hover(e, p)} onpointerleave={() => (tip = null)}>
             <dt>{p.goal}</dt>
             <dd>
               <button class="name" onclick={() => onopen(p.resolverId)}>{p.name}</button>
@@ -438,9 +442,6 @@
     }
     .pick {
       padding-block: 7px;
-    }
-    .pick.tall {
-      --pg-h: 34px;
     }
     .note,
     .g-note,

@@ -11,10 +11,10 @@
 use crate::catalog::Resolver;
 use crate::dns::{self, QuerySpec};
 use crate::endpoints;
-use crate::intel::Intel;
+use crate::intel::{Intel, ThreatFeeds};
 use crate::net::{self, Endpoint, Exchanger, Transport, UdpX, XErr};
 use crate::probes::{self, check, rand_label};
-use crate::{cdn, clock, link, stats};
+use crate::{cdn, clock, deepdive, link, stats};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -118,7 +118,7 @@ pub enum Family {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FilterProbes {
     /// Malware and phishing blocking, with the test names blocking services publish. Live feed hosts are only
-    /// looked up from a Deep Dive (see [`crate::deepdive::live_blocking`]).
+    /// looked up from a Deep Dive or a run's live threat test (see [`crate::deepdive::live_blocking`]).
     #[serde(default = "yes")]
     pub threats: bool,
     #[serde(default = "yes")]
@@ -168,6 +168,9 @@ pub struct RunConfig {
     /// Test how well each resolver maps this client onto CDN edges.
     #[serde(default = "yes")]
     pub cdn: bool,
+    /// Look up live malware and phishing hosts through every resolver after the other checks.
+    #[serde(default)]
+    pub live: bool,
     /// The names the Cached test asks, in rotation. Checked when the run starts; a name that doesn't resolve
     /// is left out and said so. A run made before this existed used the default list.
     #[serde(default = "crate::names::defaults")]
@@ -186,6 +189,7 @@ impl RunConfig {
             probes: true,
             filters: FilterProbes::default(),
             cdn: true,
+            live: false,
             cached_names: crate::names::defaults(),
         }
     }
@@ -374,6 +378,9 @@ pub struct RunState {
     pub warm: Vec<WarmSample>,
     pub probes: BTreeMap<String, probes::ProbeReport>,
     pub intel: BTreeMap<String, Value>,
+    /// The run's live threat test, per resolver: the same live hosts through each. Absent unless the run asked for it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub live: BTreeMap<String, deepdive::LiveBlocking>,
     pub notes: Vec<Note>,
     pub cdn: Option<cdn::CdnReport>,
     /// Resolvers whose CDN lookups are done, while the edges are still to be timed: for the live view only.
@@ -510,6 +517,7 @@ pub(crate) fn spawn(mut cfg: RunConfig, mut deps: Deps) -> Arc<RunHandle> {
         warm: vec![],
         probes: BTreeMap::new(),
         intel: BTreeMap::new(),
+        live: BTreeMap::new(),
         notes: vec![],
         cdn: None,
         cdn_lookups: BTreeMap::new(),
@@ -1583,14 +1591,15 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
     let silent: Vec<String> = selected.iter().filter(|r| !answered.contains(&r.id)).map(|r| r.label()).collect();
     let selected: Vec<Resolver> = selected.iter().filter(|r| answered.contains(&r.id)).cloned().collect();
     let selected = selected.as_slice();
-    if !silent.is_empty() && !h.cancelled() && (cfg.probes || cfg.cdn) {
-        let skipped = match (cfg.probes, cfg.cdn) {
-            (true, true) => "capability probes and CDN mapping were",
-            (true, false) => "capability probes were",
-            _ => "CDN mapping was",
-        };
+    if !silent.is_empty() && !h.cancelled() && (cfg.probes || cfg.cdn || cfg.live) {
+        let skipped: Vec<String> = [(cfg.probes, "capability probes"), (cfg.cdn, "CDN mapping"), (cfg.live, "the live threat test")]
+            .into_iter()
+            .filter(|&(on, _)| on)
+            .map(|(_, name)| name.to_string())
+            .collect();
+        let verb = if skipped.len() == 1 && !cfg.probes { "was" } else { "were" };
         let pronoun = if silent.len() == 1 { "it" } else { "them" };
-        h.note("info", format!("No answers from {}, so {skipped} skipped for {pronoun}.", list(&silent)), None);
+        h.note("info", format!("No answers from {}, so {} {verb} skipped for {pronoun}.", list(&silent), list(&skipped)), None);
     }
 
     // ---- Path check: true network RTT per resolver, and interception detection.
@@ -1651,6 +1660,12 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
         explain_egress(h);
         h.mark("cdn-owners");
         enrich_cdn(h, deps);
+    }
+
+    // ---- Live threats: the same live malware and phishing hosts through every resolver. Opt-in, last, since
+    // security tools on the network may react to the lookups.
+    if cfg.live && !h.cancelled() {
+        run_live(h, selected, timeout, deps, set.plain);
     }
 }
 
@@ -1930,6 +1945,81 @@ fn run_probes(h: &RunHandle, selected: &[Resolver], intercepted: &[String], ctx:
             });
         }
     });
+}
+
+fn run_live(h: &RunHandle, selected: &[Resolver], timeout: Duration, deps: &Deps, plain: bool) {
+    h.phase("live", selected.len() as u32);
+    let feeds = deps.rt.block_on(deps.intel.threat_feeds());
+    // One sample for the whole run, so every resolver is asked the same hosts.
+    let quick = timeout.min(Duration::from_millis(1500));
+    let sample = match deepdive::live_sample(feeds, quick, &h.cancel) {
+        Ok(sample) => sample,
+        Err(e) => {
+            h.note("warn", e, None);
+            return;
+        }
+    };
+    // Each result carries a copy of these, so they're said once here.
+    for text in &sample.notes {
+        h.note("info", text.clone(), None);
+    }
+    if sample.categories.values().all(|c| c.hosts.is_empty()) {
+        return;
+    }
+    // Eight resolvers at a time, as in the probes.
+    let next = AtomicUsize::new(0);
+    let untested = Mutex::new(Vec::new());
+    let plain_used = AtomicBool::new(false);
+    std::thread::scope(|sc| {
+        for _ in 0..selected.len().min(8) {
+            sc.spawn(|| {
+                while !h.cancelled() {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(r) = selected.get(i) else { break };
+                    let ask = || deepdive::live_blocking(r, Some(sample.clone()), ThreatFeeds::default(), false, timeout, &h.cancel);
+                    let Ok(out) = catch_unwind(AssertUnwindSafe(ask)) else { continue };
+                    let Ok((live, _)) = out else {
+                        untested.lock().unwrap_or_else(|e| e.into_inner()).push(i);
+                        continue;
+                    };
+                    // A resolver that was cut short has a partial result, which would compare unfairly.
+                    if h.cancelled() {
+                        break;
+                    }
+                    if matches!(live.transport.as_str(), "UDP" | "TCP") {
+                        plain_used.store(true, Ordering::Relaxed);
+                    }
+                    let id = r.id.clone();
+                    h.publish(|s| {
+                        s.live.insert(id.clone(), live.clone());
+                        s.done += 1;
+                        json!({"type": "live", "resolver_id": id, "live": live, "done": s.done})
+                    });
+                }
+            });
+        }
+    });
+    let mut untested = untested.into_inner().unwrap_or_else(|e| e.into_inner());
+    if !untested.is_empty() && !h.cancelled() {
+        untested.sort_unstable();
+        let names: Vec<String> = untested.iter().map(|&i| selected[i].label()).collect();
+        let were = if names.len() == 1 { "wasn't" } else { "weren't" };
+        h.note(
+            "info",
+            format!(
+                "{} {were} given the live threat test: live threat names go only over DoT or DoH, or plain DNS to your own resolver on this network, and no encrypted connection opened from here.",
+                list(&names)
+            ),
+            None,
+        );
+    }
+    if plain && plain_used.load(Ordering::Relaxed) && !h.cancelled() && plain_dns_stopped() {
+        h.note(
+            "warn",
+            "Plain DNS (UDP 53) from this computer stopped getting answers during the live threat test. A threat-protection, IPS or firewall rule on your network may have flagged the lookups and blocked this computer's DNS. Check your router or firewall's security log.".into(),
+            None,
+        );
+    }
 }
 
 /// A resolver on this network's own address space: RFC 1918, unique-local or link-local. Not shared (CGNAT,
@@ -2815,6 +2905,7 @@ mod tests {
             warm: vec![],
             probes: BTreeMap::new(),
             intel: BTreeMap::new(),
+            live: BTreeMap::new(),
             notes: vec![],
             cdn: None,
             cdn_lookups: BTreeMap::new(),
@@ -3043,6 +3134,7 @@ mod tests {
             warm: vec![],
             probes: BTreeMap::new(),
             intel: BTreeMap::new(),
+            live: BTreeMap::new(),
             notes: vec![],
             cdn: None,
             cdn_lookups: BTreeMap::new(),
@@ -3092,6 +3184,7 @@ mod tests {
             warm: vec![],
             probes: BTreeMap::new(),
             intel: BTreeMap::new(),
+            live: BTreeMap::new(),
             notes: vec![],
             cdn: None,
             cdn_lookups: BTreeMap::new(),
@@ -3155,6 +3248,7 @@ mod tests {
             warm: vec![],
             probes: BTreeMap::new(),
             intel: BTreeMap::new(),
+            live: BTreeMap::new(),
             notes: vec![],
             cdn: None,
             cdn_lookups: BTreeMap::new(),
@@ -3452,5 +3546,28 @@ mod tests {
         });
         // Each thread may finish the query it had in flight, and no more.
         assert!(count <= 1 + 3, "{count} samples after the first");
+    }
+
+    #[test]
+    fn a_run_config_without_live_leaves_the_live_test_off() {
+        let cfg: RunConfig = serde_json::from_str(r#"{"resolvers": ["google"]}"#).unwrap();
+        assert!(!cfg.live);
+        let cfg: RunConfig = serde_json::from_str(r#"{"resolvers": ["google"], "live": true}"#).unwrap();
+        assert!(cfg.live);
+    }
+
+    #[test]
+    fn live_results_are_serialized_only_when_there_are_some() {
+        let mut s = run_with(&["google"], &[]);
+        assert!(serde_json::to_value(&s).unwrap().get("live").is_none());
+        let live = deepdive::LiveBlocking {
+            transport: "DoT".into(),
+            sample_taken_at: 1,
+            categories: BTreeMap::new(),
+            notes: vec![],
+            duration_ms: 1.0,
+        };
+        s.live.insert("google".into(), live);
+        assert!(serde_json::to_value(&s).unwrap()["live"].get("google").is_some());
     }
 }

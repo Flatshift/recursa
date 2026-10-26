@@ -340,6 +340,8 @@ export interface RunConfig {
   probes: boolean;
   filters: { threats: boolean; ads: boolean; adult: boolean };
   cdn: boolean;
+  /** Look up live malware and phishing hosts through every resolver after the other checks. */
+  live: boolean;
   /** The names the Cached test asks, in rotation. */
   cached_names: string[];
 }
@@ -494,6 +496,8 @@ export interface RunState {
   warm?: WarmSample[];
   probes: Record<string, ProbeReport>;
   intel: Record<string, ResolverIntel>;
+  /** The run's live threat test, one result per resolver; absent unless the run asked for it. */
+  live?: Record<string, LiveBlocking>;
   notes: Note[];
   cdn: CdnReport | null;
   /** Resolvers whose CDN lookups are done, present only while the mapping is live. */
@@ -820,12 +824,10 @@ export interface NtpMonitorResp {
   history: { since: number; until: number; cycles: number; servers: NtpMonitorServer[]; clock: NtpMonitorClock };
 }
 
-/** The opt-in Check live feeds: blocking of live malware (URLhaus) and phishing (OpenPhish) hosts. */
+/** The opt-in Check live feeds, and the run's Live threat test: blocking of live malware (URLhaus and ThreatView) and phishing (OpenPhish) hosts. */
 export interface LiveCategory extends FilterCategory {
   /** When the feed was downloaded (Unix ms). */
   fetched_at: number | null;
-  /** When the feed first listed each tested host, for feeds that date entries (URLhaus). */
-  listed_at: Record<string, number>;
 }
 
 export interface LiveBlocking {

@@ -70,7 +70,7 @@ export function duration(msTotal: number): string {
 export function runEstimateMs(
   targets: number,
   resolvers: number,
-  c: { tests: unknown[]; samples: number; mode: 'accurate' | 'quick'; probes: boolean; cdn: boolean },
+  c: { tests: unknown[]; samples: number; mode: 'accurate' | 'quick'; probes: boolean; cdn: boolean; live: boolean },
 ): number {
   const queries = targets * (c.tests.length * c.samples + 11);
   let msTotal: number;
@@ -85,12 +85,14 @@ export function runEstimateMs(
 }
 
 /** How long each check after the latency rounds should take, in run order: the yardstick once the checks begin. */
-export function checkMs(resolvers: number, c: { probes: boolean; cdn: boolean }): Record<string, number> {
+export function checkMs(resolvers: number, c: { probes: boolean; cdn: boolean; live: boolean }): Record<string, number> {
   const each: Record<string, number> = {
     path: 1500,
     probes: Math.ceil(resolvers / 8) * 2500 + 3000,
     cdn: 5000 + resolvers * 300,
     intel: 2000,
+    // The feeds and the sample of hosts that still resolve, then each resolver's lookups, eight at a time.
+    live: 15000 + Math.ceil(resolvers / 8) * 3500,
   };
   return Object.fromEntries(checksOf(c).map((id) => [id, each[id]]));
 }
