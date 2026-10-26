@@ -2,6 +2,11 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- **Signed macOS app.** Recursa.app and the DMG are Developer ID signed and notarized, so macOS opens them without
+  the right-click workaround.
+
 ## 0.4.1 (2026-10-25)
 
 - **Inspector views.** A resolver's Inspector holds its six views as tabs, with each check in its own view; the
