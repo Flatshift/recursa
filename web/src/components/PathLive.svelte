@@ -19,8 +19,9 @@
     /^(fe80|fc|fd|::1$)/i.test(ip);
   const traced = (r: Resolver) => r.group !== 'system' && [...r.ipv4, ...r.ipv6].slice(0, 1).some((ip) => !isPrivate(ip));
 
-  // The lanes keep the order the ranking had when the check began, so nothing jumps while hops land.
-  const first = untrack(() => rows.flatMap((r) => (r.resolver ? [r.resolver.id] : [])));
+  // The lanes keep the order the ranking had when the check began, so nothing jumps while hops land. One lane per
+  // resolver, however many transports it was tested on.
+  const first = untrack(() => [...new Set(rows.flatMap((r) => (r.resolver ? [r.resolver.id] : [])))]);
   const lanes = $derived.by(() => {
     const by = new Map(run.resolvers.filter(traced).map((r) => [r.id, r]));
     const ids = [...first.filter((id) => by.has(id)), ...[...by.keys()].filter((id) => !first.includes(id))];
