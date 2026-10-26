@@ -2,7 +2,7 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.4.2 (2026-10-26)
 
 - **Signed macOS app.** Recursa.app and the DMG are Developer ID signed and notarized, so macOS opens them without
   the right-click workaround.
