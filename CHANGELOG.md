@@ -2,13 +2,21 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.4.1 (2026-10-25)
 
+- **Inspector views.** A resolver's Inspector holds its six views as tabs, with each check in its own view; the
+  separate resolver page is gone.
+- **Batch checks.** Select resolvers in the Resolvers list to run a check on each in turn, with the results as new
+  columns.
 - **Hardening.** Run CSV exports defuse cells that start like a spreadsheet formula, and the launch link Recursa
   opens no longer appears on the opener's command line.
 - **Leaner runs.** A run checks its helper resolvers once rather than once per test, and the CLI states the current
   score weights.
 - **Path check.** A run that tests several transports now shows the path check while it runs.
+- **Live threat test.** An optional last phase looks up the same live malware and phishing hosts through every selected
+  resolver; Best protection ranks on it, or shows the protections each resolver holds.
+- **Live threat feeds.** Malware hosts come from URLhaus, through the malware-filter mirror, and ThreatView, so Check
+  live feeds downloads them again.
 
 ## 0.4.0 (2026-10-25)
 
