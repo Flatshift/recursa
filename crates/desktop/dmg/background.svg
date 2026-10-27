@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="400" viewBox="0 0 660 400">
+  <!-- Recursa disk-image background, 660 x 400 points. Icons sit at (165,180) and (495,180), 128 px. -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7d7d82"/>
+      <stop offset="1" stop-color="#6b6b70"/>
+    </linearGradient>
+  </defs>
+  <rect width="660" height="400" fill="url(#g)"/>
+  <g fill="none" stroke="#f2f3f6" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" opacity="0.92">
+    <path d="M262 180h130"/>
+    <path d="M368 154l26 26-26 26"/>
+  </g>
+  <text x="330" y="322" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" fill="#f2f3f6" opacity="0.85">Drag Recursa into Applications to install</text>
+</svg>
