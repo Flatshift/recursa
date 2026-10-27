@@ -2,6 +2,12 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.4.3 (2026-10-26)
+
+- **Installer layout.** The macOS disk image opens with Recursa on the left, Applications on the right and an arrow
+  between them.
+- **CDN notes collapsed.** The notes under the CDN results are one line that expands on click.
+
 ## 0.4.2 (2026-10-26)
 
 - **Signed macOS app.** Recursa.app and the DMG are Developer ID signed and notarized, so macOS opens them without
