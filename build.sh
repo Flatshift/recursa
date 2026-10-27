@@ -16,14 +16,10 @@ if [ "$1" = "app" ]; then
   signing="${RECURSA_SIGNING_ENV:-$HOME/.private_keys/recursa-signing.env}"
   [ -f "$signing" ] && . "$signing"
   export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
-  (cd crates/desktop && ../../web/node_modules/.bin/tauri build)
-  # Tauri notarizes and staples the app; the disk image needs its own ticket.
-  if [ "$APPLE_SIGNING_IDENTITY" != "-" ] && [ -n "$APPLE_API_KEY_PATH" ]; then
-    for dmg in target/release/bundle/dmg/*.dmg; do
-      xcrun notarytool submit "$dmg" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" \
-        --issuer "$APPLE_API_ISSUER" --wait
-      xcrun stapler staple "$dmg"
-    done
-  fi
+  # Tauri signs, notarizes and staples the app; tools/dmg.sh lays out and signs the disk image.
+  (cd crates/desktop && ../../web/node_modules/.bin/tauri build --bundles app)
+  version=$(node -p "require('./web/package.json').version")
+  case "$(uname -m)" in arm64) arch=aarch64 ;; *) arch=x64 ;; esac
+  tools/dmg.sh target/release/bundle/macos/Recursa.app "target/release/bundle/dmg/Recursa_${version}_${arch}.dmg"
   echo "Built ./target/release/bundle/macos/Recursa.app"
 fi
