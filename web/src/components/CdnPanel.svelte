@@ -6,6 +6,7 @@
   import { cellPenalty, ecsByAuthority, edgeIps, edgeNets, level, youOf } from '../lib/cdn';
   import CdnLogo from './CdnLogo.svelte';
   import EdgeNets from './EdgeNets.svelte';
+  import Icon from './Icon.svelte';
   import Info from './Info.svelte';
 
   let { run, cdn, onopen }: { run: RunState; cdn: CdnReport; onopen: (id: string) => void } = $props();
@@ -358,7 +359,10 @@
   </div>
   {/if}
 
-  <div class="foot">
+  <details class="foot">
+    <summary>
+      <Icon name="chevron-right" size={12} />Differences under {ms(2 * cdn.noise_ms, false)} ms are noise. How to read this map
+    </summary>
     {#if hasRef}
       <p>
         <span class="mine">●</span> The resolver got the same edge (or one as near) that the CDN picks for your own address.
@@ -379,7 +383,6 @@
         map.
       </p>
     {/if}
-    <p>Differences under {ms(2 * cdn.noise_ms, false)} ms are noise in this run.</p>
     <p>
       {#if onNet.length}
         {onNet.length} of {edges.length} edges sit inside your ISP{clientNet?.holder ? ` (${holder(clientNet.holder)})` : ''}.
@@ -388,7 +391,7 @@
       {/if}
       {mobile ? 'Tap a resolver for its edge on each CDN, in milliseconds.' : 'Hover a cell for its edges, their networks and round trips.'}
     </p>
-  </div>
+  </details>
 </section>
 
 <style>
@@ -619,12 +622,26 @@
     border-radius: 4px;
     border: 1px solid var(--good);
   }
+  /* One line by default; the notes open under it. */
   .foot {
     display: grid;
     gap: 4px;
     font-size: var(--t-xs);
     color: var(--ink-3);
     max-width: 110ch;
+  }
+  .foot summary {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+    cursor: default;
+    list-style: none;
+  }
+  .foot summary::-webkit-details-marker {
+    display: none;
+  }
+  .foot[open] summary :global(svg) {
+    transform: rotate(90deg);
   }
   /* Phone: the page scrolls, and each resolver opens in place. */
   :global(html.mobile) .cdn {
