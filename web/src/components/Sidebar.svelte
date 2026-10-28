@@ -191,8 +191,8 @@
     {#if border}
       <a
         class="mon"
-        href="/network"
-        onclick={(e) => go(e, '/network')}
+        href="/network/monitor"
+        onclick={(e) => go(e, '/network/monitor')}
         class:on={border.enabled}
         title={border.enabled ? `Border links are probed every ${border.interval_min} min. Open Network.` : 'Border probing is off. Open Network to switch it on.'}
       >

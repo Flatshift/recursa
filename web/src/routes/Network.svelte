@@ -2,13 +2,16 @@
   // The Network page: which site each CDN serves this network from, in one quick check, and over time how the link
   // from your ISP to the next network behaves. Neither depends on a resolver, so it sits apart from a run.
   import { api } from '../lib/api';
+  import { app } from '../lib/store.svelte';
   import type { RollCall } from '../lib/types';
   import Toolbar from '../components/Toolbar.svelte';
   import Icon from '../components/Icon.svelte';
   import EdgeTable from '../components/EdgeTable.svelte';
   import BorderMonitor from '../components/BorderMonitor.svelte';
 
-  let view = $state<'edges' | 'monitor'>('edges');
+  // The view is in the path, so the sidebar's monitor link and a reload land on the same half.
+  const view = $derived(app.route.name === 'network' && app.route.view === 'monitor' ? 'monitor' : 'edges');
+  const show = (v: 'edges' | 'monitor') => app.navigate(v === 'monitor' ? '/network/monitor' : '/network', true);
   let last = $state<RollCall | null>(null);
   let loaded = $state(false);
   let running = $state(false);
@@ -41,8 +44,8 @@
     {#snippet center()}
       <span class="beta" title="New in this release: the readings are real, the wording and thresholds may still change.">Beta</span>
       <div class="segmented" role="tablist" aria-label="View">
-        <button role="tab" aria-selected={view === 'edges'} onclick={() => (view = 'edges')}>Served from</button>
-        <button role="tab" aria-selected={view === 'monitor'} onclick={() => (view = 'monitor')}>Over time</button>
+        <button role="tab" aria-selected={view === 'edges'} onclick={() => show('edges')}>Served from</button>
+        <button role="tab" aria-selected={view === 'monitor'} onclick={() => show('monitor')}>Over time</button>
       </div>
     {/snippet}
     {#snippet actions()}
