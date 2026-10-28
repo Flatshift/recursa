@@ -21,6 +21,7 @@
     | 'half'
     | 'pulse'
     | 'clock'
+    | 'network'
     | 'lock'
     | 'sidebar'
     | 'inspector'
@@ -87,6 +88,9 @@
   {:else if name === 'clock'}
     <circle cx="8" cy="8" r="5.6" />
     <path d="M8 4.6V8l2.4 1.5" />
+  {:else if name === 'network'}
+    <circle cx="8" cy="8" r="5.6" />
+    <path d="M2.4 8h11.2M8 2.4c-1.9 2-1.9 9.2 0 11.2M8 2.4c1.9 2 1.9 9.2 0 11.2" />
   {:else if name === 'close'}
     <path d="M4 4l8 8M12 4l-8 8" />
   {:else if name === 'refresh'}

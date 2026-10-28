@@ -2,6 +2,13 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- **Network page (beta).** Which site each of six CDNs serves this network from, read from the CDN's own headers, with the
+  round trip against the fibre floor and whose network the edge sits in. An "Over time" view probes the two routers
+  either side of your ISP's border towards each CDN in the background and says, after a day, whether the evening
+  slowdown sits on the link between them or before it.
+
 ## 0.4.3 (2026-10-26)
 
 - **Installer layout.** The macOS disk image opens with Recursa on the left, Applications on the right and an arrow

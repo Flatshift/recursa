@@ -6,6 +6,7 @@
 //! [`RunHandle::subscribe`] and [`AppState::export`].
 
 use crate::bench::{self, RunConfig, RunHandle};
+use crate::border::{self, BorderMonitorConfig};
 use crate::calibrate::Calibration;
 use crate::catalog::{self, Resolver};
 use crate::intel::{self, Intel};
@@ -45,6 +46,9 @@ pub struct AppState {
     /// Monitoring settings; front ends can `subscribe` to hear about changes.
     pub monitor: watch::Sender<MonitorConfig>,
     pub ntp_monitor: watch::Sender<NtpMonitorConfig>,
+    pub border_monitor: watch::Sender<BorderMonitorConfig>,
+    /// The last edge roll call of this process, for the Network page and the border monitor's targets. Memory only.
+    pub edges: Mutex<Option<crate::edge::RollCall>>,
     /// Bumped when NTP monitoring is switched off or its record cleared, so a cycle in flight knows to record nothing.
     pub ntp_epoch: AtomicU64,
     /// The live threat-feed hosts the Deep Dive's blocking check last used (see [`crate::deepdive::LiveSample`]).
@@ -173,6 +177,10 @@ fn stored_ntp_monitor(store: &Store) -> Option<NtpMonitorConfig> {
     store.get::<NtpMonitorConfig>("ntp_monitor").map(NtpMonitorConfig::clamped)
 }
 
+fn stored_border_monitor(store: &Store) -> Option<BorderMonitorConfig> {
+    store.get::<BorderMonitorConfig>("border_monitor").map(BorderMonitorConfig::clamped)
+}
+
 impl AppState {
     /// Open the database and build the state. `calibrate` measures the timing floor first;
     /// otherwise [`AppState::start_background`] does it. `caps` is the host's row of [`crate::caps::BUILDS`].
@@ -184,6 +192,7 @@ impl AppState {
         let intel = Arc::new(Intel::new(store.clone(), measuring.clone(), system.clone()));
         let monitor_cfg = stored_monitor(&store).unwrap_or_default();
         let ntp_monitor_cfg = stored_ntp_monitor(&store).unwrap_or_default();
+        let border_monitor_cfg = stored_border_monitor(&store).unwrap_or_default();
         Ok(Arc::new(AppState {
             caps,
             store,
@@ -200,6 +209,8 @@ impl AppState {
             ntp: Mutex::new(None),
             monitor: watch::Sender::new(monitor_cfg),
             ntp_monitor: watch::Sender::new(ntp_monitor_cfg),
+            border_monitor: watch::Sender::new(border_monitor_cfg),
+            edges: Mutex::new(None),
             ntp_epoch: AtomicU64::new(0),
             live_sample: Mutex::new(None),
         }))
@@ -228,6 +239,7 @@ impl AppState {
                 async move { detect_forwarders(&app).await }
             });
             ntp_monitor::spawn(app.clone());
+            border::spawn(app.clone());
             monitor::spawn(app);
         });
     }
@@ -684,6 +696,33 @@ impl AppState {
                 })
                 .await
             }
+            ("POST", ["network", "edges"]) => {
+                self.idle()?;
+                ok(json!(self.run_roll_call().await))
+            }
+            ("GET", ["network", "edges"]) => ok(json!({ "last": *self.edges.lock().unwrap() })),
+            ("GET", ["network", "border"]) => {
+                let hours = param("hours").and_then(|h| h.parse::<i64>().ok()).unwrap_or(72).clamp(1, 24 * 365);
+                let until = bench::now_ms();
+                let since = until - hours * 3_600_000;
+                let roll = self.edges.lock().unwrap().clone();
+                let store = self.store.clone();
+                let (history, last) = tokio::task::spawn_blocking(move || {
+                    let pairs = store.border_pairs(since);
+                    let (home, missing) = border::context(roll.as_ref(), &pairs);
+                    (border::history(&pairs, &store.border_samples(since), home, missing, since, until), store.border_latest())
+                })
+                .await
+                .map_err(|e| ApiError::new(500, e.to_string()))?;
+                let config = self.border_monitor.borrow().clone();
+                ok(json!({ "config": config, "last": last, "cap": crate::trace::available(), "history": history }))
+            }
+            ("GET", ["network", "border", "last"]) => ok(json!({ "last": self.store.border_latest() })),
+            ("PUT", ["network", "border"]) => ok(json!(self.set_border_monitor(parse(body)?))),
+            ("DELETE", ["network", "border", "history"]) => {
+                self.store.border_clear();
+                ok(json!({ "cleared": true }))
+            }
             ("GET", ["ntp", "monitor", "last"]) => ok(json!({ "last": self.store.ntp_latest() })),
             ("PUT", ["ntp", "monitor"]) => ok(json!(self.set_ntp_monitor(parse(body)?)?)),
             ("DELETE", ["ntp", "monitor", "history"]) => {
@@ -825,6 +864,7 @@ impl AppState {
             "resolvers": resolvers,
             "defaults": defaults,
             "monitor": *self.monitor.borrow(),
+            "border_monitor": *self.border_monitor.borrow(),
             "active_run": *self.active_run.lock().unwrap(),
             "runs": self.store.list_runs(200),
             "method": {
@@ -893,6 +933,26 @@ impl AppState {
     /// As [`AppState::reload_monitors`], for the NTP monitor.
     pub(crate) fn reload_ntp_monitor(&self) {
         reload(&self.ntp_monitor, stored_ntp_monitor(&self.store));
+    }
+
+    /// As [`AppState::reload_monitors`], for the border-link monitor.
+    pub(crate) fn reload_border_monitor(&self) {
+        reload(&self.border_monitor, stored_border_monitor(&self.store));
+    }
+
+    /// Run an edge roll call and keep it as the last one.
+    pub(crate) async fn run_roll_call(&self) -> crate::edge::RollCall {
+        let rc = crate::edge::roll_call(self).await;
+        *self.edges.lock().unwrap() = Some(rc.clone());
+        rc
+    }
+
+    /// Save and apply a border-link monitoring configuration, within sane bounds, and tell subscribers.
+    fn set_border_monitor(&self, cfg: BorderMonitorConfig) -> BorderMonitorConfig {
+        let cfg = cfg.clamped();
+        self.store.put("border_monitor", &cfg);
+        self.border_monitor.send_replace(cfg.clone());
+        cfg
     }
 
     /// Save and apply a monitoring configuration, within sane bounds, and tell subscribers.
@@ -1176,6 +1236,29 @@ mod tests {
         assert_eq!(a.call("POST", "/api/ntp/run", json!({ "servers": [], "custom": many })).await.unwrap_err().status, 400);
         // Nothing was started, so the measurement slot is free.
         assert!(!a.run_active.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn the_border_monitor_is_configured_and_read_back_empty() {
+        let a = app();
+        let get = |path: &'static str| {
+            let a = a.clone();
+            async move { serde_json::from_str::<Value>(&a.call("GET", path, Value::Null).await.unwrap()).unwrap() }
+        };
+        assert_eq!(get("/api/bootstrap").await["border_monitor"]["enabled"], false);
+        let cfg = json!({ "enabled": true, "interval_min": 1, "retention_days": 9999 });
+        let saved: Value = serde_json::from_str(&a.call("PUT", "/api/network/border", cfg).await.unwrap()).unwrap();
+        assert_eq!((saved["interval_min"].as_u64(), saved["retention_days"].as_u64()), (Some(2), Some(365)));
+        let v = get("/api/network/border?hours=24").await;
+        assert_eq!(
+            (v["config"]["enabled"].as_bool(), v["last"].is_null(), v["history"]["pairs"].as_array().map(Vec::len)),
+            (Some(true), true, Some(0))
+        );
+        assert!(v["cap"].is_string());
+        assert!(get("/api/network/edges").await["last"].is_null());
+        assert_eq!(get("/api/network/border/last").await, json!({ "last": null }));
+        let cleared: Value = serde_json::from_str(&a.call("DELETE", "/api/network/border/history", Value::Null).await.unwrap()).unwrap();
+        assert_eq!(cleared["cleared"], true);
     }
 
     #[tokio::test]

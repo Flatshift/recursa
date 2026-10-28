@@ -1,6 +1,7 @@
 //! Local persistence: runs, monitoring samples, custom resolvers, settings and the
 //! intel cache. One SQLite file in the OS application-data directory.
 
+use crate::border::{Kind, Pair, Sample as BorderSample};
 use crate::monitor::{HOUR_MS, HourRollup, Outage, OutageTracker, RollupBuilder, RollupRow};
 use rusqlite::types::Type;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, Transaction, params};
@@ -123,7 +124,14 @@ impl Store {
              CREATE INDEX IF NOT EXISTS ntp_sample_ts ON ntp_sample(ts);
              CREATE TABLE IF NOT EXISTS ntp_clock(
                ts INTEGER PRIMARY KEY, median_ms REAL NOT NULL, bound_ms REAL NOT NULL, voters INTEGER NOT NULL,
-               independent INTEGER NOT NULL);",
+               independent INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS border_pair(
+               id INTEGER PRIMARY KEY, cdn TEXT NOT NULL, target TEXT NOT NULL,
+               near TEXT NOT NULL, near_ttl INTEGER NOT NULL, far TEXT NOT NULL, far_ttl INTEGER NOT NULL,
+               far_asn INTEGER, far_holder TEXT, kind TEXT NOT NULL, found_at INTEGER NOT NULL, retired_at INTEGER);
+             CREATE TABLE IF NOT EXISTS border_sample(
+               ts INTEGER NOT NULL, pair INTEGER NOT NULL, near_ms REAL, far_ms REAL);
+             CREATE INDEX IF NOT EXISTS border_sample_ts ON border_sample(ts);",
         )?;
         let mut conn = conn;
         // Older databases: runs had no `saved` flag.
@@ -490,6 +498,120 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Store a new pair, returning its id.
+    pub fn border_insert_pair(&self, p: &Pair) -> i64 {
+        let c = self.conn.lock().unwrap();
+        let r = c.execute(
+            "INSERT INTO border_pair(cdn, target, near, near_ttl, far, far_ttl, far_asn, far_holder, kind, found_at, retired_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![
+                p.cdn,
+                p.target.to_string(),
+                p.near.to_string(),
+                p.near_ttl,
+                p.far.to_string(),
+                p.far_ttl,
+                p.far_asn,
+                p.far_holder,
+                p.kind.as_str(),
+                p.found_at,
+                p.retired_at
+            ],
+        );
+        match r {
+            Ok(_) => c.last_insert_rowid(),
+            Err(e) => {
+                eprintln!("Couldn't record a border pair: {e}");
+                0
+            }
+        }
+    }
+
+    /// End a pair: its series stops here, and a new pair starts its own.
+    pub fn border_retire(&self, id: i64, at: i64) {
+        let c = self.conn.lock().unwrap();
+        let _ = c.execute("UPDATE border_pair SET retired_at = ?2 WHERE id = ?1 AND retired_at IS NULL", params![id, at]);
+    }
+
+    /// The pairs in use, and those retired at or after `since`, oldest first.
+    pub fn border_pairs(&self, since: i64) -> Vec<Pair> {
+        let c = self.rd();
+        c.prepare(
+            "SELECT id, cdn, target, near, near_ttl, far, far_ttl, far_asn, far_holder, kind, found_at, retired_at
+             FROM border_pair WHERE retired_at IS NULL OR retired_at >= ?1 ORDER BY id",
+        )
+        .and_then(|mut q| {
+            q.query_map(params![since], |r| {
+                let ip = |i: usize| r.get::<_, String>(i).map(|s| s.parse::<std::net::IpAddr>().ok());
+                Ok(Some(Pair {
+                    id: r.get(0)?,
+                    cdn: r.get(1)?,
+                    target: ip(2)?.ok_or(rusqlite::Error::InvalidQuery)?,
+                    near: ip(3)?.ok_or(rusqlite::Error::InvalidQuery)?,
+                    near_ttl: r.get(4)?,
+                    far: ip(5)?.ok_or(rusqlite::Error::InvalidQuery)?,
+                    far_ttl: r.get(6)?,
+                    far_asn: r.get(7)?,
+                    far_holder: r.get(8)?,
+                    kind: Kind::parse(&r.get::<_, String>(9)?),
+                    found_at: r.get(10)?,
+                    retired_at: r.get(11)?,
+                }))
+            })
+            .map(|it| it.filter_map(Result::ok).flatten().collect::<Vec<_>>())
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn border_record(&self, rows: &[BorderSample]) {
+        let mut c = self.conn.lock().unwrap();
+        let Ok(tx) = c.transaction() else { return };
+        let r = (|| {
+            let mut ins = tx.prepare_cached("INSERT INTO border_sample(ts, pair, near_ms, far_ms) VALUES(?1,?2,?3,?4)")?;
+            for s in rows {
+                ins.execute(params![s.ts, s.pair, s.near_ms, s.far_ms])?;
+            }
+            Ok::<_, rusqlite::Error>(())
+        })();
+        match r {
+            Ok(()) => {
+                let _ = tx.commit();
+            }
+            Err(e) => eprintln!("Couldn't record a border monitoring cycle: {e}"),
+        }
+    }
+
+    /// Samples from `since` on, oldest first.
+    pub fn border_samples(&self, since: i64) -> Vec<BorderSample> {
+        let c = self.rd();
+        c.prepare("SELECT ts, pair, near_ms, far_ms FROM border_sample WHERE ts >= ?1 ORDER BY ts, pair")
+            .and_then(|mut q| {
+                q.query_map(params![since], |r| Ok(BorderSample { ts: r.get(0)?, pair: r.get(1)?, near_ms: r.get(2)?, far_ms: r.get(3)? }))
+                    .map(|it| it.filter_map(Result::ok).collect::<Vec<_>>())
+            })
+            .unwrap_or_default()
+    }
+
+    /// When the newest border sample was recorded, by this process or any other.
+    pub fn border_latest(&self) -> Option<i64> {
+        let c = self.rd();
+        c.query_row("SELECT MAX(ts) FROM border_sample", [], |r| r.get(0)).ok().flatten()
+    }
+
+    /// Drop samples before `before`, and pairs retired before it.
+    pub fn border_prune(&self, before: i64) {
+        let c = self.conn.lock().unwrap();
+        let _ = c.execute("DELETE FROM border_sample WHERE ts < ?1", params![before]);
+        let _ = c.execute("DELETE FROM border_pair WHERE retired_at IS NOT NULL AND retired_at < ?1", params![before]);
+    }
+
+    pub fn border_clear(&self) {
+        let c = self.conn.lock().unwrap();
+        let _ = c.execute_batch("DELETE FROM border_sample; DELETE FROM border_pair;");
+    }
+}
+
 /// One server's answer (or failure) in one NTP monitoring cycle.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NtpRow {
@@ -637,6 +759,49 @@ mod tests {
 
     fn ids(store: &Store) -> Vec<String> {
         store.list_runs(100).into_iter().map(|r| r.id).collect()
+    }
+
+    #[test]
+    fn border_pairs_retire_and_samples_prune() {
+        let path = temp_path();
+        let store = Store::open(path.clone()).unwrap();
+        let pair = |far: &str| Pair {
+            id: 0,
+            cdn: "fastly".into(),
+            target: "151.101.1.1".parse().unwrap(),
+            near: "198.51.100.9".parse().unwrap(),
+            near_ttl: 3,
+            far: far.parse().unwrap(),
+            far_ttl: 4,
+            far_asn: Some(64501),
+            far_holder: Some("TRANSIT".into()),
+            kind: Kind::Via,
+            found_at: 1_000,
+            retired_at: None,
+        };
+        let a = store.border_insert_pair(&pair("203.0.113.5"));
+        store.border_retire(a, 2_000);
+        // Retiring again leaves the first time.
+        store.border_retire(a, 9_000);
+        let b = store.border_insert_pair(&pair("203.0.113.6"));
+        assert!(a > 0 && b > a);
+        let all = store.border_pairs(0);
+        assert_eq!(all.iter().map(|p| (p.id, p.retired_at)).collect::<Vec<_>>(), [(a, Some(2_000)), (b, None)]);
+        assert_eq!((all[0].far.to_string(), all[0].kind, all[0].far_holder.as_deref()), ("203.0.113.5".into(), Kind::Via, Some("TRANSIT")));
+        // Only the pair in use, past the retirement.
+        assert_eq!(store.border_pairs(3_000).iter().map(|p| p.id).collect::<Vec<_>>(), [b]);
+
+        let s = |ts: i64, pair: i64| BorderSample { ts, pair, near_ms: Some(5.0), far_ms: None };
+        store.border_record(&[s(1_000, a), s(2_000, a), s(3_000, b)]);
+        assert_eq!((store.border_latest(), store.border_samples(2_000).len()), (Some(3_000), 2));
+        store.border_prune(2_500);
+        assert_eq!(store.border_samples(0), [s(3_000, b)]);
+        // The retired pair goes with its samples; the one in use stays.
+        assert_eq!(store.border_pairs(0).iter().map(|p| p.id).collect::<Vec<_>>(), [b]);
+        store.border_clear();
+        assert!(store.border_pairs(0).is_empty() && store.border_latest().is_none());
+        drop(store);
+        remove(&path);
     }
 
     #[cfg(unix)]
