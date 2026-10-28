@@ -96,6 +96,11 @@ pub fn ntp_monitor_path(db: &Path) -> PathBuf {
     db.with_extension("ntp.lock")
 }
 
+/// Held by whichever process records border-link monitoring into the database at `db`.
+pub fn border_monitor_path(db: &Path) -> PathBuf {
+    db.with_extension("border.lock")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

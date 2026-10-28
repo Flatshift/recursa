@@ -8,6 +8,7 @@ pub const BUILD: &str = env!("RECURSA_BUILD");
 
 pub mod app;
 pub mod bench;
+pub mod border;
 pub mod calibrate;
 pub mod caps;
 pub(crate) mod catalog;
@@ -16,6 +17,7 @@ pub(crate) mod clock;
 pub(crate) mod cymru;
 pub(crate) mod deepdive;
 pub(crate) mod dns;
+pub mod edge;
 pub(crate) mod endpoints;
 pub(crate) mod forwarder;
 pub(crate) mod intel;

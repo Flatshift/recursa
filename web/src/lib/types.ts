@@ -597,6 +597,8 @@ export interface Bootstrap {
   resolvers: Resolver[];
   defaults: RunConfig;
   monitor: MonitorConfig;
+  /** The border-link monitor's config, for the sidebar's footer. */
+  border_monitor?: BorderMonitorConfig;
   active_run: string | null;
   runs: RunRow[];
   method: {
@@ -958,4 +960,96 @@ export interface DeepChecks {
   transports: TransportCost[];
   notes: string[];
   duration_ms: number;
+}
+
+/** Where each CDN served this network from: one request per CDN, read for the site the CDN names in its own headers. */
+export interface RollCall {
+  ts: number;
+  elapsed_ms: number;
+  you: { asn: number | null; holder: string | null; city: string | null; lat: number | null; lon: number | null };
+  edges: EdgeSite[];
+}
+
+export type EdgeMethod = 'cf-headers' | 'x-served-by' | 'x-amz-cf-pop' | 'report_mapping' | 'fb-rdns' | 'none';
+
+export interface EdgeSite {
+  cdn: string;
+  name: string;
+  host: string;
+  method: EdgeMethod;
+  /** Upper-case airport code of the site, as the CDN names it; null when it does not say. */
+  site: string | null;
+  site_raw: string | null;
+  site_city: string | null;
+  site_country: string | null;
+  ip: string | null;
+  asn: number | null;
+  holder: string | null;
+  rtt_ms: number | null;
+  /** Great-circle fibre floor in ms between you and the site, a rule of thumb; null when either end is unknown. */
+  floor_ms: number | null;
+  /** Meta's own view of the connection, from an undocumented header. */
+  quality: { label: string; rtt_ms: number | null; retransmits: number | null; bandwidth_kbps: number | null; raw: string } | null;
+  error: string | null;
+}
+
+/** What the background border-link monitor does, and how often. */
+export interface BorderMonitorConfig {
+  enabled: boolean;
+  interval_min: number;
+  retention_days: number;
+}
+
+/** The two routers a CDN target is probed at: the last inside your ISP and the first beyond it. */
+export interface BorderPair {
+  id: number;
+  cdn: string;
+  target: string;
+  near: string;
+  near_ttl: number;
+  far: string;
+  far_ttl: number;
+  far_asn: number | null;
+  far_holder: string | null;
+  kind: 'direct' | 'via';
+  found_at: number;
+  retired_at: number | null;
+}
+
+export interface BorderPoint {
+  ts: number;
+  near_ms: number | null;
+  far_ms: number | null;
+  delta_ms: number | null;
+  n: number;
+}
+
+export type BorderVerdict =
+  | { kind: 'collecting'; hours: number }
+  | { kind: 'steady' }
+  | { kind: 'interconnect'; adds_ms: number; hours: number[] }
+  | { kind: 'own_link'; adds_ms: number };
+
+export interface BorderPairHistory {
+  pair: BorderPair;
+  points: BorderPoint[];
+  verdict: BorderVerdict;
+  last: { ts: number; near_ms: number | null; far_ms: number | null } | null;
+}
+
+export interface BorderHistory {
+  hours: number;
+  since: number;
+  until: number;
+  cycles: number;
+  home: { asn: number | null; holder: string | null };
+  pairs: BorderPairHistory[];
+  missing: { cdn: string; target: string; reason: string }[];
+}
+
+export interface BorderResp {
+  config: BorderMonitorConfig;
+  last: number | null;
+  cap: 'ok' | 'needs_admin' | 'unsupported';
+  history: BorderHistory;
 }

@@ -14,6 +14,7 @@
     { href: '/resolvers', label: 'Resolvers', icon: 'list', match: 'resolvers', key: '2' },
     { href: '/reliability', label: 'Reliability', icon: 'pulse', match: 'reliability', key: '3' },
     { href: '/time', label: 'Time', icon: 'clock', match: 'time', key: '5' },
+    { href: '/network', label: 'Network', icon: 'network', match: 'network', key: '6' },
     { href: '/method', label: 'Method', icon: 'book', match: 'method', key: '4' },
   ] as const;
 
@@ -21,6 +22,7 @@
   const liveId = $derived(app.boot?.active_run ?? (app.run?.status === 'running' ? app.run.id : null));
   const current = $derived(app.route.name === 'run' ? app.route.id : null);
   const monitoring = $derived(app.boot?.monitor ?? null);
+  const border = $derived(app.boot?.border_monitor ?? null);
 
   function go(e: MouseEvent, href: string) {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
@@ -171,6 +173,7 @@
   </ol>
 
   <div class="foot">
+    <div class="mons">
     <a
       class="mon"
       href="/reliability"
@@ -185,6 +188,23 @@
       </span>
       <Icon name="chevron-right" size={mobile ? 16 : 12} />
     </a>
+    {#if border}
+      <a
+        class="mon"
+        href="/network"
+        onclick={(e) => go(e, '/network')}
+        class:on={border.enabled}
+        title={border.enabled ? `Border links are probed every ${border.interval_min} min. Open Network.` : 'Border probing is off. Open Network to switch it on.'}
+      >
+        <span class="dot" aria-hidden="true"></span>
+        <span class="ml">
+          <span class="mt">Network</span>
+          <span class="sub">{#if border.enabled}Every {border.interval_min} min{:else}Off{/if}</span>
+        </span>
+        <Icon name="chevron-right" size={mobile ? 16 : 12} />
+      </a>
+    {/if}
+    </div>
     <button class="gear" aria-label="Settings" title={mobile ? undefined : `Settings${desktop ? ` (${shortcut('cmd+,')})` : ''}`} onclick={settings}><Icon name="gear" size={mobile ? 20 : 15} /></button>
   </div>
 </nav>
@@ -278,6 +298,9 @@
   }
   .ic[data-place='time'] {
     --tile: oklch(var(--tile-l) var(--tile-c) 300);
+  }
+  .ic[data-place='network'] {
+    --tile: oklch(var(--tile-l) var(--tile-c) 200);
   }
   .ic[data-place='method'] {
     --tile: oklch(var(--tile-l) 0.035 285);
@@ -568,6 +591,12 @@
     border-top: 1px solid var(--rule);
   }
   /* A button, not a caption: a raised surface with a hairline, a status dot and a chevron that says it goes somewhere. */
+  .mons {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    gap: 6px;
+  }
   .mon {
     display: flex;
     flex: 1;

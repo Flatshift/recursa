@@ -13,6 +13,7 @@
   import Resolvers from './routes/Resolvers.svelte';
   import Reliability from './routes/Reliability.svelte';
   import Time from './routes/Time.svelte';
+  import Network from './routes/Network.svelte';
   import Method from './routes/Method.svelte';
   import Settings from './routes/Settings.svelte';
   import Icon from './components/Icon.svelte';
@@ -25,6 +26,7 @@
     resolvers: 'Resolvers',
     reliability: 'Reliability',
     time: 'Time',
+    network: 'Network',
     method: 'Method',
     settings: 'Settings',
   };
@@ -171,6 +173,8 @@
           <Reliability />
         {:else if app.route.name === 'time'}
           <Time />
+        {:else if app.route.name === 'network'}
+          <Network />
         {:else if app.route.name === 'method'}
           <Method />
         {:else if app.route.name === 'settings'}

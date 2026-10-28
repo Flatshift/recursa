@@ -127,6 +127,7 @@ fn app_menu(app: &AppHandle, login: &CheckMenuItem<Wry>) -> tauri::Result<Menu<W
         .item(&item("go:/reliability", "Reliability", Some("CmdOrCtrl+3"))?)
         .item(&item("go:/method", "Method", Some("CmdOrCtrl+4"))?)
         .item(&item("go:/time", "Time", Some("CmdOrCtrl+5"))?)
+        .item(&item("go:/network", "Network", Some("CmdOrCtrl+6"))?)
         .separator()
         .item(&item("view:overview", "Results Overview", Some(view_accel("1").as_str()))?)
         .item(&item("view:latency", "Latency", Some(view_accel("2").as_str()))?)
