@@ -12,7 +12,7 @@ type Route =
   | { name: 'resolvers' }
   | { name: 'reliability' }
   | { name: 'time' }
-  | { name: 'network' }
+  | { name: 'network'; view: 'edges' | 'monitor' }
   | { name: 'method' }
   | { name: 'settings' };
 
@@ -37,7 +37,7 @@ function parse(path: string): Route {
   if (path.startsWith('/resolvers')) return { name: 'resolvers' };
   if (path.startsWith('/reliability')) return { name: 'reliability' };
   if (path.startsWith('/time')) return { name: 'time' };
-  if (path.startsWith('/network')) return { name: 'network' };
+  if (path.startsWith('/network')) return { name: 'network', view: path.startsWith('/network/monitor') ? 'monitor' : 'edges' };
   if (path.startsWith('/method')) return { name: 'method' };
   if (path.startsWith('/settings')) return { name: 'settings' };
   return { name: 'bench' };
