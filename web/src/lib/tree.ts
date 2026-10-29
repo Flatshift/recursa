@@ -39,7 +39,7 @@ export interface Tree {
   height: number;
 }
 
-export function layout(groups: NetGroup[], edges: NetLink[], o: TreeOpts = TREE): Tree {
+export function layout(groups: NetGroup[], edges: NetLink[], o: TreeOpts = TREE, together: number[][] = []): Tree {
   const ids = new Set(groups.map((g) => g.id));
   const real = edges.filter((e) => e.from !== e.to && ids.has(e.from) && ids.has(e.to));
 
@@ -74,22 +74,36 @@ export function layout(groups: NetGroup[], edges: NetLink[], o: TreeOpts = TREE)
     if (p != null) kids.set(p, [...(kids.get(p) ?? []), g.id]);
   }
 
-  const y = new Map<number, number>();
-  let row = 0;
+  // The leaves take the rows in tree order: the home group's first, then anything with no parent in ttl order. Groups
+  // asked to sit together (one CDN's boxes) move, with whatever hangs under them, onto the rows after the first of
+  // them, so one cloud can be drawn behind them; the links they leave behind just cross the others.
+  const roots = [...order].sort((a, b) => Number(b.role === 'home') - Number(a.role === 'home')).filter((g) => !parent.has(g.id));
+  const leavesOf = (id: number): number[] => {
+    const ks = kids.get(id) ?? [];
+    return ks.length ? ks.flatMap(leavesOf) : [id];
+  };
+  let leaves = roots.flatMap((g) => leavesOf(g.id));
+  for (const set of together) {
+    const block = [...new Set(set.flatMap(leavesOf))].filter((id) => leaves.includes(id)).sort((a, b) => leaves.indexOf(a) - leaves.indexOf(b));
+    if (block.length < 2) continue;
+    const first = leaves.indexOf(block[0]);
+    leaves = leaves.filter((id) => !block.includes(id));
+    leaves.splice(first, 0, ...block);
+  }
+  const y = new Map<number, number>(leaves.map((id, i) => [id, i]));
   const place = (id: number): number => {
     const ks = kids.get(id) ?? [];
-    const v = ks.length ? ks.reduce((s, k) => s + place(k), 0) / ks.length : row++;
+    const v = ks.length ? ks.reduce((s, k) => s + place(k), 0) / ks.length : y.get(id)!;
     y.set(id, v);
     return v;
   };
-  // The home group first, then anything with no parent in ttl order.
-  for (const g of [...order].sort((a, b) => Number(b.role === 'home') - Number(a.role === 'home'))) {
-    if (!parent.has(g.id)) place(g.id);
-  }
+  for (const g of roots) place(g.id);
 
+  // Your home is a square with a house in it; the rest get a name, and the columns after it close up by the difference.
+  const xOf = (c: number) => o.pad + c * o.colW - (c ? o.nodeW - o.nodeH : 0);
   const nodes = groups.map((g): TreeNode => {
     const c = col.get(g.id)!;
-    return { id: g.id, col: c, x: o.pad + c * o.colW, y: o.pad + (y.get(g.id) ?? 0) * o.rowH, w: o.nodeW, h: o.nodeH };
+    return { id: g.id, col: c, x: xOf(c), y: o.pad + (y.get(g.id) ?? 0) * o.rowH, w: g.role === 'home' ? o.nodeH : o.nodeW, h: o.nodeH };
   });
   const at = new Map(nodes.map((n) => [n.id, n]));
   const diamond = new Set(groups.filter((g) => g.role === 'exchange').map((g) => g.id));
@@ -113,7 +127,7 @@ export function layout(groups: NetGroup[], edges: NetLink[], o: TreeOpts = TREE)
   return {
     nodes,
     edges: paths.filter((p): p is TreeEdge => p != null),
-    width: o.pad * 2 + Math.max(0, ...nodes.map((n) => n.col)) * o.colW + o.nodeW,
-    height: o.pad * 2 + Math.max(row - 1, 0) * o.rowH + o.nodeH,
+    width: o.pad + Math.max(o.pad + o.nodeW, ...nodes.map((n) => n.x + n.w)),
+    height: o.pad * 2 + Math.max(leaves.length - 1, 0) * o.rowH + o.nodeH,
   };
 }

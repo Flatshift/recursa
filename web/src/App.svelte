@@ -26,7 +26,7 @@
     resolvers: 'Resolvers',
     reliability: 'Reliability',
     time: 'Time',
-    network: 'Network',
+    network: 'Peering',
     method: 'Method',
     settings: 'Settings',
   };

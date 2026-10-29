@@ -47,6 +47,8 @@
   --net-content: oklch(0.56 0.09 195);
   --net-unknown: oklch(0.56 0.01 285);
   --v6: oklch(0.62 0.16 60);
+  --link-peer: oklch(0.55 0.15 150);
+  --link-transit: oklch(0.55 0.15 305);
 
   /* Chart series: validated all-pairs (CVD ΔE ≥ 9.2, normal ≥ 24) on #fff. */
   --s-cached: #2a78d6;
@@ -141,6 +143,8 @@
     --net-content: oklch(0.73 0.09 195);
     --net-unknown: oklch(0.7 0.01 285);
   --v6: oklch(0.78 0.14 65);
+  --link-peer: oklch(0.72 0.13 150);
+  --link-transit: oklch(0.72 0.12 305);
     --s-cached: #3987e5;
     --s-uncached: #d95926;
     --s-tld: #199e70;
@@ -186,6 +190,8 @@
   --net-content: oklch(0.73 0.09 195);
   --net-unknown: oklch(0.7 0.01 285);
   --v6: oklch(0.78 0.14 65);
+  --link-peer: oklch(0.72 0.13 150);
+  --link-transit: oklch(0.72 0.12 305);
   --s-cached: #3987e5;
   --s-uncached: #d95926;
   --s-tld: #199e70;

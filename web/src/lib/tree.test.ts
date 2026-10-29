@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DIAMOND, layout } from './tree';
+import { DIAMOND, layout, TREE } from './tree';
 import type { NetGroup, NetLink, NetRole } from './types';
 
 const g = (id: number, role: NetRole, ttl: number): NetGroup => ({
@@ -44,6 +44,10 @@ describe('layout', () => {
     const col = (id: number) => t.nodes.find((n) => n.id === id)!.col;
     expect([col(0), col(1), col(2), col(3)]).toEqual([0, 1, 2, 3]);
   });
+  it('leaves the same gap after the home square as between the other columns', () => {
+    const n = (id: number) => t.nodes.find((x) => x.id === id)!;
+    expect(n(1).x - (n(0).x + n(0).w)).toBe(n(2).x - (n(1).x + n(1).w));
+  });
   it('overlaps no two nodes', () => {
     for (const a of t.nodes)
       for (const b of t.nodes) {
@@ -67,6 +71,13 @@ describe('layout', () => {
     expect(outOf.d.startsWith(`M${n(2).x + n(2).w / 2 + DIAMOND} `)).toBe(true);
     const plain = t.edges.find((e) => edges[e.index].to === 5)!;
     expect(plain.d.endsWith(`${n(5).x} ${n(5).y + n(5).h / 2}`)).toBe(true);
+  });
+  it('pulls groups asked to sit together onto adjacent rows, keeping the height', () => {
+    const u = layout(groups, edges, undefined, [[3, 6]]);
+    const row = (id: number) => u.nodes.find((n) => n.id === id)!.y;
+    expect(row(6) - row(3)).toBe(TREE.rowH);
+    expect(u.height).toBe(t.height);
+    expect(row(5)).toBe(row(6));
   });
   it('survives a cycle', () => {
     expect(layout(groups.slice(0, 3), [l(0, 1), l(1, 2), l(2, 1)]).nodes).toHaveLength(3);

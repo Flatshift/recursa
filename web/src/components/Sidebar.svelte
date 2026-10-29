@@ -14,7 +14,7 @@
     { href: '/resolvers', label: 'Resolvers', icon: 'list', match: 'resolvers', key: '2' },
     { href: '/reliability', label: 'Reliability', icon: 'pulse', match: 'reliability', key: '3' },
     { href: '/time', label: 'Time', icon: 'clock', match: 'time', key: '5' },
-    { href: '/network', label: 'Network', icon: 'network', match: 'network', key: '6' },
+    { href: '/network', label: 'Peering', icon: 'network', match: 'network', key: '6' },
     { href: '/method', label: 'Method', icon: 'book', match: 'method', key: '4' },
   ] as const;
 
@@ -194,11 +194,11 @@
         href="/network/monitor"
         onclick={(e) => go(e, '/network/monitor')}
         class:on={border.enabled}
-        title={border.enabled ? `Border links are probed every ${border.interval_min} min. Open Network.` : 'Border probing is off. Open Network to switch it on.'}
+        title={border.enabled ? `Border links are probed every ${border.interval_min} min. Open Peering.` : 'Border probing is off. Open Peering to switch it on.'}
       >
         <span class="dot" aria-hidden="true"></span>
         <span class="ml">
-          <span class="mt">Network</span>
+          <span class="mt">Peering</span>
           <span class="sub">{#if border.enabled}Every {border.interval_min} min{:else}Off{/if}</span>
         </span>
         <Icon name="chevron-right" size={mobile ? 16 : 12} />

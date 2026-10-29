@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The map half of the Network page: who you are, the headline, the graph or its table, and the switches for the two
+  // The map half of the Peering page: who you are, the headline, the graph or its table, and the switches for the two
   // optional data sources. Before the first run it says what leaves this machine, because that is the question to answer
   // before a button that sends traffic.
   import { app } from '../lib/store.svelte';
