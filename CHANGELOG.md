@@ -8,6 +8,7 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
   round trip against the fibre floor and whose network the edge sits in. An "Over time" view probes the two routers
   either side of your ISP's border towards each CDN in the background and says, after a day, whether the evening
   slowdown sits on the link between them or before it.
+- **Route-origin filtering is tested live.** Each resolver is asked for a name served only from an RPKI-invalid route, over IPv4 and IPv6, through Check My DNS by DNS-OARC. This replaces the RoVista operator score, which did not cover every resolver.
 
 ## 0.4.3 (2026-10-26)
 

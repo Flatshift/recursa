@@ -2,7 +2,6 @@
 //!
 //! * Team Cymru DNS ([`crate::cymru`]): origin AS, BGP prefix and AS name for an address.
 //! * Route-origin validation on this computer ([`crate::rpki`], opt-in): ROA validity of the Cymru prefix.
-//! * RoVista: share of the operator network's routes protected by ROV.
 //! * Operator status pages: Cloudflare, Quad9, AdGuard and Cisco Umbrella (OpenDNS).
 //! * Threat feeds for filtering probes: URLhaus (through the malware-filter mirror) and ThreatView (malware), OpenPhish (phishing).
 //!
@@ -28,6 +27,8 @@ const MAX_BODY: usize = 16 << 20;
 
 pub struct Intel {
     http: reqwest::Client,
+    /// HTTP/1.1 only, for the Check My DNS websocket ([`crate::rov`]).
+    pub ws: reqwest::Client,
     store: Arc<Store>,
     measuring: Arc<AtomicBool>,
     /// The system resolvers, which carry the Team Cymru questions.
@@ -128,6 +129,7 @@ impl Intel {
         );
         Intel {
             http,
+            ws: crate::rov::client(),
             store,
             measuring,
             system,
@@ -224,18 +226,6 @@ impl Intel {
         ThreatFeeds { malware: feed(malware), phishing: feed(phishing) }
     }
 
-    async fn rovista(&self, asn: u64) -> Option<Value> {
-        // RoVista's search matches prefixes of the number too, so pick the exact AS.
-        let url = format!("https://api.rovista.netsecurelab.org/rovista/api/overview?search={asn}&offset=0&count=20");
-        let v = self.get_json(&url).await?;
-        let row = v["data"].as_array()?.iter().find(|r| r["asn"].as_u64() == Some(asn))?.clone();
-        Some(json!({
-            "ratio": row["ratio"],
-            "organization": row["organization"],
-            "updated": row["lastUpdatedDate"],
-        }))
-    }
-
     /// Origin AS and covering prefix from Team Cymru. `None` when the lookup failed; an address no
     /// one announces is `Some((None, None))`.
     async fn origin(&self, ip: IpAddr) -> Option<(Option<u64>, Option<String>)> {
@@ -256,17 +246,17 @@ impl Intel {
         }
     }
 
-    /// Origin AS, holder, prefix, ROA validity and operator ROV for one address.
+    /// Origin AS, holder, prefix, ROA validity for one address.
     async fn ip_info(&self, ip: IpAddr) -> Value {
         let key = format!("ip:{ip}");
         let got = self
             .cached(&key, 24 * HOUR, async {
                 let (asn, prefix) = self.origin(ip).await?;
-                let (holder, rov) = match asn {
-                    Some(asn) => tokio::join!(self.holder(asn), self.rovista(asn)),
-                    None => (Value::Null, None),
+                let holder = match asn {
+                    Some(asn) => self.holder(asn).await,
+                    None => Value::Null,
                 };
-                Some(json!({ "ip": ip.to_string(), "asn": asn, "prefix": prefix, "holder": holder, "rov": rov }))
+                Some(json!({ "ip": ip.to_string(), "asn": asn, "prefix": prefix, "holder": holder }))
             })
             .await;
         match got {

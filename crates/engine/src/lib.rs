@@ -33,6 +33,7 @@ pub mod ntp_report;
 pub(crate) mod probes;
 pub(crate) mod regions;
 pub mod resolve;
+pub mod rov;
 #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
 pub mod rpki;
 pub(crate) mod stats;

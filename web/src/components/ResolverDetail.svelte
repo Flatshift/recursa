@@ -76,7 +76,7 @@
   const cdn = $derived(runState?.cdn?.resolvers[id] ?? null);
   // The registry facts (egress, service network, RPKI, CDN mapping) get their own group under the wire facts and path.
   const routing = $derived(
-    !!(intel?.egress || probe?.egress.length || (intel?.service && !intel.service.private) || intel?.service?.rpki || intel?.service?.rov || cdn),
+    !!(intel?.egress || probe?.egress.length || (intel?.service && !intel.service.private) || intel?.service?.rpki || intel?.rov || cdn),
   );
   const feed = $derived(status.feedFor(resolver.status_feed));
   const incidents = $derived(status.incidentsFor(id));
@@ -371,7 +371,7 @@
                 {/if}
               </dd>
             </div>
-            <div><dt>Operator drops invalid routes</dt><dd><Cell c={rovCell(runState, id)} /></dd></div>
+            <div><dt>Invalid routes filtered</dt><dd><Cell c={rovCell(runState, id)} /></dd></div>
           {/if}
           {#if cdn}
             <div>
@@ -383,11 +383,11 @@
             </div>
           {/if}
         </dl>
-        {#if intel?.service?.rpki || intel?.service?.rov}
+        {#if intel?.service?.rpki || intel?.rov}
           <p class="why">
-            A valid ROA means networks that check RPKI will reject anyone else announcing this resolver's addresses. Operator ROV
-            protects the resolver's own outbound routes. Both limit hijacks like the one that cut off 1.1.1.1 for 300 networks in
-            June 2024.
+            A valid ROA means networks that check RPKI will reject anyone else announcing this resolver's addresses. Route-origin filtering
+            on the resolver's path means its lookups can't be lured to a hijacked authoritative server. Both limit hijacks like
+            the one that cut off 1.1.1.1 for 300 networks in June 2024.
           </p>
         {/if}
       </div>
