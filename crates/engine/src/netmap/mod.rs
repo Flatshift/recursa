@@ -44,8 +44,8 @@ const REFRESH_MS: i64 = 24 * 3_600_000;
 /// How long a stored run's traces may stand in for a fresh discovery of the border pair.
 const FRESH_MS: i64 = 7 * 86_400_000;
 const NAME_MAX_AGE_MS: i64 = 30 * 86_400_000;
-/// The biggest download taken, compressed or not.
-const BODY_MAX: usize = 256 << 20;
+/// The biggest download taken, compressed or unpacked.
+pub(super) const BODY_MAX: usize = 256 << 20;
 pub(crate) const RDNS: &str = "netmap.rdns";
 
 enum Via {
@@ -764,9 +764,6 @@ mod tests {
             ip: ip.parse().ok(),
             asn: None,
             holder: None,
-            rtt_ms: None,
-            floor_ms: None,
-            quality: None,
             error: None,
         }
     }

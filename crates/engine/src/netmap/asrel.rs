@@ -3,7 +3,7 @@
 //! Fetched monthly, like the prefix table, and kept in the store. A map reads only the pairs that touch the networks
 //! its traces crossed. The table is inferred from BGP, so a relationship here is a published inference, not a contract.
 
-use super::attr::UNPACKED_MAX;
+use super::BODY_MAX;
 use crate::store::Store;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -118,8 +118,8 @@ where
     let s = store.clone();
     let rows = tokio::task::spawn_blocking(move || {
         let mut out = Vec::new();
-        bzip2::read::BzDecoder::new(&packed[..]).take(UNPACKED_MAX + 1).read_to_end(&mut out).map_err(|e| e.to_string())?;
-        if out.len() as u64 > UNPACKED_MAX {
+        bzip2::read::BzDecoder::new(&packed[..]).take(BODY_MAX as u64 + 1).read_to_end(&mut out).map_err(|e| e.to_string())?;
+        if out.len() > BODY_MAX {
             return Err("CAIDA's relationship file is too big to be the table.".to_string());
         }
         let rows = parse(&String::from_utf8_lossy(&out));

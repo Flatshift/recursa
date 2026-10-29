@@ -9,7 +9,7 @@ use crate::cymru;
 use crate::dns;
 use crate::resolve::Resolve;
 use serde::Serialize;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
@@ -35,16 +35,6 @@ pub struct You {
     pub lon: Option<f64>,
 }
 
-/// Meta's own reading of the connection (`x-fb-connection-quality`); the fields are undocumented.
-#[derive(Clone, Debug, Serialize, PartialEq)]
-pub struct FbQuality {
-    pub label: String,
-    pub rtt_ms: Option<u32>,
-    pub retransmits: Option<u32>,
-    pub bandwidth_kbps: Option<u32>,
-    pub raw: String,
-}
-
 #[derive(Clone, Debug, Serialize)]
 pub struct EdgeSite {
     pub cdn: &'static str,
@@ -61,11 +51,6 @@ pub struct EdgeSite {
     pub ip: Option<IpAddr>,
     pub asn: Option<u32>,
     pub holder: Option<String>,
-    /// Best of three TCP handshakes to `ip`.
-    pub rtt_ms: Option<f64>,
-    /// Great-circle distance from you to the site, at 1 ms per 100 km.
-    pub floor_ms: Option<f64>,
-    pub quality: Option<FbQuality>,
     pub error: Option<String>,
 }
 
@@ -83,7 +68,6 @@ struct Got {
     site_raw: Option<String>,
     site: Option<String>,
     ip: Option<IpAddr>,
-    quality: Option<FbQuality>,
     you: Option<You>,
     error: Option<String>,
 }
@@ -124,23 +108,6 @@ fn google_site(body: &str) -> Option<String> {
     letters_before_digit(line.split_once("=> ")?.1.split_whitespace().next()?)
 }
 
-/// `EXCELLENT; q=0.9, rtt=15, rtx=0, c=10, mss=1380, tbw=3407, ...`. A value that doesn't read this way keeps only `raw`.
-fn fb_quality(raw: &str) -> FbQuality {
-    let (label, rest) = raw.split_once(';').unwrap_or((raw, ""));
-    let label = label.trim();
-    let label = if !label.is_empty() && label.bytes().all(|b| b.is_ascii_alphabetic() || b == b'_') { label } else { "" };
-    let field = |key: &str| {
-        rest.split(',').filter_map(|kv| kv.trim().split_once('=')).find(|(k, _)| *k == key).and_then(|(_, v)| v.trim().parse::<u32>().ok())
-    };
-    FbQuality {
-        label: label.to_string(),
-        rtt_ms: field("rtt"),
-        retransmits: field("rtx"),
-        bandwidth_kbps: field("tbw"),
-        raw: raw.to_string(),
-    }
-}
-
 /// A site code in a reverse name: a three-letter token followed by digits, as in `edge-star-shv-01-iad3.facebook.com`.
 fn ptr_site(name: &str) -> Option<String> {
     name.split(['.', '-']).find_map(|t| {
@@ -173,12 +140,6 @@ pub(crate) fn great_circle_km(a: (f64, f64), b: (f64, f64)) -> f64 {
     let (dp, dl) = ((b.0 - a.0).to_radians(), (b.1 - a.1).to_radians());
     let h = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
     6371.0 * 2.0 * h.sqrt().asin()
-}
-
-/// The fibre floor from `you` to the airport `site`, in ms, when both ends are known.
-fn floor_ms(you: &You, site: &str) -> Option<f64> {
-    let (_, _, lat, lon) = AIRPORTS.get(site)?;
-    Some(round1(great_circle_km((you.lat?, you.lon?), (*lat, *lon)) / KM_PER_MS))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -260,7 +221,6 @@ async fn ask(client: &reqwest::Client, id: &str, host: &str) -> Got {
                 .map(str::to_string);
             got.site = google_site(&text);
         }
-        "meta" => got.quality = header(&r, "x-fb-connection-quality").map(|v| fb_quality(&v)),
         _ => {}
     }
     got
@@ -297,15 +257,11 @@ fn finish(res: &Resolve, you: &mut You, edges: &mut [EdgeSite]) {
             e.site_raw = name;
         }
     }
-    let ips: BTreeSet<String> = edges.iter().filter_map(|e| e.ip.map(|i| i.to_string())).collect();
-    let timed = cdn::time_edges(&ips, 443, &|_| {});
     for e in edges.iter_mut() {
-        e.rtt_ms = e.ip.and_then(|ip| timed.get(&ip.to_string())).and_then(|t| t.rtt_ms);
         if let Some((city, country, ..)) = e.site.as_deref().and_then(|s| AIRPORTS.get(s)) {
             e.site_city = Some(city.clone());
             e.site_country = Some(country.clone());
         }
-        e.floor_ms = e.site.as_deref().and_then(|s| floor_ms(you, s));
     }
 }
 
@@ -342,9 +298,6 @@ pub async fn roll_call(app: &AppState) -> RollCall {
             ip: g.ip,
             asn: None,
             holder: None,
-            rtt_ms: None,
-            floor_ms: None,
-            quality: g.quality,
             error: g.error,
         })
         .collect();
@@ -388,19 +341,6 @@ mod tests {
     }
 
     #[test]
-    fn meta_quality_parses_or_keeps_raw() {
-        let raw = "EXCELLENT; q=0.9, rtt=15, rtx=0, c=10, mss=1380, tbw=3407, tp=-1, tpl=-1, uplat=35, ullat=1";
-        let q = fb_quality(raw);
-        assert_eq!(
-            (q.label.as_str(), q.rtt_ms, q.retransmits, q.bandwidth_kbps, q.raw.as_str()),
-            ("EXCELLENT", Some(15), Some(0), Some(3407), raw)
-        );
-        let bad = fb_quality("12;;=x, rtt=abc");
-        assert_eq!((bad.label.as_str(), bad.rtt_ms, bad.retransmits, bad.bandwidth_kbps), ("", None, None, None));
-        assert_eq!(bad.raw, "12;;=x, rtt=abc");
-    }
-
-    #[test]
     fn reverse_name_site_needs_letters_then_digit() {
         assert_eq!(ptr_site("edge-star-shv-01-iad3.facebook.com").as_deref(), Some("IAD"));
         assert_eq!(ptr_site("a.b.c.lga1.example.net").as_deref(), Some("LGA"));
@@ -432,15 +372,6 @@ mod tests {
     }
 
     #[test]
-    fn the_floor_from_charlotte_to_ashburn_is_about_five_ms() {
-        let you = You { lat: Some(35.2), lon: Some(-80.8), ..Default::default() };
-        let f = floor_ms(&you, "IAD").unwrap();
-        assert!((4.0..6.0).contains(&f), "{f}");
-        assert_eq!(floor_ms(&you, "ZZZ"), None);
-        assert_eq!(floor_ms(&You::default(), "IAD"), None);
-    }
-
-    #[test]
     fn every_airport_row_is_in_range() {
         for (code, (_, _, lat, lon)) in AIRPORTS.iter() {
             assert!(code.len() == 3 && (-90.0..=90.0).contains(lat) && (-180.0..=180.0).contains(lon), "{code}");
@@ -458,7 +389,7 @@ mod tests {
         println!("you: {:?} ({} ms)", rc.you, rc.elapsed_ms);
         for e in &rc.edges {
             println!(
-                "{:<10} {:<4} {:<12} raw={:?} ip={:?} AS{:?} {:?} rtt={:?} floor={:?} q={:?} err={:?}",
+                "{:<10} {:<4} {:<12} raw={:?} ip={:?} AS{:?} {:?} err={:?}",
                 e.cdn,
                 e.site.as_deref().unwrap_or("-"),
                 e.site_city.as_deref().unwrap_or("-"),
@@ -466,9 +397,6 @@ mod tests {
                 e.ip,
                 e.asn,
                 e.holder,
-                e.rtt_ms,
-                e.floor_ms,
-                e.quality.as_ref().map(|q| &q.label),
                 e.error
             );
         }

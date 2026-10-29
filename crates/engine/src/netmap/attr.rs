@@ -26,8 +26,6 @@ const DIR6_URL: &str = "https://publicdata.caida.org/datasets/routing/routeviews
 pub(crate) const FETCHED_AT: &str = "netmap.pfx2as_fetched_at";
 pub(crate) const SOURCE: &str = "netmap.pfx2as_source";
 pub(crate) const SOURCE6: &str = "netmap.pfx2as6_source";
-/// The most the unpacked table may be: a file this big is not the table.
-pub(crate) const UNPACKED_MAX: u64 = 256 << 20;
 /// Shortest prefix tried, as announced to the Internet's default-free zone.
 const SHORTEST: u8 = 8;
 /// Shortest IPv6 prefix tried.
@@ -175,7 +173,7 @@ where
     let gz = fetch(format!("{dir_url}{path}")).await?;
     let s = store.clone();
     let rows = tokio::task::spawn_blocking(move || {
-        let lines = BufReader::new(GzDecoder::new(&gz[..]).take(UNPACKED_MAX)).lines();
+        let lines = BufReader::new(GzDecoder::new(&gz[..]).take(super::BODY_MAX as u64)).lines();
         let rows = lines.map_while(Result::ok).filter_map(|l| parse_line(&l));
         if v6 {
             s.pfx2as6_replace(rows.filter_map(|r| if let Row::V6(p, l, a, m) = r { Some((p, l, a, m)) } else { None }))
