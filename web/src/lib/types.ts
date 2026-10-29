@@ -118,7 +118,7 @@ export interface WarmSample {
 
 /** One resolver's CDN lookups, before the edges are timed: hostnames that answered from their CDN, of those asked.
  *  `cells` fill in per lookup; `finished` once the resolver is done (or given up on). */
-export interface CdnLookup {
+interface CdnLookup {
   answered: number;
   asked: number;
   finished?: boolean;
@@ -1005,7 +1005,7 @@ export interface EdgeSite {
 export type NetRole = 'home' | 'isp' | 'carrier' | 'exchange' | 'content' | 'unknown' | 'silent';
 
 /** One router address seen at one hop of a map trace. */
-export interface NetMember {
+interface NetMember {
   ttl: number;
   addr: string;
   best_ms: number | null;
@@ -1044,7 +1044,7 @@ export interface NetGroup {
   targets: string[];
 }
 
-export type NetLinkKind = 'direct' | 'exchange' | 'via_transit' | 'unknown';
+type NetLinkKind = 'direct' | 'exchange' | 'via_transit' | 'unknown';
 
 export interface NetLink {
   from: number;
@@ -1065,7 +1065,7 @@ export interface NetLink {
   silent_hops: number;
 }
 
-export type NetTier = 'high' | 'medium' | 'low';
+type NetTier = 'high' | 'medium' | 'low';
 
 export type NetEvidence =
   | { kind: 'observed'; body: string }
@@ -1120,7 +1120,7 @@ export interface MapRun {
   datasets: NetDatasets;
 }
 
-export interface MapProgress {
+interface MapProgress {
   done: number;
   total: number;
   target: string;
@@ -1143,7 +1143,7 @@ export interface BorderMonitorConfig {
 }
 
 /** The two routers a CDN target is probed at: the last inside your ISP and the first beyond it. */
-export interface BorderPair {
+interface BorderPair {
   id: number;
   cdn: string;
   target: string;
@@ -1166,7 +1166,7 @@ export interface BorderPoint {
   n: number;
 }
 
-export type BorderVerdict =
+type BorderVerdict =
   | { kind: 'collecting'; hours: number }
   | { kind: 'steady' }
   | { kind: 'interconnect'; adds_ms: number; hours: number[] }
@@ -1179,7 +1179,7 @@ export interface BorderPairHistory {
   last: { ts: number; near_ms: number | null; far_ms: number | null } | null;
 }
 
-export interface BorderHistory {
+interface BorderHistory {
   hours: number;
   since: number;
   until: number;

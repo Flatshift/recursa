@@ -23,7 +23,7 @@ export interface TreeNode {
   w: number;
   h: number;
 }
-export interface TreeEdge {
+interface TreeEdge {
   /** The index in `edges`. */
   index: number;
   d: string;
