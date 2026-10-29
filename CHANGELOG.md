@@ -4,9 +4,11 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 
 ## Unreleased
 
+- Network map: links are coloured by peering or transit, and a CDN reached both at an exchange and past it sits in one
+  labelled cloud. Your home is drawn as a house.
 - Network map: Apple, Microsoft and Netflix join the destinations.
 - Network map: destinations are traced over IPv6 as well; a different IPv6 route is drawn and highlighted.
-- **Network page (beta).** A map of where your ISP hands traffic off: Recursa traces the way to about twenty sites,
+- **Peering page (beta).** A map of where your ISP hands traffic off: Recursa traces the way to about twenty sites,
   names each router's network from a prefix table it fetches from CAIDA, and draws the path with the hand-off between
   networks, an exchange name from PeeringDB if you allow it, and the evidence under every sentence. Routers that don't
   answer between two networks are counted on the line between them, not drawn as a network of their own, and a

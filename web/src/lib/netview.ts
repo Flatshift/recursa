@@ -13,6 +13,51 @@ export function linkLabel(l: NetLink, groups: NetGroup[]): string {
   return l.kind === 'direct' ? 'direct' : l.kind === 'via_transit' ? 'via transit' : 'unknown';
 }
 
+export interface Cloud {
+  cdn: string;
+  name: string;
+  /** The content groups the CDN's traffic lands in. */
+  ids: number[];
+}
+
+/** The CDNs you reach both at an exchange and past one, over a carrier or your ISP's own link: every box of such a CDN
+ *  shares one cloud, so two boxes read as one network reached two ways. */
+export function clouds(run: MapRun): Cloud[] {
+  const ix = new Set(run.groups.filter((g) => g.role === 'exchange').map((g) => g.id));
+  // How traffic gets to a group: through an exchange, or past every exchange, following each link in. A group with no
+  // link in is your home, which everything starts from.
+  const ways = (id: number, stack: number[]): Set<'ix' | 'past'> => {
+    if (ix.has(id)) return new Set(['ix']);
+    const ins = run.edges.filter((l) => l.to === id && l.from !== id && !stack.includes(l.from));
+    const out = new Set<'ix' | 'past'>(ins.length ? [] : ['past']);
+    for (const l of ins) for (const w of l.kind === 'exchange' ? ['ix' as const] : ways(l.from, [...stack, id])) out.add(w);
+    return out;
+  };
+  const cdnOf = new Map(run.traces.map((t) => [t.target.id, t.target]));
+  const out: Cloud[] = [];
+  for (const g of run.groups) {
+    if (g.role !== 'content') continue;
+    for (const t of g.targets.map((id) => cdnOf.get(id)).filter((t) => t?.cdn)) {
+      const c = out.find((c) => c.cdn === t!.cdn) ?? out[out.push({ cdn: t!.cdn!, name: t!.name, ids: [] }) - 1];
+      if (!c.ids.includes(g.id)) c.ids.push(g.id);
+    }
+  }
+  return out.filter((c) => {
+    const w = new Set(c.ids.flatMap((id) => [...ways(id, [])]));
+    return w.has('ix') && w.has('past');
+  });
+}
+
+/** Whether a link is settlement-free peering (onto or out of an exchange, or a listed peer) or paid transit (onto a
+ *  carrier, or a listed transit or customer pair); null for a direct link nothing classifies, and for the link out
+ *  of your home. */
+export function linkWay(l: NetLink, groups: NetGroup[]): 'peer' | 'transit' | null {
+  if (l.rel === 'transit' || l.rel === 'customer') return 'transit';
+  if (l.kind === 'exchange' || l.rel === 'peer' || groups.some((g) => g.id === l.from && g.role === 'exchange')) return 'peer';
+  if (l.kind === 'via_transit') return 'transit';
+  return null;
+}
+
 /** "October 2026" from a CAIDA file name like `20261001.as-rel2.txt.bz2`. */
 export function asrelMonth(source: string): string | null {
   const m = /^(\d{4})(\d{2})\d{2}\./.exec(source);

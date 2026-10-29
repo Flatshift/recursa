@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The Network page's "Over time" view: a light background probe of the two routers either side of your ISP's border,
+  // The Peering page's "Over time" view: a light background probe of the two routers either side of your ISP's border,
   // the last one inside it and the first one beyond, towards each CDN. When only the far one slows at the same hours
   // each day, the queue is on the link between them. Kept for weeks, so the daily shape shows.
   import { app } from '../lib/store.svelte';

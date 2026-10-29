@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The Network page: a map of where your ISP hands traffic to the big content networks, and over time how the link
+  // The Peering page: a map of where your ISP hands traffic to the big content networks, and over time how the link
   // from your ISP to the next network behaves. Neither depends on a resolver, so it sits apart from a run.
   import { app } from '../lib/store.svelte';
   import { netmap } from '../lib/netmap.svelte';
@@ -17,7 +17,7 @@
 </script>
 
 <div class="view-root">
-  <Toolbar title="Network" subtitle="Where your ISP hands traffic to the big content networks, and how its border links hold up">
+  <Toolbar title="Peering" subtitle="Where your ISP hands traffic to the big content networks, and how its border links hold up">
     {#snippet center()}
       <span
         class="beta"
@@ -55,8 +55,12 @@
 
 <style>
   .beta {
+    display: inline-flex;
+    align-items: center;
+    align-self: center;
     margin-right: 10px;
-    padding: 1px 7px;
+    padding: 0 7px;
+    line-height: 18px;
     border: 1px solid var(--rule);
     border-radius: 8px;
     font-size: var(--t-xs);
