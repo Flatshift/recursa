@@ -44,7 +44,9 @@ targets:
     info:
       path: recursa-desktop_iOS/Info.plist
       properties:
+        ITSAppUsesNonExemptEncryption: false
         LSRequiresIPhoneOS: true
+        NSLocalNetworkUsageDescription: Recursa measures the path to your router and benchmarks DNS resolvers on your network, such as a Pi-hole.
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
         UISupportedInterfaceOrientations:
@@ -56,8 +58,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.3.12
-        CFBundleVersion: "0.3.12"
+        CFBundleShortVersionString: 0.4.3
+        CFBundleVersion: "0.4.3"
     entitlements:
       path: recursa-desktop_iOS/recursa-desktop_iOS.entitlements
     scheme:

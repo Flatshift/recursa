@@ -18,6 +18,7 @@
 		AD15C577DC622325708205B7 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 842335EEA8E73EA96277D718 /* Metal.framework */; };
 		B45F18208536E0BFD0307569 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 599EC077C8A57AE83FE40F88 /* Security.framework */; };
 		B70897683293DF037320FF9D /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 66CDAD7FC4D11E311A785C70 /* assets */; };
+		CEEB1F7038661A8B5498302C /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = E354F6A295FE5F397F2D9019 /* PrivacyInfo.xcprivacy */; };
 		F2B01681F34BC2DE8DE49FB7 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BF9B3DE14A5E7F5FBEE0AFE4 /* QuartzCore.framework */; };
 		FE08D4D31EF80998FD926F64 /* libresolv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = B3CC49232A1CF7F2DBF8F35D /* libresolv.tbd */; };
 /* End PBXBuildFile section */
@@ -44,6 +45,7 @@
 		B3CC49232A1CF7F2DBF8F35D /* libresolv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libresolv.tbd; path = usr/lib/libresolv.tbd; sourceTree = SDKROOT; };
 		BF9B3DE14A5E7F5FBEE0AFE4 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		CB69C74C5092C49F71C8375E /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
+		E354F6A295FE5F397F2D9019 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		E9D4D29A704E9800CA62E061 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F7437218567924A7B1481F34 /* recursa-desktop_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "recursa-desktop_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F7D281A2FFD8B4B923022640 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
@@ -73,6 +75,7 @@
 			isa = PBXGroup;
 			children = (
 				E9D4D29A704E9800CA62E061 /* Info.plist */,
+				E354F6A295FE5F397F2D9019 /* PrivacyInfo.xcprivacy */,
 				8086F494C8D821E87E5B5F55 /* recursa-desktop_iOS.entitlements */,
 			);
 			path = "recursa-desktop_iOS";
@@ -164,14 +167,14 @@
 			path = ../../src;
 			sourceTree = "<group>";
 		};
-		"TEMP_97731043-4593-4F0A-8F10-6BDF442D7862" /* x86_64 */ = {
+		"TEMP_8171E400-9DDF-4A21-AB35-46DC8F18CE88" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
 			path = x86_64;
 			sourceTree = "<group>";
 		};
-		"TEMP_F62E8638-59E8-4F9D-8168-2AEB14A3260E" /* arm64 */ = {
+		"TEMP_EEA5A7C6-F93C-40C8-92FB-3BB12D9DE373" /* arm64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
@@ -242,6 +245,7 @@
 			files = (
 				08925C91EAB87F3AB86D25EC /* Assets.xcassets in Resources */,
 				4002926CEB940202C06C6CC8 /* LaunchScreen.storyboard in Resources */,
+				CEEB1F7038661A8B5498302C /* PrivacyInfo.xcprivacy in Resources */,
 				B70897683293DF037320FF9D /* assets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
