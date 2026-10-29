@@ -9,8 +9,8 @@
   import BorderMonitor from '../components/BorderMonitor.svelte';
 
   // The view is in the path, so the sidebar's monitor link and a reload land on the same half.
-  const view = $derived(app.route.name === 'network' && app.route.view === 'monitor' ? 'monitor' : 'edges');
-  const show = (v: 'edges' | 'monitor') => app.navigate(v === 'monitor' ? '/network/monitor' : '/network', true);
+  const view = $derived(app.route.name === 'network' && app.route.view === 'monitor' ? 'monitor' : 'map');
+  const show = (v: 'map' | 'monitor') => app.navigate(v === 'monitor' ? '/network/monitor' : '/network', true);
   const nm = netmap();
   const blocked = $derived(app.env?.trace === 'needs_admin' || app.env?.trace === 'unsupported');
   const prog = $derived(nm.data?.progress);
@@ -25,12 +25,12 @@
         >Beta</span
       >
       <div class="segmented" role="tablist" aria-label="View">
-        <button role="tab" aria-selected={view === 'edges'} onclick={() => show('edges')}>Map</button>
+        <button role="tab" aria-selected={view === 'map'} onclick={() => show('map')}>Map</button>
         <button role="tab" aria-selected={view === 'monitor'} onclick={() => show('monitor')}>Over time</button>
       </div>
     {/snippet}
     {#snippet actions()}
-      {#if view === 'edges'}
+      {#if view === 'map'}
         {#if nm.running}
           <span class="progress" role="status">Mapping{prog ? `, ${prog.done} of ${prog.total}` : ''}</span>
           <button class="btn" onclick={nm.cancel}>Cancel</button>
