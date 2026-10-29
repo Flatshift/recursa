@@ -699,11 +699,6 @@ impl AppState {
                 })
                 .await
             }
-            ("POST", ["network", "edges"]) => {
-                self.idle()?;
-                ok(json!(self.run_roll_call().await))
-            }
-            ("GET", ["network", "edges"]) => ok(json!({ "last": *self.edges.lock().unwrap() })),
             ("GET", ["network", "map"]) => ok(json!({
                 "last": crate::netmap::last(&self.store),
                 "running": self.netmap_running(),
@@ -1327,7 +1322,6 @@ mod tests {
             (Some(true), true, Some(0))
         );
         assert!(v["cap"].is_string());
-        assert!(get("/api/network/edges").await["last"].is_null());
         assert_eq!(get("/api/network/border/last").await, json!({ "last": null }));
         let cleared: Value = serde_json::from_str(&a.call("DELETE", "/api/network/border/history", Value::Null).await.unwrap()).unwrap();
         assert_eq!(cleared["cleared"], true);

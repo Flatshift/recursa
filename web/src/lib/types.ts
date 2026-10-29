@@ -225,8 +225,6 @@ export interface Edge {
   ip: string;
   /** Minimum handshake RTT: the best estimate of path latency. */
   rtt_ms: number | null;
-  /** Older runs predate the median and the refused flag. */
-  median_ms?: number | null;
   samples: number[];
   /** Answered with a reset: still a round trip. */
   refused?: boolean;
@@ -968,37 +966,6 @@ export interface DeepChecks {
   transports: TransportCost[];
   notes: string[];
   duration_ms: number;
-}
-
-/** Where each CDN served this network from: one request per CDN, read for the site the CDN names in its own headers. */
-export interface RollCall {
-  ts: number;
-  elapsed_ms: number;
-  you: { asn: number | null; holder: string | null; city: string | null; lat: number | null; lon: number | null };
-  edges: EdgeSite[];
-}
-
-export type EdgeMethod = 'cf-headers' | 'x-served-by' | 'x-amz-cf-pop' | 'report_mapping' | 'fb-rdns' | 'none';
-
-export interface EdgeSite {
-  cdn: string;
-  name: string;
-  host: string;
-  method: EdgeMethod;
-  /** Upper-case airport code of the site, as the CDN names it; null when it does not say. */
-  site: string | null;
-  site_raw: string | null;
-  site_city: string | null;
-  site_country: string | null;
-  ip: string | null;
-  asn: number | null;
-  holder: string | null;
-  rtt_ms: number | null;
-  /** Great-circle fibre floor in ms between you and the site, a rule of thumb; null when either end is unknown. */
-  floor_ms: number | null;
-  /** Meta's own view of the connection, from an undocumented header. */
-  quality: { label: string; rtt_ms: number | null; retransmits: number | null; bandwidth_kbps: number | null; raw: string } | null;
-  error: string | null;
 }
 
 /** What a group is to the reader of the network map; the page colours by it. */
