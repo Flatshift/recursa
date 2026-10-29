@@ -3,7 +3,7 @@
 //! * Team Cymru DNS ([`crate::cymru`]): origin AS, BGP prefix and AS name for an address.
 //! * Route-origin validation on this computer ([`crate::rpki`], opt-in): ROA validity of the Cymru prefix.
 //! * Operator status pages: Cloudflare, Quad9, AdGuard and Cisco Umbrella (OpenDNS).
-//! * Threat feeds for filtering probes: URLhaus (through the malware-filter mirror) and ThreatView (malware), OpenPhish (phishing).
+//! * Threat feeds for filtering probes: URLhaus (through the malware-filter mirror) and ThreatView (malware).
 //!
 //! Nothing here runs while a measured phase is active: callers get the cached copy.
 
@@ -42,7 +42,6 @@ pub struct Intel {
 #[derive(Default)]
 pub struct ThreatFeeds {
     pub malware: Feed,
-    pub phishing: Feed,
 }
 
 /// One threat feed's usable hosts, and when it was downloaded (Unix ms; none if it never was).
@@ -210,20 +209,11 @@ impl Intel {
                 (!hosts.is_empty()).then(|| json!(hosts))
             })
             .await;
-        let phishing = self
-            .cached("feed:openphish", HOUR, async {
-                let text = self.get_text("https://raw.githubusercontent.com/openphish/public_feed/refs/heads/main/feed.txt").await?;
-                let mut hosts: Vec<String> = feed_hosts(&text).collect();
-                hosts.sort();
-                hosts.dedup();
-                Some(json!(hosts))
-            })
-            .await;
         let feed = |got: Option<(Value, i64)>| match got {
             Some((v, at)) => Feed { hosts: serde_json::from_value(v).unwrap_or_default(), fetched_at: Some(at) },
             None => Feed::default(),
         };
-        ThreatFeeds { malware: feed(malware), phishing: feed(phishing) }
+        ThreatFeeds { malware: feed(malware) }
     }
 
     /// Origin AS and covering prefix from Team Cymru. `None` when the lookup failed; an address no

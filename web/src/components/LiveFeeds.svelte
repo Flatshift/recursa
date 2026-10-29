@@ -10,10 +10,7 @@
   /** The host square last tapped or clicked, shown under its category; `cat` is `resolver:category`. */
   let picked = $state<{ cat: string; text: string } | null>(null);
 
-  const CATS = [
-    { key: 'malware', label: 'Malware' },
-    { key: 'phishing', label: 'Phishing' },
-  ];
+  const CATS = [{ key: 'malware', label: 'Malware' }];
 
   const tally = (hs: { blocked: boolean | null }[]) => ({
     blocked: hs.filter((h) => h.blocked === true).length,
@@ -90,7 +87,7 @@
           <p class="pick" aria-live="polite">{picked?.cat === `${rid}:${c.key}` ? picked.text : ''}</p>
         {/if}
         <p class="src">
-          {fc?.source ?? (c.key === 'malware' ? 'URLhaus and ThreatView' : 'OpenPhish')}{#if fc?.fetched_at}, feed downloaded {ago(fc.fetched_at)}{/if}.
+          {fc?.source ?? 'URLhaus and ThreatView'}{#if fc?.fetched_at}, feed downloaded {ago(fc.fetched_at)}{/if}.
         </p>
       </div>
     {/each}

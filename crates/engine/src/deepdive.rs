@@ -354,7 +354,7 @@ pub const LIVE_SAMPLE_TTL_MS: i64 = 30 * 60_000;
 pub struct LiveSample {
     /// When the hosts were confirmed (Unix ms).
     pub taken_at: i64,
-    /// "malware" (URLhaus and ThreatView) and "phishing" (OpenPhish).
+    /// "malware" (URLhaus and ThreatView).
     pub categories: BTreeMap<String, SampleCategory>,
     /// Why a category has fewer hosts than asked for, or none.
     pub notes: Vec<String>,
@@ -370,7 +370,7 @@ pub struct SampleCategory {
     pub hosts: Vec<String>,
 }
 
-/// The live-feed blocking check: hosts from current malware and phishing feeds that still resolve through an
+/// The live-feed blocking check: hosts from current malware feeds that still resolve through an
 /// unfiltered resolver, looked up through this one. Opt-in, from the Deep Dive page or as a run's live threat test,
 /// because security tools on the network may flag those lookups.
 #[derive(Clone, Debug, Serialize)]
@@ -414,7 +414,7 @@ pub(crate) fn live_sample(feeds: ThreatFeeds, timeout: Duration, cancel: &Atomic
         })
         .ok_or("Couldn't reach an unfiltered resolver over DoT (8.8.8.8 or 1.1.1.1) to confirm which feed hosts are live.")?;
     let mut sample = LiveSample { taken_at: crate::bench::now_ms(), categories: BTreeMap::new(), notes: Vec::new() };
-    for (cat, feed, source) in [("malware", feeds.malware, "URLhaus and ThreatView"), ("phishing", feeds.phishing, "OpenPhish")] {
+    for (cat, feed, source) in [("malware", feeds.malware, "URLhaus and ThreatView")] {
         if cancel.load(Ordering::Relaxed) {
             break;
         }

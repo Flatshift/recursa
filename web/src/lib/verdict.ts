@@ -692,7 +692,7 @@ export function verdict(run: RunState, rows: Row[], hitShare = HIT_SHARE.home): 
       const second = ranked[1];
       const dnssec = dnssecOf(win) === true;
       const by = [mt && `malware ${mb} of ${mt}`, pt && `phishing ${pb} of ${pt}`].filter(Boolean);
-      const feeds = [...(mt ? ['URLhaus', 'ThreatView'] : []), ...(pt ? ['OpenPhish'] : [])];
+      const feeds = mt ? ['URLhaus', 'ThreatView'] : [];
       picks.push({
         goal: GOAL.protection,
         resolverId: win,

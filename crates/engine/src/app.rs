@@ -49,6 +49,8 @@ pub struct AppState {
     pub border_monitor: watch::Sender<BorderMonitorConfig>,
     /// The last edge roll call of this process, for the Network page and the border monitor's targets. Memory only.
     pub edges: Mutex<Option<crate::edge::RollCall>>,
+    /// The network map's progress and cancel flag (see [`crate::netmap`]).
+    pub netmap: crate::netmap::State,
     /// Bumped when NTP monitoring is switched off or its record cleared, so a cycle in flight knows to record nothing.
     pub ntp_epoch: AtomicU64,
     /// The live threat-feed hosts the Deep Dive's blocking check last used (see [`crate::deepdive::LiveSample`]).
@@ -211,6 +213,7 @@ impl AppState {
             ntp_monitor: watch::Sender::new(ntp_monitor_cfg),
             border_monitor: watch::Sender::new(border_monitor_cfg),
             edges: Mutex::new(None),
+            netmap: crate::netmap::State::default(),
             ntp_epoch: AtomicU64::new(0),
             live_sample: Mutex::new(None),
         }))
@@ -701,6 +704,49 @@ impl AppState {
                 ok(json!(self.run_roll_call().await))
             }
             ("GET", ["network", "edges"]) => ok(json!({ "last": *self.edges.lock().unwrap() })),
+            ("GET", ["network", "map"]) => ok(json!({
+                "last": crate::netmap::last(&self.store),
+                "running": self.netmap_running(),
+                "progress": *self.netmap.progress.lock().unwrap(),
+                "error": *self.netmap.error.lock().unwrap(),
+                "datasets": crate::netmap::datasets(&self.store),
+            })),
+            ("POST", ["network", "map"]) => self.start_netmap().await,
+            ("DELETE", ["network", "map"]) => {
+                self.netmap.cancel.store(true, Ordering::SeqCst);
+                ok(json!({ "cancelled": self.netmap_running() }))
+            }
+            ("GET", ["network", "map", "datasets"]) => ok(json!(crate::netmap::datasets(&self.store))),
+            ("PUT", ["network", "map", "peeringdb"]) => {
+                #[derive(Deserialize)]
+                struct Accept {
+                    accepted: bool,
+                }
+                let Accept { accepted } = parse(body)?;
+                self.store.put(crate::netmap::pdb::ACCEPTED, &accepted);
+                if accepted {
+                    crate::netmap::refresh_in_background(self);
+                }
+                ok(json!(crate::netmap::datasets(&self.store)))
+            }
+            ("PUT", ["network", "map", "rdap"]) => {
+                #[derive(Deserialize)]
+                struct Accept {
+                    accepted: bool,
+                }
+                let Accept { accepted } = parse(body)?;
+                self.store.put(crate::netmap::rdap::ACCEPTED, &accepted);
+                ok(json!(crate::netmap::datasets(&self.store)))
+            }
+            ("PUT", ["network", "map", "rdns"]) => {
+                #[derive(Deserialize)]
+                struct On {
+                    on: bool,
+                }
+                let On { on } = parse(body)?;
+                self.store.put(crate::netmap::RDNS, &on);
+                ok(json!(crate::netmap::datasets(&self.store)))
+            }
             ("GET", ["network", "border"]) => {
                 let hours = param("hours").and_then(|h| h.parse::<i64>().ok()).unwrap_or(72).clamp(1, 24 * 365);
                 let until = bench::now_ms();
@@ -822,7 +868,7 @@ impl AppState {
         out.map_err(|e| ApiError::new(502, e))
     }
 
-    /// The Deep Dive's opt-in blocking check with live malware and phishing hosts (see
+    /// The Deep Dive's opt-in blocking check with live malware hosts (see
     /// [`crate::deepdive::live_blocking`]). Holds the run claim like the dive itself.
     async fn live_blocking(&self, id: &str, opts: LiveBlockingOpts) -> Result<crate::deepdive::LiveBlocking, ApiError> {
         let r = self.find_resolver(id)?;
@@ -941,6 +987,32 @@ impl AppState {
     }
 
     /// Run an edge roll call and keep it as the last one.
+    /// Whether a map run is going: it holds the progress slot from its first trace to its end.
+    fn netmap_running(&self) -> bool {
+        self.netmap.running.load(Ordering::SeqCst)
+    }
+
+    /// Start a network map run in the background. 409 when a run or another measurement is going.
+    async fn start_netmap(self: &Arc<Self>) -> Result<String, ApiError> {
+        if crate::trace::available() != crate::trace::TraceCap::Ok {
+            return Err(ApiError::new(400, "Traces are not available here."));
+        }
+        let (claim, measure) = self.claim_run().await?;
+        self.netmap.running.store(true, Ordering::SeqCst);
+        *self.netmap.error.lock().unwrap() = None;
+        let app = self.clone();
+        tokio::spawn(async move {
+            let _held = (claim, measure);
+            let result = crate::netmap::run(&app).await;
+            if let Err(e) = result {
+                *app.netmap.error.lock().unwrap() = Some(e);
+            }
+            *app.netmap.progress.lock().unwrap() = None;
+            app.netmap.running.store(false, Ordering::SeqCst);
+        });
+        Ok(json!({ "started": true }).to_string())
+    }
+
     pub(crate) async fn run_roll_call(&self) -> crate::edge::RollCall {
         let rc = crate::edge::roll_call(self).await;
         *self.edges.lock().unwrap() = Some(rc.clone());

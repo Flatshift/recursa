@@ -105,7 +105,7 @@
   {#if unsupported}
     <div class="empty panel">
       <p><b>Border probing is not available in this build.</b></p>
-      <p class="ink-2">It needs the path tracer, which this platform does not offer. The "Served from" check works everywhere.</p>
+      <p class="ink-2">It needs the path tracer, which this platform does not offer.</p>
     </div>
   {:else}
     {#if mon.cfg}

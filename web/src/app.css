@@ -40,6 +40,13 @@
   --sel: oklch(0.928 0.005 285);
   /* Fill opacity of a latency density ridge. */
   --ridge-a: 0.15;
+  /* Network map roles, not identities; shape carries the same meaning. 3:1 or better on both surfaces. */
+  --net-isp: oklch(0.55 0.15 255);
+  --net-carrier: oklch(0.55 0.15 305);
+  --net-ix: oklch(0.56 0.16 345);
+  --net-content: oklch(0.56 0.09 195);
+  --net-unknown: oklch(0.56 0.01 285);
+  --v6: oklch(0.62 0.16 60);
 
   /* Chart series: validated all-pairs (CVD ΔE ≥ 9.2, normal ≥ 24) on #fff. */
   --s-cached: #2a78d6;
@@ -128,6 +135,12 @@
     --focus: oklch(0.93 0.003 285);
     --sel: oklch(0.275 0.007 285);
     --ridge-a: 0.2;
+    --net-isp: oklch(0.72 0.12 255);
+    --net-carrier: oklch(0.72 0.12 305);
+    --net-ix: oklch(0.73 0.13 345);
+    --net-content: oklch(0.73 0.09 195);
+    --net-unknown: oklch(0.7 0.01 285);
+  --v6: oklch(0.78 0.14 65);
     --s-cached: #3987e5;
     --s-uncached: #d95926;
     --s-tld: #199e70;
@@ -167,6 +180,12 @@
   --focus: oklch(0.93 0.003 285);
   --sel: oklch(0.275 0.007 285);
   --ridge-a: 0.2;
+  --net-isp: oklch(0.72 0.12 255);
+  --net-carrier: oklch(0.72 0.12 305);
+  --net-ix: oklch(0.73 0.13 345);
+  --net-content: oklch(0.73 0.09 195);
+  --net-unknown: oklch(0.7 0.01 285);
+  --v6: oklch(0.78 0.14 65);
   --s-cached: #3987e5;
   --s-uncached: #d95926;
   --s-tld: #199e70;

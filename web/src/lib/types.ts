@@ -348,7 +348,7 @@ export interface RunConfig {
   probes: boolean;
   filters: { threats: boolean; ads: boolean; adult: boolean };
   cdn: boolean;
-  /** Look up live malware and phishing hosts through every resolver after the other checks. */
+  /** Look up live malware hosts through every resolver after the other checks. */
   live: boolean;
   /** The names the Cached test asks, in rotation. */
   cached_names: string[];
@@ -834,7 +834,7 @@ export interface NtpMonitorResp {
   history: { since: number; until: number; cycles: number; servers: NtpMonitorServer[]; clock: NtpMonitorClock };
 }
 
-/** The opt-in Check live feeds, and the run's Live threat test: blocking of live malware (URLhaus and ThreatView) and phishing (OpenPhish) hosts. */
+/** The opt-in Check live feeds, and the run's Live threat test: blocking of live malware (URLhaus and ThreatView) hosts. */
 export interface LiveCategory extends FilterCategory {
   /** When the feed was downloaded (Unix ms). */
   fetched_at: number | null;
@@ -999,6 +999,140 @@ export interface EdgeSite {
   /** Meta's own view of the connection, from an undocumented header. */
   quality: { label: string; rtt_ms: number | null; retransmits: number | null; bandwidth_kbps: number | null; raw: string } | null;
   error: string | null;
+}
+
+/** What a group is to the reader of the network map; the page colours by it. */
+export type NetRole = 'home' | 'isp' | 'carrier' | 'exchange' | 'content' | 'unknown' | 'silent';
+
+/** One router address seen at one hop of a map trace. */
+export interface NetMember {
+  ttl: number;
+  addr: string;
+  best_ms: number | null;
+  sent: number;
+  recv: number;
+  /** The announced prefix that holds the address. */
+  prefix: string | null;
+  moas: boolean;
+  /** The reverse name, only when decoding router names is on. */
+  name: string | null;
+  hint: string | null;
+}
+
+/** A network, exchange or stretch of silence at one place in the map, shared by every trace through it. */
+export interface NetGroup {
+  id: number;
+  role: NetRole;
+  label: string;
+  asn: number | null;
+  holder: string | null;
+  /** Who the network's number is registered to, when that is another organisation than the name it goes by. */
+  owner: string | null;
+  ix_id: number | null;
+  ix_name: string | null;
+  ttl_from: number;
+  ttl_to: number;
+  parallel: boolean;
+  unnumbered: boolean;
+  /** A city the router names point to and the round trips allow: "consistent with", never "in". */
+  city_hint: string | null;
+  /** Median over the traces of the best round trip to the first router here that answered. */
+  rtt_ms: number | null;
+  members: NetMember[];
+  aliases: string[][];
+  /** The ids of the targets whose traces go through here. */
+  targets: string[];
+}
+
+export type NetLinkKind = 'direct' | 'exchange' | 'via_transit' | 'unknown';
+
+export interface NetLink {
+  from: number;
+  to: number;
+  /** Traces that cross it. */
+  count: number;
+  /** The ids of the targets whose traces cross it. */
+  targets: string[];
+  rtt_step_ms: number | null;
+  kind: NetLinkKind;
+  /** What CAIDA's AS relationships say the near network is to the far one; absent when the pair is not listed. */
+  rel?: 'transit' | 'peer' | 'customer';
+  /** Only on an exchange link. */
+  ix_id?: number;
+  /** The link that leaves your ISP. */
+  handoff: boolean;
+  /** The most routers between the two sides that did not answer on one trace; 0 when they met on every trace. */
+  silent_hops: number;
+}
+
+export type NetTier = 'high' | 'medium' | 'low';
+
+export type NetEvidence =
+  | { kind: 'observed'; body: string }
+  | { kind: 'listed'; body: { source: string; updated: string | null; text: string } }
+  | { kind: 'inferred'; body: string };
+
+export interface NetClaim {
+  /** The target whose trace this is about. */
+  target: string;
+  /** The index in the run's links of the hand-off. */
+  link: number;
+  tier: NetTier;
+  text: string;
+  evidence: NetEvidence[];
+}
+
+export interface NetTarget {
+  id: string;
+  cdn: string | null;
+  name: string;
+  host: string;
+  addr: string;
+  /** The IP version this target is traced over. */
+  family: 4 | 6;
+  /** The serving site the roll call found, for an edge target. */
+  site: string | null;
+}
+
+export interface NetDatasets {
+  pfx2as: { fetched_at: number | null; rows: number; source: string | null; rows6: number; source6: string | null };
+  asrel: { fetched_at: number | null; rows: number; source: string | null };
+  peeringdb: { accepted: boolean; synced_at: number | null; rows: number };
+  rdns: boolean;
+  /** Registry (RDAP) lookups for addresses no network announces, and how many blocks are kept. */
+  rdap: { accepted: boolean; blocks: number };
+}
+
+/** One run of the network map (`GET /api/network/map`): where each trace leaves your ISP and what that rests on. */
+export interface MapRun {
+  ts: number;
+  elapsed_ms: number;
+  you: { asn: number | null; holder: string | null; owner: string | null; city: string | null };
+  /** An IPv6 trace says whether its route crosses the same networks as the IPv4 one; null for IPv4. */
+  traces: { target: NetTarget; trace: Trace; same_route: boolean | null }[];
+  /** The run traced over IPv6 too. */
+  ipv6: boolean;
+  groups: NetGroup[];
+  edges: NetLink[];
+  claims: NetClaim[];
+  headline: { text: string; tier: NetTier } | null;
+  skipped: { target: string; reason: string }[];
+  datasets: NetDatasets;
+}
+
+export interface MapProgress {
+  done: number;
+  total: number;
+  target: string;
+  partial: MapRun | null;
+}
+
+export interface MapResp {
+  last: MapRun | null;
+  running: boolean;
+  progress: MapProgress | null;
+  error: string | null;
+  datasets: NetDatasets;
 }
 
 /** What the background border-link monitor does, and how often. */

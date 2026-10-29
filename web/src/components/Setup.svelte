@@ -509,12 +509,12 @@
           <label class="toggle"><input type="checkbox" bind:checked={draft.cdn} /><span>CDN mapping quality</span></label>
           <label class="toggle"><input type="checkbox" bind:checked={draft.live} /><span>Live threat test</span></label>
           <div class="sub">
-            <p class="hint">Advanced. Looks up real malware and phishing hosts through every selected resolver.</p>
+            <p class="hint">Advanced. Looks up real malware hosts through every selected resolver.</p>
             {#if draft.live}
               <p class="live-warn" role="note">
                 <Icon name="warn" size={14} />
                 <span>
-                  These are real hosts from today's URLhaus, ThreatView and OpenPhish feeds, about 40 per resolver. Recursa only looks up the names, over
+                  These are real hosts from today's URLhaus and ThreatView feeds, about 20 per resolver. Recursa only looks up the names, over
                   DoT or DoH (plain DNS only to your own resolver on this network), and never connects to them. Security tools on your
                   network, like a gateway's threat management or a corporate firewall, may still flag the lookups or block this computer, and
                   resolvers with a dashboard (NextDNS, Control D) will list them as blocked threats.

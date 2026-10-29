@@ -32,7 +32,7 @@
     probes: 'Asking each resolver what it does: DNSSEC, ECS, QNAME minimisation, blocking',
     cdn: 'Looking up CDN hostnames through every resolver, then timing each edge it sent you to',
     intel: 'Looking up each resolver’s network: RPKI, ROV, where its queries leave',
-    live: 'Looking up live malware and phishing hosts through every resolver',
+    live: 'Looking up live malware hosts through every resolver',
   };
   // Seconds in the phase tick for the check that reports only at the end, so a silent phase still visibly moves.
   let since = $state(Date.now());

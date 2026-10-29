@@ -357,6 +357,11 @@
           <b>Trace route:</b> ICMP probes with rising TTL, four rounds, sent by <a href="https://trippy.rs" target="_blank" rel="noreferrer">Trippy</a>, a Rust tracer
           that runs as the user on macOS. Each hop's network comes from the same Team Cymru lookup. Nothing is stored.
         </li>
+        <li>
+          <b>Network map:</b> each router's network is read on this computer from <a href="https://www.caida.org/catalog/datasets/routeviews-prefix2as/" target="_blank" rel="noreferrer">CAIDA's prefix-to-AS table</a>,
+          fetched once a day. The IPv6 table (routeviews6-prefix2as) is fetched alongside it. Destinations are traced over IPv6 as well when this computer
+          has an IPv6 route; a route that crosses the same networks as the IPv4 one is listed but not drawn.
+        </li>
         <li><b>Status:</b> the Statuspage feeds of Cloudflare, AdGuard and Cisco Umbrella, and the Better Stack feed of Quad9. The page shows which operators have no feed.</li>
       </ul>
     </section>
@@ -518,8 +523,8 @@
         CDN edges that they return, the time servers you choose on the Time page (UDP 123, and TCP 4460 for the NTS check), and the
         public sources above. During a run it also pings your default gateway. In a resolver's Inspector, or for
         the resolvers selected in the list, Sample 18 queries sends 18 normal queries to each resolver, one time; Check live feeds, only when you start it,
-        downloads the URLhaus feed (from the malware-filter mirror), ThreatView's high-confidence URL feed and the OpenPhish feed, looks up to 120 of their hosts through Google or Cloudflare to find live ones
-        (once per 30 minutes, since checks in that window share one sample), and asks the resolver for up to 40. The Live threat test in setup does the same once for a run, then asks every selected resolver for the same hosts. Check behaviour,
+        downloads the URLhaus feed (from the malware-filter mirror) and ThreatView's high-confidence URL feed, looks up to 60 of their hosts through Google or Cloudflare to find live ones
+        (once per 30 minutes, since checks in that window share one sample), and asks the resolver for up to 20. The Live threat test in setup does the same once for a run, then asks every selected resolver for the same hosts. Check behaviour,
         also only when you start it, sends about 90 queries for test names (the root zone's key set, localtest.me, akahelp.net,
         extended-dns-errors.com, cloudflare.com) to the resolver over UDP, TCP, DoT and DoH where it offers them, plus three UDP queries to the
         name servers of localtest.me and akahelp.net, to read the TTLs those zones publish. Results stay in a local database:

@@ -1,7 +1,7 @@
 //! Trace the route to a resolver's address with ICMP probes of rising TTL, using Trippy (trippy.rs).
 //! The result is a live view, like the Deep Dive: nothing is stored. iOS builds exclude Trippy and get stubs.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::sync::atomic::AtomicBool;
 
@@ -17,9 +17,15 @@ pub enum TraceCap {
     Unsupported,
 }
 
-#[derive(Serialize, Clone, Debug)]
+/// The protocol of a stored trace: only ICMP is ever run, so a trace read back was ICMP.
+fn stored_protocol() -> &'static str {
+    "icmp"
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Trace {
     pub target: IpAddr,
+    #[serde(skip_deserializing, default = "stored_protocol")]
     pub protocol: &'static str,
     pub rounds: u32,
     pub reached: bool,
@@ -27,7 +33,7 @@ pub struct Trace {
     pub hops: Vec<Hop>,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Hop {
     pub ttl: u8,
     pub addrs: Vec<IpAddr>,

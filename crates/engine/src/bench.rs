@@ -169,7 +169,7 @@ pub struct RunConfig {
     /// Test how well each resolver maps this client onto CDN edges.
     #[serde(default = "yes")]
     pub cdn: bool,
-    /// Look up live malware and phishing hosts through every resolver after the other checks.
+    /// Look up live malware hosts through every resolver after the other checks.
     #[serde(default)]
     pub live: bool,
     /// The names the Cached test asks, in rotation. Checked when the run starts; a name that doesn't resolve
@@ -1692,7 +1692,7 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
         enrich_cdn(h, deps);
     }
 
-    // ---- Live threats: the same live malware and phishing hosts through every resolver. Opt-in, last, since
+    // ---- Live threats: the same live malware hosts through every resolver. Opt-in, last, since
     // security tools on the network may react to the lookups.
     if cfg.live && !h.cancelled() {
         run_live(h, selected, timeout, deps, set.plain);

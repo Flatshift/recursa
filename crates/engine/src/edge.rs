@@ -19,10 +19,10 @@ const TIMEOUT: Duration = Duration::from_secs(6);
 /// The most of the Google report that is read; the rest is a debug blob.
 const REPORT_MAX: usize = 4096;
 /// Great-circle km that cost 1 ms of round trip in fibre: a rule of thumb.
-const KM_PER_MS: f64 = 100.0;
+pub(crate) const KM_PER_MS: f64 = 100.0;
 
 /// Airports the CDNs use as site codes: code to (city, country, latitude, longitude).
-static AIRPORTS: LazyLock<HashMap<String, (String, String, f64, f64)>> =
+pub(crate) static AIRPORTS: LazyLock<HashMap<String, (String, String, f64, f64)>> =
     LazyLock::new(|| serde_json::from_str(include_str!("../data/iata.json")).expect("iata.json"));
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
@@ -168,7 +168,7 @@ fn cloudflare_you(h: &http::HeaderMap) -> You {
 }
 
 /// Great-circle distance in km (haversine, mean Earth radius).
-fn great_circle_km(a: (f64, f64), b: (f64, f64)) -> f64 {
+pub(crate) fn great_circle_km(a: (f64, f64), b: (f64, f64)) -> f64 {
     let (p1, p2) = (a.0.to_radians(), b.0.to_radians());
     let (dp, dl) = ((b.0 - a.0).to_radians(), (b.1 - a.1).to_radians());
     let h = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
@@ -267,7 +267,7 @@ async fn ask(client: &reqwest::Client, id: &str, host: &str) -> Got {
 }
 
 /// The PTR name of `ip`, when it has one.
-fn ptr(res: &Resolve, ip: IpAddr) -> Option<String> {
+pub(crate) fn ptr(res: &Resolve, ip: IpAddr) -> Option<String> {
     let name = match ip.to_canonical() {
         IpAddr::V4(a) => {
             let o = a.octets();
