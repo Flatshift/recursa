@@ -67,8 +67,8 @@ const CLLI: &[(&str, &str)] = &[
     ("chcgil", "ORD"),
     ("nycmny", "JFK"),
     ("nwrknj", "EWR"),
-    ("wswdc", "IAD"),
-    ("washdc", "IAD"),
+    ("wswdc", "DCA"),
+    ("washdc", "DCA"),
     ("asbnva", "IAD"),
     ("sttlwa", "SEA"),
     ("lsanca", "LAX"),
@@ -98,7 +98,7 @@ const CITIES: &[(&str, &str)] = &[
     ("sanjose", "SJC"),
     ("phoenix", "PHX"),
     ("boston", "BOS"),
-    ("washington", "IAD"),
+    ("washington", "DCA"),
     ("frankfurt", "FRA"),
     ("london", "LHR"),
 ];
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn a_name_gives_a_city_only_when_the_round_trip_reaches_it() {
         // Ashburn is about 530 km from Charlotte: a floor of about 5 ms.
-        assert_eq!(hint("be2832.ccr41.iad01.atlas.cogentco.com", Some(9.0), CHARLOTTE).as_deref(), Some("Washington"));
+        assert_eq!(hint("be2832.ccr41.iad01.atlas.cogentco.com", Some(9.0), CHARLOTTE).as_deref(), Some("Ashburn, VA"));
         assert_eq!(hint("be2832.ccr41.iad01.atlas.cogentco.com", Some(1.5), CHARLOTTE), None);
         assert_eq!(hint("be2832.ccr41.iad01.atlas.cogentco.com", None, CHARLOTTE), None);
         assert_eq!(hint("be2832.ccr41.iad01.atlas.cogentco.com", Some(9.0), None), None);
@@ -153,10 +153,10 @@ mod tests {
     #[test]
     fn each_style_of_name_is_read_and_unknown_networks_give_nothing() {
         let ms = Some(40.0);
-        assert_eq!(hint("ae-2-52.edge4.Atlanta2.Level3.net", ms, CHARLOTTE).as_deref(), Some("Atlanta"));
-        assert_eq!(hint("cr1.attga.ip.att.net", ms, CHARLOTTE).as_deref(), Some("Atlanta"));
-        assert_eq!(hint("ae1.iad.ntwk.msn.net", ms, CHARLOTTE).as_deref(), Some("Washington"));
-        assert_eq!(hint("iad23s61-in-f14.1e100.net", ms, CHARLOTTE).as_deref(), Some("Washington"));
+        assert_eq!(hint("ae-2-52.edge4.Atlanta2.Level3.net", ms, CHARLOTTE).as_deref(), Some("Atlanta, GA"));
+        assert_eq!(hint("cr1.attga.ip.att.net", ms, CHARLOTTE).as_deref(), Some("Atlanta, GA"));
+        assert_eq!(hint("ae1.iad.ntwk.msn.net", ms, CHARLOTTE).as_deref(), Some("Ashburn, VA"));
+        assert_eq!(hint("iad23s61-in-f14.1e100.net", ms, CHARLOTTE).as_deref(), Some("Ashburn, VA"));
         assert_eq!(hint("host.example.org", ms, CHARLOTTE), None);
         // The airport-code rule isn't fooled by a label that only starts with letters.
         assert_eq!(hint("server.example.cogentco.com", ms, CHARLOTTE), None);

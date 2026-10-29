@@ -98,6 +98,13 @@ export function layout(groups: NetGroup[], edges: NetLink[], o: TreeOpts = TREE,
     return v;
   };
   for (const g of roots) place(g.id);
+  // A parent centred on its children can land on a leaf's row in its own column; it moves down until the row is free.
+  const byCol = new Map<number, number[]>();
+  for (const g of groups) byCol.set(col.get(g.id)!, [...(byCol.get(col.get(g.id)!) ?? []), g.id]);
+  for (const ids of byCol.values()) {
+    ids.sort((a, b) => y.get(a)! - y.get(b)! || Number(kids.has(a)) - Number(kids.has(b)));
+    for (let i = 1; i < ids.length; i++) y.set(ids[i], Math.max(y.get(ids[i])!, y.get(ids[i - 1])! + 1));
+  }
 
   // Your home is a square with a house in it; the rest get a name, and the columns after it close up by the difference.
   const xOf = (c: number) => o.pad + c * o.colW - (c ? o.nodeW - o.nodeH : 0);
@@ -112,22 +119,22 @@ export function layout(groups: NetGroup[], edges: NetLink[], o: TreeOpts = TREE,
   // A label sits in the gap before its destination, where the curve has flattened to that row and labels of the
   // edges fanning out of one node are a row apart. It goes on the side the curve does not come in from (above a
   // diamond, whose name is below it); a second edge into the same node takes the other side.
-  const into = new Map<number, number>();
+  const into = new Map<number, boolean>();
   const paths = edges.map((e, index): TreeEdge | null => {
     const a = at.get(e.from);
     const b = at.get(e.to);
     if (!a || !b) return null;
     const [x1, y1, x2, y2] = [side(a, true), a.y + a.h / 2, side(b, false), b.y + b.h / 2];
     const xm = (x1 + x2) / 2;
-    const nth = into.get(e.to) ?? 0;
-    into.set(e.to, nth + 1);
-    const above = (diamond.has(e.to) || y1 >= y2) !== (nth % 2 === 1);
+    const prev = into.get(e.to);
+    const above = prev == null ? diamond.has(e.to) || y1 >= y2 : !prev;
+    into.set(e.to, above);
     return { index, d: `M${x1} ${y1}C${xm} ${y1} ${xm} ${y2} ${x2} ${y2}`, lx: x2 - (o.colW - o.nodeW) / 2, ly: y2, above };
   });
   return {
     nodes,
     edges: paths.filter((p): p is TreeEdge => p != null),
     width: o.pad + Math.max(o.pad + o.nodeW, ...nodes.map((n) => n.x + n.w)),
-    height: o.pad * 2 + Math.max(leaves.length - 1, 0) * o.rowH + o.nodeH,
+    height: o.pad * 2 + Math.max(0, ...y.values()) * o.rowH + o.nodeH,
   };
 }

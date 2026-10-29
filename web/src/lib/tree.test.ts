@@ -77,7 +77,19 @@ describe('layout', () => {
     const row = (id: number) => u.nodes.find((n) => n.id === id)!.y;
     expect(row(6) - row(3)).toBe(TREE.rowH);
     expect(u.height).toBe(t.height);
-    expect(row(5)).toBe(row(6));
+    expect(row(5)).toBe(row(2) + TREE.rowH);
+  });
+  it('moves a parent off the leaf its children surround', () => {
+    // The carrier's children sit either side of a leaf in the carrier's own column once the leaf is pulled between them.
+    const gs = [g(0, 'home', 1), g(1, 'isp', 2), g(2, 'content', 4), g(3, 'carrier', 3), g(4, 'content', 5), g(5, 'content', 5)];
+    const u = layout(gs, [l(0, 1), l(1, 2), l(1, 3), l(3, 4), l(3, 5)], undefined, [[2, 4]]);
+    const row = (id: number) => u.nodes.find((n) => n.id === id)!.y;
+    expect(row(2)).toBe(row(4) + TREE.rowH);
+    expect(row(3)).toBe(row(2) + TREE.rowH);
+  });
+  it('puts the labels of two edges into one node on opposite sides', () => {
+    const [a, b] = t.edges.filter((e) => edges[e.index].to === 4);
+    expect(a.above).not.toBe(b.above);
   });
   it('survives a cycle', () => {
     expect(layout(groups.slice(0, 3), [l(0, 1), l(1, 2), l(2, 1)]).nodes).toHaveLength(3);
