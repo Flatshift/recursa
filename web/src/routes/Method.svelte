@@ -358,9 +358,24 @@
           that runs as the user on macOS. Each hop's network comes from the same Team Cymru lookup. Nothing is stored.
         </li>
         <li>
-          <b>Network map:</b> each router's network is read on this computer from <a href="https://www.caida.org/catalog/datasets/routeviews-prefix2as/" target="_blank" rel="noreferrer">CAIDA's prefix-to-AS table</a>,
+          <b>Peering map:</b> each router's network is read on this computer from <a href="https://www.caida.org/catalog/datasets/routeviews-prefix2as/" target="_blank" rel="noreferrer">CAIDA's prefix-to-AS table</a>,
           fetched once a day. The IPv6 table (routeviews6-prefix2as) is fetched alongside it. Destinations are traced over IPv6 as well when this computer
-          has an IPv6 route; a route that crosses the same networks as the IPv4 one is listed but not drawn.
+          has an IPv6 route; a route that crosses the same networks as the IPv4 one is listed but not drawn. Links are named transit, peering or customer from
+          <a href="https://www.caida.org/catalog/datasets/as-relationships/" target="_blank" rel="noreferrer">CAIDA's AS relationships</a>, fetched monthly.
+          No router address is sent to any service. The last map run is kept on this computer; a new run replaces it.
+        </li>
+        <li>
+          <b>Exchanges and facilities:</b> only if you allow it, the map syncs <a href="https://www.peeringdb.com" target="_blank" rel="noreferrer">PeeringDB</a>'s
+          exchange, prefix, facility and membership tables and reads them locally to name the exchange or facility where two networks meet.
+        </li>
+        <li>
+          <b>Router names and registry records:</b> only if you turn them on. Reverse names come from your resolver and are read for a city hint by
+          plain string rules; a hint is kept only when the round trip is long enough to reach that city. For address space that no network announces, past
+          your ISP, the holder is read from the regional registry's RDAP record through rdap.org; each answer covers a block and is kept for a month.
+        </li>
+        <li>
+          <b>Border links:</b> when the monitor is on, the last router inside your ISP and the first beyond it on the way to each CDN are probed with ICMP every
+          few minutes, and the two round trips are kept for weeks, on this computer. The pairs are found again daily by the same trace route.
         </li>
         <li><b>Status:</b> the Statuspage feeds of Cloudflare, AdGuard and Cisco Umbrella, and the Better Stack feed of Quad9. The page shows which operators have no feed.</li>
       </ul>

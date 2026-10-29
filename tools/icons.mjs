@@ -1,11 +1,10 @@
 // App and menu-bar icons from one source of geometry: the Cantor dial (rings cut like a Cantor set, each ring
 // keeping the outer part of every arc of the one before; the path walks one kept arc per ring down to the
 // answer). Slate tile for dark mode, Paper for light; grey rings, a white (or ink) path, and a dot at each stop
-// in the latency series colors: TLD green, Uncached rose, then the answer in Cached blue. A Mono set (no hue)
-// is written alongside as an alternate. Small sizes are drawn for their size, with fewer rings and heavier
+// in the latency series colors: TLD green, Uncached rose, then the answer in Cached blue. Small sizes are drawn for their size, with fewer rings and heavier
 // strokes, rather than scaled down. Renders exact transparent PNGs with headless Chrome (no other SVG
 // rasterizer is assumed), then builds icon.icns with iconutil and icon.ico by hand.
-// Usage: node tools/icons.mjs            (writes crates/desktop/icons/, its src/*.svg and alt-mono/)
+// Usage: node tools/icons.mjs            (writes crates/desktop/icons/ and its src/*.svg)
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -60,7 +59,6 @@ function dial(size, c) {
 const SLATE = { t0: '#3b4452', t1: '#171c25', ink: '#7d8796', path: '#e6eaef', top: '#ffffff', sheen: 0.15, shadow: 0.28, edge: '#ffffff', edgeOpacity: 0.12, tld: '#1baf7a', uncached: '#eb6834', cached: '#3987e5' };
 const PAPER = { t0: '#fdf9f4', t1: '#ece3d8', ink: '#b5ada4', path: '#4a403c', top: '#1c1614', sheen: 0.5, shadow: 0.14, edge: '#000000', edgeOpacity: 0.08, tld: '#199e70', uncached: '#d95926', cached: '#2a78d6' };
 const TRI = (t) => ({ ink: t.ink, path: t.path, stop: [null, t.tld, t.uncached], ans: t.cached });
-const MONO = (t) => ({ ink: t.ink, path: t.path, stop: [], ans: t.top });
 
 const tile = (t) => `
   <defs>
@@ -96,7 +94,6 @@ const sources = (look, name) => ({
   'app-light.svg': appSvg('lg', PAPER, look, `App icon (${name}, Paper): the Dock icon in light mode.`),
 });
 const SOURCES = { ...sources(TRI, 'Tri'), 'tray.svg': TRAY };
-const ALT = sources(MONO, 'Mono');
 
 // Which drawing each output size uses.
 const pick = (px) => (px < 32 ? 'app-16.svg' : px < 64 ? 'app-32.svg' : 'app.svg');
@@ -191,14 +188,5 @@ writeFileSync(join(out, 'icon.ico'), ico(await Promise.all([16, 24, 32, 48, 64, 
 writeFileSync(join(out, 'tray.png'), await c.render(TRAY, 36));
 // The light-mode Dock icon the app switches to (icon.png is the dark one).
 writeFileSync(join(out, 'icon-light.png'), await c.render(SOURCES['app-light.svg'], 512));
-
-// The Mono alternate: sources, icns and the two 512 px Dock PNGs. Not wired into the bundle.
-const alt = join(out, 'alt-mono');
-mkdirSync(join(alt, 'src'), { recursive: true });
-for (const [name, svg] of Object.entries(ALT)) writeFileSync(join(alt, 'src', name), svg);
-const altAt = renderer(ALT);
-await icns(ALT, join(alt, 'icon.icns'), altAt);
-writeFileSync(join(alt, 'icon.png'), await altAt(512));
-writeFileSync(join(alt, 'icon-light.png'), await c.render(ALT['app-light.svg'], 512));
 await c.close();
 console.log('icons written to', out);
