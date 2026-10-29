@@ -1,5 +1,5 @@
-// One controller for the background monitors: the resolver monitor (`/api/monitor`) and the time monitor
-// (`/api/ntp/monitor`). It loads the record for a window, saves the config, polls `/last` so the record refreshes
+// One controller for the background monitors: the resolver monitor (`/api/monitor`), the time monitor
+// (`/api/ntp/monitor`) and the border monitor (`/api/network/border`). It loads the record for a window, saves the config, polls `/last` so the record refreshes
 // once a cycle has been recorded, and clears the history. The words of each notice stay with the page that shows it.
 
 import { untrack } from 'svelte';
@@ -13,7 +13,7 @@ export const RESOLVER_INTERVAL_MIN = [1, 5, 10, 15, 30, 60];
 export const RETENTION_DAYS = [7, 30, 90, 365];
 
 interface MonitorOptions<C> {
-  /** `/api/monitor` or `/api/ntp/monitor`; `/last` and `/history` hang off it. */
+  /** `/api/monitor`, `/api/ntp/monitor` or `/api/network/border`; `/last` and `/history` hang off it. */
   endpoint: string;
   /** The window to load, as a query string (`hours=72`). The record loads when it changes and is polled while it is
    *  set; without it the controller only saves. */

@@ -1,4 +1,4 @@
-// The network map's controller: the last run, a poll every two seconds while one is running, and the four actions.
+// The network map's controller: the last run, a poll every two seconds while one is running, and the actions.
 // The page and its toolbar share one, so the toolbar can show progress that the page is drawing.
 
 import { api } from './api';
