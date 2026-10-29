@@ -342,7 +342,13 @@
           table of route origins, and applies RFC 6811 to the resolver's prefix and origin AS. It does not read publication points that offer only
           rsync. When RPKI is off, the cell shows "Not checked".
         </li>
-        <li><b>Route-origin validation:</b> RoVista's measurement of how much of the operator's network drops RPKI-invalid routes.</li>
+        <li>
+          <b>Route-origin filtering:</b> a live test with <a href="https://cmdns.dns-oarc.net/" target="_blank" rel="noreferrer">Check My DNS by DNS-OARC</a>.
+          Recursa asks each resolver for a one-time name that is served only from an RPKI-invalid route, over IPv4 and over IPv6, and DNS-OARC reports
+          whether the query reached its server. DNS-OARC sees this computer's address and the resolver's outbound address. A resolver that never answers
+          the name counts only if it answered the rest of the run; a query that never left this computer shows "Not tested". Filtering anywhere between
+          the resolver and the DNS-OARC site counts, so this describes the resolver's path, not what its operator runs.
+        </li>
         <li>
           <b>Networks and holders:</b> IP-to-ASN mapping by <a href="https://team-cymru.com/community-services/ip-asn-mapping/" target="_blank" rel="noreferrer">Team Cymru</a>,
           over DNS: the origin AS and prefix of an address, and the AS name.

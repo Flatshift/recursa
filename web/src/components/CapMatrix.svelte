@@ -69,7 +69,7 @@
       [
         { key: 'cdn', label: 'CDN edges', title: 'Median extra round trip to CDN edges compared with the best any resolver found.', cell: (r) => cdnCell(run, r.id) },
         { key: 'roa', label: 'RPKI route origin', title: 'Whether the resolver’s address block is covered by a valid RPKI route origin authorization.', cell: (r) => roaCell(run, r.id) },
-        { key: 'rov', label: 'Operator ROV', title: 'How much of the operator network drops RPKI-invalid routes (RoVista). Protects the resolver from hijacks.', cell: (r) => rovCell(run, r.id) },
+        { key: 'rov', label: 'Invalid routes filtered', title: 'Whether a lookup from this resolver can be lured to an RPKI-invalid route, tested live over IPv4 and IPv6 with Check My DNS by DNS-OARC. Filtering anywhere on the resolver’s path counts.', cell: (r) => rovCell(run, r.id) },
         { key: 'egress', label: 'Egress network', title: 'The network the resolver’s queries leave from for the Internet, from its egress address.', cell: (r) => egressCell(run, r.id) },
       ],
     ],

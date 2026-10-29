@@ -1,7 +1,7 @@
-import type { CheckStatus, Resolver, RunState } from './types';
+import type { CheckStatus, Resolver, RovCheck, RunState } from './types';
 import { CAP } from './caps';
 import { check } from './verdict';
-import { documented, holder, ms, pct, when } from './format';
+import { documented, holder, ms, when } from './format';
 
 export interface Cell {
   status: CheckStatus;
@@ -75,17 +75,20 @@ export function roaCell(run: RunState, id: string): Cell {
 }
 
 export function rovCell(run: RunState, id: string): Cell {
-  const s = run.intel[id]?.service;
-  if (!s || s.private) return { status: 'unknown', text: '—', prov: 'unknown' };
-  const r = s.rov;
-  if (!r) return { status: 'unknown', text: 'No data', prov: 'unknown', evidence: `AS${s.asn ?? '?'} isn’t in RoVista’s dataset` };
-  const status: CheckStatus = r.ratio >= 0.9 ? 'pass' : r.ratio > 0.1 ? 'partial' : 'fail';
-  return {
-    status,
-    text: pct(r.ratio, 0),
-    prov: 'verified',
-    evidence: `RoVista: ${pct(r.ratio, 0)} of RPKI-invalid routes are filtered from AS${s.asn}'s point of view (updated ${r.updated})`,
-  };
+  const r = run.intel[id]?.rov;
+  if (!r) return { status: 'unknown', text: '—', prov: 'unknown' };
+  const show = (name: string, c: RovCheck) => `${name}: ${c.detail}${c.beacon ? `, ${c.beacon}` : ''}`;
+  const evidence = `Check My DNS by DNS-OARC · ${show('IPv4', r.v4)} · ${show('IPv6', r.v6)}`;
+  const tested = [
+    { family: 'IPv4', c: r.v4 },
+    { family: 'IPv6', c: r.v6 },
+  ].filter((t) => t.c.status !== 'not_tested');
+  if (!tested.length) return { status: 'unknown', text: 'Not tested', prov: 'unknown', evidence };
+  const filtered = tested.filter((t) => t.c.status === 'filtered');
+  const families = filtered.map((t) => t.family);
+  if (filtered.length === tested.length) return { status: 'pass', text: families.join(' + '), prov: 'verified', evidence };
+  if (!filtered.length) return { status: 'fail', text: 'No', prov: 'verified', evidence };
+  return { status: 'partial', text: `${families[0]} only`, prov: 'verified', evidence };
 }
 
 export function egressCell(run: RunState, id: string): Cell {

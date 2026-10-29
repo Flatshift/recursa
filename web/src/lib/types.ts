@@ -202,15 +202,23 @@ interface IpInfo {
     /** When the route-origin data was synced, ms since the epoch. */
     vrp_time?: number;
   } | null;
-  rov?: { ratio: number; organization: string; updated: string } | null;
   private?: boolean;
   error?: string;
   fetched_at?: number;
 }
 
+/** One Check My DNS test: whether a lookup for a name served only from an RPKI-invalid route reached DNS-OARC's server. */
+export interface RovCheck {
+  status: 'filtered' | 'unfiltered' | 'not_tested';
+  detail: string;
+  beacon?: string | null;
+}
+
 interface ResolverIntel {
   service: IpInfo | null;
   egress: IpInfo | null;
+  /** Route-origin filtering on the resolver's path, tested live with Check My DNS by DNS-OARC. Not what the operator runs. */
+  rov?: { v4: RovCheck; v6: RovCheck } | null;
 }
 
 export interface Edge {

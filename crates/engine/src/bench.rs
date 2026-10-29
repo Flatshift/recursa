@@ -14,6 +14,7 @@ use crate::endpoints;
 use crate::intel::{Intel, ThreatFeeds};
 use crate::net::{self, Endpoint, Exchanger, Transport, UdpX, XErr};
 use crate::probes::{self, check, rand_label};
+use crate::rov;
 use crate::{cdn, clock, deepdive, link, stats};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1635,18 +1636,47 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
         });
     }
 
-    // ---- Intel: RPKI, ROV, egress networks. Cached on disk; never during measurement.
+    // ---- Intel: RPKI, egress networks (cached on disk) and the live route-origin filtering test. Never during measurement.
     if !h.cancelled() {
         h.phase("intel", selected.len() as u32);
         let egress: BTreeMap<String, Option<String>> =
             h.with(|s| s.probes.iter().map(|(k, p)| (k.clone(), p.egress.first().cloned())).collect());
-        let jobs: Vec<(String, Option<IpAddr>, Option<String>)> =
-            selected.iter().map(|r| (r.id.clone(), r.any_ip(), egress.get(&r.id).cloned().flatten())).collect();
+        let answered: BTreeSet<String> = h.with(|s| s.probes.keys().cloned().collect());
+        let jobs: Vec<_> = selected
+            .iter()
+            .map(|r| {
+                let (r, planned, avoid_udp) = (r.clone(), planned_for(&plan, &r.id), intercepted.contains(&r.id));
+                let plain = set.plain;
+                let id = r.id.clone();
+                let answered = answered.contains(&id);
+                let eg = egress.get(&id).cloned().flatten();
+                let ip = r.any_ip();
+                // The beacon name goes to the endpoint the run measured, over the run's transport.
+                let resolve = move |dn: &str| -> rov::Lookup {
+                    let Some((mut x, _)) = open_for_run(&r, &planned, timeout, avoid_udp, plain) else {
+                        return rov::Lookup::Local("no connection to this resolver for this run's transports".into());
+                    };
+                    match dns::ask_msg(x.as_mut(), &QuerySpec::new(dn, dns::TYPE_A), Duration::from_secs(8)) {
+                        Ok(m) => {
+                            let ok = m.rcode == dns::RCODE_NOERROR && !m.ipv4_answers().is_empty();
+                            rov::Lookup::Answered { ok, err: if ok { String::new() } else { dns::rcode_name(m.rcode).into() } }
+                        }
+                        Err(XErr::Timeout) => rov::Lookup::Timeout,
+                        Err(e) => rov::Lookup::Local(e.to_string()),
+                    }
+                };
+                (id, ip, eg, answered, resolve)
+            })
+            .collect();
         let intel = deps.intel.clone();
         let results = deps.rt.block_on(async move {
-            let futs = jobs.into_iter().map(|(id, ip, eg)| {
+            let futs = jobs.into_iter().map(|(id, ip, eg, answered, resolve)| {
                 let intel = intel.clone();
-                async move { (id, intel.resolver_intel(ip, eg).await) }
+                async move {
+                    let (mut v, rov) = tokio::join!(intel.resolver_intel(ip, eg), rov::probe(&intel.ws, resolve, answered));
+                    v["rov"] = rov.to_json();
+                    (id, v)
+                }
             });
             futures_util::future::join_all(futs).await
         });
