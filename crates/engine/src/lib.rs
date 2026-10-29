@@ -27,6 +27,7 @@ pub(crate) mod lock;
 pub(crate) mod monitor;
 pub mod names;
 pub mod net;
+pub mod netmap;
 pub mod ntp;
 pub(crate) mod ntp_monitor;
 pub mod ntp_report;

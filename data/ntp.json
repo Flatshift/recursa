@@ -71,15 +71,13 @@
   { "id": "ntpbr-d", "name": "NTP.br d.st1", "operator": "NIC.br", "kind": "lab", "host": "d.st1.ntp.br", "country": "Brazil", "nts": "d.st1.ntp.br" },
   { "id": "ntpbr-gps", "name": "NTP.br gps", "operator": "NIC.br", "kind": "lab", "host": "gps.ntp.br", "country": "Brazil", "nts": "gps.ntp.br" },
 
-  { "id": "pool", "name": "pool.ntp.org", "operator": "NTP Pool", "kind": "pool", "host": "pool.ntp.org", "default": true,
-    "policy": "Volunteer servers, a few handed out per lookup; the pool asks clients to poll gently. No NTS.", "link": "https://www.ntppool.org/" },
+  { "id": "pool", "name": "pool.ntp.org", "operator": "NTP Pool", "kind": "pool", "host": "pool.ntp.org",
+    "policy": "Volunteer servers, a few handed out per lookup; the pool asks clients to poll gently and asks vendors to ship their own zone, so Recursa leaves it off until it has one. No NTS.", "link": "https://www.ntppool.org/" },
   { "id": "pool-us", "name": "us.pool.ntp.org", "operator": "NTP Pool", "kind": "pool", "host": "us.pool.ntp.org", "country": "United States", "link": "https://www.ntppool.org/zone/us" },
   { "id": "pool-na", "name": "north-america.pool.ntp.org", "operator": "NTP Pool", "kind": "pool", "host": "north-america.pool.ntp.org", "link": "https://www.ntppool.org/zone/north-america" },
   { "id": "pool-eu", "name": "europe.pool.ntp.org", "operator": "NTP Pool", "kind": "pool", "host": "europe.pool.ntp.org", "link": "https://www.ntppool.org/zone/europe" },
   { "id": "pool-as", "name": "asia.pool.ntp.org", "operator": "NTP Pool", "kind": "pool", "host": "asia.pool.ntp.org", "link": "https://www.ntppool.org/zone/asia" },
   { "id": "pool-oc", "name": "oceania.pool.ntp.org", "operator": "NTP Pool", "kind": "pool", "host": "oceania.pool.ntp.org", "link": "https://www.ntppool.org/zone/oceania" },
   { "id": "pool-sa", "name": "south-america.pool.ntp.org", "operator": "NTP Pool", "kind": "pool", "host": "south-america.pool.ntp.org", "link": "https://www.ntppool.org/zone/south-america" },
-  { "id": "pool-af", "name": "africa.pool.ntp.org", "operator": "NTP Pool", "kind": "pool", "host": "africa.pool.ntp.org", "link": "https://www.ntppool.org/zone/africa" },
-  { "id": "pool-debian", "name": "debian.pool.ntp.org", "operator": "NTP Pool", "kind": "pool", "host": "debian.pool.ntp.org", "link": "https://www.ntppool.org/vendors.html" },
-  { "id": "pool-ubuntu", "name": "ubuntu.pool.ntp.org", "operator": "NTP Pool", "kind": "pool", "host": "ubuntu.pool.ntp.org", "link": "https://www.ntppool.org/vendors.html" }
+  { "id": "pool-af", "name": "africa.pool.ntp.org", "operator": "NTP Pool", "kind": "pool", "host": "africa.pool.ntp.org", "link": "https://www.ntppool.org/zone/africa" }
 ]

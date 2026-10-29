@@ -1,58 +1,44 @@
 <script lang="ts">
-  // The Network page: which site each CDN serves this network from, in one quick check, and over time how the link
+  // The Network page: a map of where your ISP hands traffic to the big content networks, and over time how the link
   // from your ISP to the next network behaves. Neither depends on a resolver, so it sits apart from a run.
-  import { api } from '../lib/api';
   import { app } from '../lib/store.svelte';
-  import type { RollCall } from '../lib/types';
+  import { netmap } from '../lib/netmap.svelte';
   import Toolbar from '../components/Toolbar.svelte';
   import Icon from '../components/Icon.svelte';
-  import EdgeTable from '../components/EdgeTable.svelte';
+  import NetMapPanel from '../components/NetMapPanel.svelte';
   import BorderMonitor from '../components/BorderMonitor.svelte';
 
   // The view is in the path, so the sidebar's monitor link and a reload land on the same half.
   const view = $derived(app.route.name === 'network' && app.route.view === 'monitor' ? 'monitor' : 'edges');
   const show = (v: 'edges' | 'monitor') => app.navigate(v === 'monitor' ? '/network/monitor' : '/network', true);
-  let last = $state<RollCall | null>(null);
-  let loaded = $state(false);
-  let running = $state(false);
-  let error = $state('');
-
-  $effect(() => {
-    api
-      .get<{ last: RollCall | null }>('/api/network/edges')
-      .then((r) => (last = r.last))
-      .catch((e) => (error = (e as Error).message))
-      .finally(() => (loaded = true));
-  });
-
-  async function check() {
-    if (running) return;
-    running = true;
-    error = '';
-    try {
-      last = await api.post<RollCall>('/api/network/edges');
-    } catch (e) {
-      error = (e as Error).message;
-    } finally {
-      running = false;
-    }
-  }
+  const nm = netmap();
+  const blocked = $derived(app.env?.trace === 'needs_admin' || app.env?.trace === 'unsupported');
+  const prog = $derived(nm.data?.progress);
 </script>
 
 <div class="view-root">
-  <Toolbar title="Network" subtitle="Where the big CDNs serve this network from, and how its border links hold up">
+  <Toolbar title="Network" subtitle="Where your ISP hands traffic to the big content networks, and how its border links hold up">
     {#snippet center()}
-      <span class="beta" title="New in this release: the readings are real, the wording and thresholds may still change.">Beta</span>
+      <span
+        class="beta"
+        title="New in this release: the readings are real, the wording and thresholds may still change. Border inference has only been validated on one connection."
+        >Beta</span
+      >
       <div class="segmented" role="tablist" aria-label="View">
-        <button role="tab" aria-selected={view === 'edges'} onclick={() => show('edges')}>Served from</button>
+        <button role="tab" aria-selected={view === 'edges'} onclick={() => show('edges')}>Map</button>
         <button role="tab" aria-selected={view === 'monitor'} onclick={() => show('monitor')}>Over time</button>
       </div>
     {/snippet}
     {#snippet actions()}
       {#if view === 'edges'}
-        <button class="btn primary" disabled={running || !loaded} title={running ? 'Asking each CDN' : 'Ask each CDN which site is answering you'} onclick={check}>
-          <Icon name="play" size={12} />{running ? 'Checking' : last ? 'Check again' : 'Check'}
-        </button>
+        {#if nm.running}
+          <span class="progress" role="status">Mapping{prog ? `, ${prog.done} of ${prog.total}` : ''}</span>
+          <button class="btn" onclick={nm.cancel}>Cancel</button>
+        {:else}
+          <button class="btn primary" disabled={!nm.loaded || blocked} title="Trace the way to each destination and draw where your ISP hands it off" onclick={nm.start}>
+            <Icon name="play" size={12} />Map
+          </button>
+        {/if}
       {/if}
     {/snippet}
   </Toolbar>
@@ -62,7 +48,7 @@
       <BorderMonitor />
     {/if}
     <div class="content scroll wrap" style:display={view === 'monitor' ? 'none' : null}>
-      <EdgeTable {last} {loaded} {running} {error} {check} />
+      <NetMapPanel {nm} />
     </div>
   </div>
 </div>
@@ -76,6 +62,11 @@
     font-size: var(--t-xs);
     color: var(--ink-3);
     letter-spacing: 0.02em;
+  }
+  .progress {
+    margin-right: 8px;
+    font-size: var(--t-xs);
+    color: var(--ink-3);
   }
   .wrap > :global(*) {
     max-width: 1280px;

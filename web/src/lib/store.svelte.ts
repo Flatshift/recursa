@@ -347,7 +347,7 @@ class AppState {
     if (this.draft.live) {
       const n = this.draft.resolvers.length;
       const through = n === 1 ? 'the selected resolver' : `each of the ${n} selected resolvers`;
-      const msg = `Run the live threat test? It looks up about 40 real malware and phishing hosts through ${through}. Security tools on your network may flag the lookups.`;
+      const msg = `Run the live threat test? It looks up about 20 real malware hosts through ${through}. Security tools on your network may flag the lookups.`;
       if (!(await confirmAction(msg, 'Start run'))) return;
     }
     this.saveDraft();

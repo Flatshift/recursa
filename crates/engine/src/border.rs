@@ -203,11 +203,22 @@ fn probe(pair: &Pair, id: u16, ts: i64) -> Sample {
 async fn rediscover(app: &AppState, roll: &RollCall, now: i64) -> Vec<Pair> {
     let res = Resolve::new(app.system.read().unwrap().clone());
     let home = roll.you.asn;
-    let jobs = roll.edges.iter().filter_map(|e| e.ip.map(|ip| (e.cdn, ip, e.asn))).enumerate().map(|(i, (cdn, ip, asn))| {
-        let res = res.clone();
-        tokio::task::spawn_blocking(move || discover(ip, cdn, asn, home, DISCOVER_ID + i as u16, &res))
-    });
-    let found: Vec<Pair> = futures_util::future::join_all(jobs).await.into_iter().filter_map(|r| r.ok().flatten()).collect();
+    // A network map run under a week old already traced to each edge: use its trace and skip tracing again.
+    let mapped = crate::netmap::latest_traces(&app.store, now).unwrap_or_default();
+    let mut found: Vec<Pair> = Vec::new();
+    let mut jobs = Vec::new();
+    for (i, (cdn, ip, asn)) in roll.edges.iter().filter_map(|e| e.ip.map(|ip| (e.cdn, ip, e.asn))).enumerate() {
+        let from_map =
+            mapped.iter().find(|m| m.target.id == cdn && m.target.addr == ip).and_then(|m| pair_from(&m.trace, cdn, asn, home, now));
+        match from_map {
+            Some(pair) => found.push(pair),
+            None => {
+                let res = res.clone();
+                jobs.push(tokio::task::spawn_blocking(move || discover(ip, cdn, asn, home, DISCOVER_ID + i as u16, &res)));
+            }
+        }
+    }
+    found.extend(futures_util::future::join_all(jobs).await.into_iter().filter_map(|r| r.ok().flatten()));
     let current = app.store.border_pairs(now);
     for new in found {
         match current.iter().find(|p| p.retired_at.is_none() && p.cdn == new.cdn) {

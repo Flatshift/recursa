@@ -131,7 +131,27 @@ impl Store {
                far_asn INTEGER, far_holder TEXT, kind TEXT NOT NULL, found_at INTEGER NOT NULL, retired_at INTEGER);
              CREATE TABLE IF NOT EXISTS border_sample(
                ts INTEGER NOT NULL, pair INTEGER NOT NULL, near_ms REAL, far_ms REAL);
-             CREATE INDEX IF NOT EXISTS border_sample_ts ON border_sample(ts);",
+             CREATE INDEX IF NOT EXISTS border_sample_ts ON border_sample(ts);
+             CREATE TABLE IF NOT EXISTS pfx2as(
+               prefix INTEGER NOT NULL, len INTEGER NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS pfx2as6(
+               prefix BLOB NOT NULL, len INTEGER NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS asrel(
+               a INTEGER NOT NULL, b INTEGER NOT NULL, rel INTEGER NOT NULL, PRIMARY KEY (a, b));
+             CREATE INDEX IF NOT EXISTS asrel_b ON asrel(b);
+             CREATE TABLE IF NOT EXISTS netmap_run(
+               id INTEGER PRIMARY KEY CHECK (id = 1), ts INTEGER NOT NULL, body TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS pdb_sync(\"table\" TEXT PRIMARY KEY, synced_at INTEGER NOT NULL, since TEXT);
+             CREATE TABLE IF NOT EXISTS pdb_ix(
+               id INTEGER PRIMARY KEY, name TEXT, name_long TEXT, city TEXT, country TEXT, updated TEXT);
+             CREATE TABLE IF NOT EXISTS pdb_ixpfx(id INTEGER PRIMARY KEY, ix_id INTEGER, prefix TEXT, updated TEXT);
+             CREATE TABLE IF NOT EXISTS pdb_netixlan(
+               id INTEGER PRIMARY KEY, ix_id INTEGER, asn INTEGER, ipaddr4 TEXT, ipaddr6 TEXT, speed INTEGER, updated TEXT);
+             CREATE TABLE IF NOT EXISTS pdb_fac(
+               id INTEGER PRIMARY KEY, name TEXT, address1 TEXT, city TEXT, country TEXT, updated TEXT);
+             CREATE TABLE IF NOT EXISTS pdb_netfac(id INTEGER PRIMARY KEY, fac_id INTEGER, asn INTEGER, updated TEXT);
+             CREATE TABLE IF NOT EXISTS rdap_block(
+               start BLOB PRIMARY KEY, end BLOB NOT NULL, body TEXT NOT NULL, fetched_at INTEGER NOT NULL);",
         )?;
         let mut conn = conn;
         // Older databases: runs had no `saved` flag.
@@ -612,6 +632,131 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Run `f` on the database connection. For the network map's datasets, which keep their own SQL beside the code
+    /// that reads them.
+    pub(crate) fn with_conn<T>(&self, f: impl FnOnce(&mut Connection) -> T) -> T {
+        f(&mut self.conn.lock().unwrap())
+    }
+
+    /// Keep `body` as the one stored network map run.
+    pub fn netmap_put(&self, ts: i64, body: &str) {
+        let c = self.conn.lock().unwrap();
+        let _ = c.execute("INSERT OR REPLACE INTO netmap_run(id, ts, body) VALUES(1, ?1, ?2)", params![ts, body]);
+    }
+
+    /// The stored network map run: when it was made, and its JSON.
+    pub fn netmap_last(&self) -> Option<(i64, String)> {
+        let c = self.rd();
+        c.query_row("SELECT ts, body FROM netmap_run WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?))).optional().ok().flatten()
+    }
+
+    /// Replace the whole prefix-to-network table with `rows` (prefix as a number, length, origin, whether several
+    /// networks announce it), in one transaction: a failure leaves the old table.
+    pub fn pfx2as_replace(&self, rows: impl Iterator<Item = (u32, u8, u32, bool)>) -> rusqlite::Result<usize> {
+        let mut c = self.conn.lock().unwrap();
+        let tx = c.transaction()?;
+        tx.execute("DELETE FROM pfx2as", [])?;
+        let mut n = 0;
+        {
+            let mut st = tx.prepare("INSERT INTO pfx2as(prefix, len, asn, moas) VALUES(?1,?2,?3,?4)")?;
+            for (prefix, len, asn, moas) in rows {
+                st.execute(params![prefix, len, asn, moas])?;
+                n += 1;
+            }
+        }
+        tx.commit()?;
+        Ok(n)
+    }
+
+    /// Hand every prefix-to-network row to `f`, on the read-only connection.
+    pub fn pfx2as_each(&self, mut f: impl FnMut(u32, u8, u32, bool)) {
+        let c = self.rd();
+        let Ok(mut st) = c.prepare("SELECT prefix, len, asn, moas FROM pfx2as") else { return };
+        let Ok(rows) = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))) else { return };
+        for (p, l, a, m) in rows.flatten() {
+            f(p, l, a, m);
+        }
+    }
+
+    pub fn pfx2as_count(&self) -> usize {
+        let c = self.rd();
+        c.query_row("SELECT COUNT(*) FROM pfx2as", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize
+    }
+
+    /// [`Store::pfx2as_replace`] for the IPv6 table: the prefix is the masked network as a number, stored as its 16
+    /// big-endian bytes.
+    pub fn pfx2as6_replace(&self, rows: impl Iterator<Item = (u128, u8, u32, bool)>) -> rusqlite::Result<usize> {
+        let mut c = self.conn.lock().unwrap();
+        let tx = c.transaction()?;
+        tx.execute("DELETE FROM pfx2as6", [])?;
+        let mut n = 0;
+        {
+            let mut st = tx.prepare("INSERT INTO pfx2as6(prefix, len, asn, moas) VALUES(?1,?2,?3,?4)")?;
+            for (prefix, len, asn, moas) in rows {
+                st.execute(params![&prefix.to_be_bytes()[..], len, asn, moas])?;
+                n += 1;
+            }
+        }
+        tx.commit()?;
+        Ok(n)
+    }
+
+    /// Hand every IPv6 prefix-to-network row to `f`, on the read-only connection.
+    pub fn pfx2as6_each(&self, mut f: impl FnMut(u128, u8, u32, bool)) {
+        let c = self.rd();
+        let Ok(mut st) = c.prepare("SELECT prefix, len, asn, moas FROM pfx2as6") else { return };
+        let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get(1)?, r.get(2)?, r.get(3)?))) else { return };
+        for (p, l, a, m) in rows.flatten() {
+            if let Ok(b) = <[u8; 16]>::try_from(p.as_slice()) {
+                f(u128::from_be_bytes(b), l, a, m);
+            }
+        }
+    }
+
+    pub fn pfx2as6_count(&self) -> usize {
+        let c = self.rd();
+        c.query_row("SELECT COUNT(*) FROM pfx2as6", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize
+    }
+
+    /// Replace the whole AS-relationship table with `rows` (a, b, rel: -1 = a provides for b, 0 = peers), in one
+    /// transaction: a failure leaves the old table.
+    pub fn asrel_replace(&self, rows: &[(u32, u32, i8)]) -> rusqlite::Result<()> {
+        let mut c = self.conn.lock().unwrap();
+        let tx = c.transaction()?;
+        tx.execute("DELETE FROM asrel", [])?;
+        {
+            let mut st = tx.prepare("INSERT OR REPLACE INTO asrel(a, b, rel) VALUES(?1,?2,?3)")?;
+            for (a, b, rel) in rows {
+                st.execute(params![a, b, rel])?;
+            }
+        }
+        tx.commit()
+    }
+
+    pub fn asrel_count(&self) -> usize {
+        let c = self.rd();
+        c.query_row("SELECT COUNT(*) FROM asrel", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize
+    }
+
+    /// Every stored pair with at least one side in `asns`, as stored.
+    pub fn asrel_touching(&self, asns: &[u32]) -> Vec<(u32, u32, i8)> {
+        let mut out = Vec::new();
+        let c = self.rd();
+        // Chunked to stay under SQLite's variable limit.
+        for chunk in asns.chunks(400) {
+            let marks = vec!["?"; chunk.len()].join(",");
+            let Ok(mut st) = c.prepare(&format!("SELECT a, b, rel FROM asrel WHERE a IN ({marks}) OR b IN ({marks})")) else { continue };
+            let args = chunk.iter().chain(chunk.iter());
+            let Ok(rows) = st.query_map(rusqlite::params_from_iter(args), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))) else { continue };
+            out.extend(rows.flatten());
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+}
+
 /// One server's answer (or failure) in one NTP monitoring cycle.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NtpRow {
@@ -899,6 +1044,44 @@ mod tests {
         remove(&path);
         let path = temp_path();
         assert_eq!(Store::open(path.clone()).unwrap().setting("housekeeping"), None);
+        remove(&path);
+    }
+
+    #[test]
+    fn netmap_tables_replace_wholesale_and_keep_one_run() {
+        let path = temp_path();
+        let store = Store::open(path.clone()).unwrap();
+        // The prefix table is swapped in one go: the second load leaves none of the first.
+        assert_eq!(store.pfx2as_replace([(0x0800_0000, 8, 1, false), (0x0808_0800, 24, 15169, true)].into_iter()).unwrap(), 2);
+        assert_eq!(store.pfx2as_replace([(0x0102_0300, 24, 7, false)].into_iter()).unwrap(), 1);
+        let mut rows = Vec::new();
+        store.pfx2as_each(|p, l, a, m| rows.push((p, l, a, m)));
+        assert_eq!((store.pfx2as_count(), rows), (1, vec![(0x0102_0300, 24, 7, false)]));
+        // The IPv6 table is the same, with 16-byte prefixes.
+        let net6 = 0x2001_0db8_u128 << 96;
+        assert_eq!(store.pfx2as6_replace([(net6, 32, 1, false), (net6 | (1 << 80), 48, 2, true)].into_iter()).unwrap(), 2);
+        assert_eq!(store.pfx2as6_replace([(net6 | (1 << 80), 48, 7, true)].into_iter()).unwrap(), 1);
+        let mut rows6 = Vec::new();
+        store.pfx2as6_each(|p, l, a, m| rows6.push((p, l, a, m)));
+        assert_eq!((store.pfx2as6_count(), rows6), (1, vec![(net6 | (1 << 80), 48, 7, true)]));
+        // The relationship table is swapped whole too, and read by either side.
+        store.asrel_replace(&[(9, 9, 0)]).unwrap();
+        store.asrel_replace(&[(1299, 46887, -1), (2906, 46887, 0), (6461, 20055, -1)]).unwrap();
+        assert_eq!(store.asrel_count(), 3);
+        assert_eq!(store.asrel_touching(&[46887]), [(1299, 46887, -1), (2906, 46887, 0)]);
+        assert_eq!(store.asrel_touching(&[1299, 20055]), [(1299, 46887, -1), (6461, 20055, -1)]);
+        assert!(store.asrel_touching(&[7]).is_empty() && store.asrel_touching(&[]).is_empty());
+        // Only the last run is kept.
+        assert_eq!(store.netmap_last(), None);
+        store.netmap_put(10, "{\"a\":1}");
+        store.netmap_put(20, "{\"a\":2}");
+        assert_eq!(store.netmap_last(), Some((20, "{\"a\":2}".to_string())));
+        // The PeeringDB tables exist and start empty.
+        for t in ["ix", "ixpfx", "netixlan", "fac", "netfac"] {
+            let n: i64 = store.with_conn(|c| c.query_row(&format!("SELECT COUNT(*) FROM pdb_{t}"), [], |r| r.get(0)).unwrap());
+            assert_eq!(n, 0, "{t}");
+        }
+        drop(store);
         remove(&path);
     }
 }

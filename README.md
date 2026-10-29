@@ -1,7 +1,7 @@
 # Recursa
 
 A recursive DNS resolver benchmark that measures from **your** computer. It compares public resolvers (Cloudflare, Google,
-Quad9, OpenDNS, AdGuard, Control D, NextDNS, Mullvad, DNS4EU, …), your system or ISP resolver, and any custom server. It
+Quad9, OpenDNS, AdGuard, Control D, NextDNS, DNS4EU, …), your system or ISP resolver, and any custom server. It
 covers latency, what each resolver actually does, how well it maps you onto CDNs, and how reliable it is.
 
 It comes two ways, built from the same engine and interface:
@@ -49,7 +49,7 @@ Or build it yourself (Rust 1.88+, Node 22.12+, Python 3):
 | **Link check** | While a run measures, Recursa pings your default gateway every 100 ms and times the replies with the same kernel stamps. If the link stalls (a Wi-Fi scan, a busy channel), the run says its scores are inflated, and on macOS names the likely cause. The scores are not changed. |
 | **Reliability** | Live operator status (Cloudflare, Quad9, AdGuard, Cisco Umbrella/OpenDNS) judged for your country, a sourced incident history, and optional background monitoring that tests each resolver's primary and secondary server and builds an uptime record from your network. |
 | **Time (NTP)** | How accurate and how fast about 60 public time servers are from your network: offset, an error bound, latency, jitter, stratum and source, and each server's distance from the consensus of all of them (which is also how far your clock is off). Queries go out eight seconds apart, a server is left alone for ten minutes after it is asked, and a Kiss-o'-Death is obeyed and remembered; a Features view sets leap-second handling, anycast, policy, IPv6 and a live NTS key-exchange check side by side. |
-| **Network** (beta) | Where six big CDNs (Cloudflare, Fastly, CloudFront, Google, Meta, Akamai) serve your network from, read from the site each names in its own headers: the site, the round trip to it against the fibre floor, and whose network the edge sits in. Over time, a light background probe of the two routers either side of your ISP's border towards each CDN; when only the far one slows at the same hours each day, the queue is on the link between them. |
+| **Network** (beta) | A map of where your ISP hands traffic off. Recursa traces the way to about twenty sites (the six big CDNs, public DNS and an NTP server) with its own echo probes, names each router's network from a local copy of CAIDA's prefix table, and draws the networks in path order with the hand-off between them. With your permission it adds exchange and facility names from PeeringDB, and names address space that no network announces for the holder its regional registry lists (one RDAP query per block, kept a month). Every sentence shows its evidence: seen in the trace, read from a list, or inferred. A table view carries the same findings. Over time, a light background probe of the two routers either side of your ISP's border towards each CDN; when only the far one slows at the same hours each day, the queue is on the link between them. |
 | **NTP over time** | Optional background monitoring of up to eight time servers, one light query per server every 15 minutes or more while Recursa runs, kept for weeks: each server's uptime, offset and delay, and how your own clock drifts. |
 
 Results are labeled by provenance: **●** measured from your network, **○** published by the operator, **–** unknown.

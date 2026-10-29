@@ -4,11 +4,25 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 
 ## Unreleased
 
-- **Network page (beta).** Which site each of six CDNs serves this network from, read from the CDN's own headers, with the
-  round trip against the fibre floor and whose network the edge sits in. An "Over time" view probes the two routers
+- Network map: Apple, Microsoft and Netflix join the destinations.
+- Network map: destinations are traced over IPv6 as well; a different IPv6 route is drawn and highlighted.
+- **Network page (beta).** A map of where your ISP hands traffic off: Recursa traces the way to about twenty sites,
+  names each router's network from a prefix table it fetches from CAIDA, and draws the path with the hand-off between
+  networks, an exchange name from PeeringDB if you allow it, and the evidence under every sentence. Routers that don't
+  answer between two networks are counted on the line between them, not drawn as a network of their own, and a
+  destination that never answers is still drawn at the end of its path, marked not reached. A table view shows the
+  same findings. Router names are looked up only if you turn that on, and so are the registry records of address
+  space that no network announces: with that on, an unknown network past your ISP is named for the holder the
+  regional registry lists, cited as registry evidence with a low grade. An "Over time" view probes the two routers
   either side of your ISP's border towards each CDN in the background and says, after a day, whether the evening
   slowdown sits on the link between them or before it.
 - **Route-origin filtering is tested live.** Each resolver is asked for a name served only from an RPKI-invalid route, over IPv4 and IPv6, through Check My DNS by DNS-OARC. This replaces the RoVista operator score, which did not cover every resolver.
+- **Network map links name the relationship.** Links now say transit, peering or customer, from CAIDA's AS
+  relationships, where it lists the pair.
+- **Live threat test uses malware feeds only.** The OpenPhish feed is no longer downloaded; live hosts come from
+  URLhaus and ThreatView.
+- **Default sets trimmed.** pool.ntp.org and its vendor zones are no longer time-server defaults, and CleanBrowsing
+  is no longer a default resolver. Mullvad is removed, since its public DNS ends on November 2, 2026.
 
 ## 0.4.3 (2026-10-26)
 

@@ -108,10 +108,11 @@
     "links": { "home": "https://adguard-dns.io/en/public-dns.html", "privacy": "https://adguard-dns.io/en/privacy.html" }
   },
   {
-    "id": "cleanbrowsing-security", "provider": "CleanBrowsing", "name": "185.228.168.9", "variant": "Security", "group": "public", "default": true,
+    "id": "cleanbrowsing-security", "provider": "CleanBrowsing", "name": "185.228.168.9", "variant": "Security", "group": "public", "default": false,
     "ipv4": ["185.228.168.9", "185.228.169.9"], "ipv6": ["2a0d:2a00:1::2", "2a0d:2a00:2::2"],
     "dot": "security-filter-dns.cleanbrowsing.org", "doh": "https://doh.cleanbrowsing.org/doh/security-filter/", "status_feed": null,
     "published": { "filtering": ["malware", "phishing"], "jurisdiction": "United States" },
+    "notes": "CleanBrowsing's terms ask for written consent before publishing benchmarks of its service, so it is off by default. Select it to test it yourself.",
     "links": { "home": "https://cleanbrowsing.org/filters/", "privacy": "https://cleanbrowsing.org/privacy/" }
   },
   {
@@ -119,6 +120,7 @@
     "ipv4": ["185.228.168.168", "185.228.169.168"], "ipv6": ["2a0d:2a00:1::", "2a0d:2a00:2::"],
     "dot": "family-filter-dns.cleanbrowsing.org", "doh": "https://doh.cleanbrowsing.org/doh/family-filter/", "status_feed": null,
     "published": { "filtering": ["malware", "phishing", "adult"], "jurisdiction": "United States" },
+    "notes": "CleanBrowsing's terms ask for written consent before publishing benchmarks of its service, so it is off by default. Select it to test it yourself.",
     "links": { "home": "https://cleanbrowsing.org/filters/", "privacy": "https://cleanbrowsing.org/privacy/" }
   },
   {
@@ -149,22 +151,6 @@
     "published": { "filtering": [], "doq": true, "jurisdiction": "United States" },
     "notes": "Without a profile ID NextDNS applies no filtering. Add your profile as a custom DoH resolver to test your own configuration.",
     "links": { "home": "https://nextdns.io/", "privacy": "https://nextdns.io/privacy" }
-  },
-  {
-    "id": "mullvad", "provider": "Mullvad", "name": "dns.mullvad.net", "variant": "Unfiltered", "group": "public", "default": false, "udp": false,
-    "ipv4": ["194.242.2.2"], "ipv6": ["2a07:e340::2"],
-    "dot": "dns.mullvad.net", "doh": "https://dns.mullvad.net/dns-query", "status_feed": null,
-    "published": { "filtering": [], "jurisdiction": "Sweden" },
-    "notes": "Encrypted only. Mullvad doesn't answer plain DNS on port 53, so test it over DoT or DoH.",
-    "links": { "home": "https://mullvad.net/en/help/dns-over-https-and-dns-over-tls", "privacy": "https://mullvad.net/en/help/privacy-policy" }
-  },
-  {
-    "id": "mullvad-base", "provider": "Mullvad", "name": "base.dns.mullvad.net", "variant": "Ads + trackers + malware", "group": "public", "default": false, "udp": false,
-    "ipv4": ["194.242.2.4"], "ipv6": ["2a07:e340::4"],
-    "dot": "base.dns.mullvad.net", "doh": "https://base.dns.mullvad.net/dns-query", "status_feed": null,
-    "published": { "filtering": ["ads", "trackers", "malware"], "jurisdiction": "Sweden" },
-    "notes": "Encrypted only. Mullvad doesn't answer plain DNS on port 53.",
-    "links": { "home": "https://mullvad.net/en/help/dns-over-https-and-dns-over-tls", "privacy": "https://mullvad.net/en/help/privacy-policy" }
   },
   {
     "id": "dns4eu", "provider": "DNS4EU", "name": "86.54.11.1", "variant": "Protective", "group": "public", "default": false,

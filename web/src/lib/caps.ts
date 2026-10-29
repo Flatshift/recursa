@@ -180,7 +180,6 @@ const liveExplain = (feed: string) =>
 /** The rows the run's live threat test adds to the Blocking group, shown only when the run has its results. */
 export const LIVE_CAPS: { key: string; label: string; category: 'malware' | 'phishing'; explain: string }[] = [
   { key: 'live_malware', label: 'Live malware', category: 'malware', explain: liveExplain('URLhaus and ThreatView malware feeds') },
-  { key: 'live_phishing', label: 'Live phishing', category: 'phishing', explain: liveExplain('OpenPhish phishing feed') },
 ];
 
 export const PUBLISHED_ONLY: { key: string; label: string; explain: string; get: (p: Published) => boolean | null | undefined; ref?: string }[] = [

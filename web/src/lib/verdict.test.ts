@@ -433,7 +433,7 @@ describe('verdict: Best protection', () => {
       expect(p.resolverId).toBe('b');
       expect(p.figure).toBe('blocked 33 of 40');
       expect(p.note).toBe('live malware 18 of 20, phishing 15 of 20, DNSSEC');
-      expect(p.evidence).toContain("today's URLhaus, ThreatView and OpenPhish feeds; next best A 15 of 40");
+      expect(p.evidence).toContain("today's URLhaus and ThreatView feeds; next best A 15 of 40");
       expect(p.graph).toEqual({
         kind: 'share',
         cands: [

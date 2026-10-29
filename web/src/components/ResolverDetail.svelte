@@ -229,7 +229,7 @@
     trace: `Sends ICMP probes with rising TTL to ${ip}, about 2 s`,
     dive: 'Sends 18 ordinary queries, spaced like the benchmark, about 3 s',
     checks: 'About 90 queries for test names: truncation, TTLs, negative caching, DNSSEC, caches, transports; about 15 s',
-    live: 'Asks for live malware and phishing hosts from today’s feeds; up to a minute',
+    live: 'Asks for live malware hosts from today’s feeds; up to a minute',
   });
   // What each check does, while it has no result.
   const hints = $derived<Record<CheckKind, string>>({
@@ -237,7 +237,7 @@
     dive: 'Sample 18 queries sends a popular name twice, three made-up names, the popular name 12 more times and one last ask two seconds later: round trips, the cost of a full lookup and whether answers come from cache.',
     checks:
       'Check behaviour sends about 90 queries for test names: a large signed answer over UDP and TCP, records with known TTLs, signed names with known faults, made-up names asked in rounds, and ten asks over each transport it offers.',
-    live: "Check live feeds takes hosts from today's URLhaus and ThreatView malware feeds and the OpenPhish phishing feed, keeps up to 20 of each that still resolve through an unfiltered resolver, and asks this resolver for them.",
+    live: "Check live feeds takes hosts from today's URLhaus and ThreatView malware feeds, keeps up to 20 that still resolve through an unfiltered resolver, and asks this resolver for them.",
   });
   const traceWhy = $derived(
     traceCap === 'needs_admin' ? `Needs administrator rights on ${app.env?.platform === 'windows' ? 'Windows' : 'this computer'}` : null,

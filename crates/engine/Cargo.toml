@@ -9,8 +9,10 @@ repository.workspace = true
 [dependencies]
 aes-siv.workspace = true
 bytes.workspace = true
+bzip2 = "0.6"
 dirs.workspace = true
 fastrand.workspace = true
+flate2.workspace = true
 futures-util.workspace = true
 h2.workspace = true
 http.workspace = true

@@ -246,7 +246,7 @@ mod tests {
         assert_eq!(cf.only_server(1).primary(false), "1.0.0.1".parse().ok());
         assert_eq!(cf.only_server(1).primary(true), None, "the secondary alone must not fall back to the primary's IPv6");
         // One address, or none beyond IPv6, still works.
-        assert_eq!(by_id("mullvad").plain_servers().len(), 1);
+        assert_eq!(by_id("he").plain_servers().len(), 1);
         assert_eq!(Resolver::custom("192.0.2.9".parse().unwrap(), None, None, None).plain_servers(), ["192.0.2.9"]);
         let v6 = Resolver::custom("2001:db8::53".parse().unwrap(), None, None, None);
         assert_eq!(v6.only_server(0).primary(true), "2001:db8::53".parse().ok());

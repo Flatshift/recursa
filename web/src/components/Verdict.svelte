@@ -132,7 +132,7 @@
             </p>
           {/if}
           <p>
-            With the live threat test, Best protection ranks by the share of live malware and phishing hosts a resolver blocked,
+            With the live threat test, Best protection ranks by the share of live malware hosts a resolver blocked,
             and skips any known not to validate DNSSEC; ties go to the fastest cached answers. Without it, a resolver
             needs malware blocking and DNSSEC, and the pick holds the most of malware blocking, phishing blocking, DNSSEC and
             rebinding protection, with ties again going to the fastest cached answers. Test names show that blocking is on, not how much it catches.
