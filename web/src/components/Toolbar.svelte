@@ -116,7 +116,7 @@
     flex: 0 1 auto;
   }
   h1 {
-    font-size: var(--t-base);
+    font-size: 1.125rem;
     font-weight: 660;
     letter-spacing: -0.01em;
     white-space: nowrap;

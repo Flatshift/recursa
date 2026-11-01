@@ -148,7 +148,7 @@
     stroke: var(--rule);
   }
   .ax {
-    font-size: 10px;
+    font-size: var(--t-2xs);
     fill: var(--ink-3);
     font-variant-numeric: tabular-nums;
   }

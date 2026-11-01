@@ -85,10 +85,10 @@
       <header class="head" ontouchstart={mobile ? pullStart : undefined} ontouchmove={mobile ? pullMove : undefined} ontouchend={mobile ? pullEnd : undefined} ontouchcancel={mobile ? pullEnd : undefined}>
         {#if mobile}<span class="grabber" aria-hidden="true"></span>{/if}
         <div class="who">
-          <p class="kicker">
+          <h2 id="sheet-title">{label(resolver.provider, resolver.variant)}</h2>
+          <p class="kind">
             {resolver.group === 'system' ? 'Your network' : resolver.group === 'custom' ? 'Custom resolver' : resolver.group === 'legacy' ? 'Legacy resolver' : 'Public resolver'}{resolver.published.jurisdiction ? ` · ${resolver.published.jurisdiction}` : ''}
           </p>
-          <h2 id="sheet-title">{label(resolver.provider, resolver.variant)}</h2>
           <p class="addrs mono">
             {[...resolver.ipv4, ...resolver.ipv6].join(' · ')}
           </p>
@@ -220,8 +220,9 @@
     flex: 1 0 auto;
     justify-content: center;
   }
-  .kicker {
-    font-size: var(--t-xs);
+  .kind {
+    margin-top: 2px;
+    font-size: var(--t-sm);
     color: var(--ink-3);
   }
   .who {

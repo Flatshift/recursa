@@ -171,8 +171,9 @@
     place-items: center;
     width: 220px;
     height: 220px;
-    /* A pool of surface under the mark, so the placeholder rows fade out around it instead of running through it. */
-    background: radial-gradient(closest-side, var(--surface) 62%, color-mix(in oklch, var(--surface) 0%, transparent));
+    /* A disc of surface under the mark, so the placeholder rows stop at it instead of running through it. */
+    background: var(--surface);
+    border-radius: 50%;
   }
   svg {
     overflow: visible;

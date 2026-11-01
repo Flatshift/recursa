@@ -668,8 +668,8 @@
     max-width: 100ch;
   }
   .notice.warn {
-    background: var(--warn-soft);
-    border: 1px solid color-mix(in oklch, var(--warning) 45%, transparent);
+    background: var(--surface);
+    border: 1px solid var(--rule);
   }
   .notice :global(svg) {
     flex: none;

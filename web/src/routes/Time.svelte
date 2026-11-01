@@ -947,6 +947,7 @@
 <style>
   .wrap > :global(*) {
     max-width: 1280px;
+    min-width: 0;
   }
   .wrap {
     display: grid;
@@ -972,15 +973,17 @@
   }
   .sum {
     display: flex;
-    flex: 1;
+    flex: 1 1 240px;
     min-width: 0;
-    gap: 10px;
+    flex-wrap: wrap;
+    gap: 2px 10px;
     align-items: baseline;
     font-size: var(--t-xs);
     color: var(--ink-2);
   }
   .sum .num {
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
   }
   .chosen {
     min-width: 0;

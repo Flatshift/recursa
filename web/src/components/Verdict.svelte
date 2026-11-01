@@ -74,9 +74,7 @@
 <section class="verdict" aria-labelledby="verdict-h" aria-busy={!v}>
   <div class="grid">
     <div class="lead">
-      <!-- The one place the brand shows inside the Mac app, so a screenshot of the results says where they came from. -->
-      <p class="eyebrow"><Mark size={15} />Recursa</p>
-      <h2 id="verdict-h">{sentence}</h2>
+      <h2 id="verdict-h" class:long={sentence.length > 72}>{sentence}</h2>
       {#if detail}
         <p class="detail" class:clamp>{detail}</p>
         {#if clamp}<button class="more" onclick={() => (more = true)}>More</button>{/if}
@@ -90,6 +88,8 @@
         <p class="caution" role="note"><Icon name="info" size={14} /><span><b>No reliability record.</b> {caution}</span></p>
       {/if}
       <div class="rule-line">
+        <!-- The one place the brand shows inside the Mac app, so a screenshot of the results says where they came from. -->
+        <span class="credit"><Mark size={13} />Recursa</span>
         How the picks work
         <Info label="How the picks work">
           <p>
@@ -218,14 +218,13 @@
     grid-template-columns: minmax(0, 1fr);
     gap: 20px;
   }
-  .eyebrow {
-    display: flex;
+  .credit {
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
-    margin-bottom: 8px;
-    font-size: var(--t-sm);
-    font-weight: 620;
-    letter-spacing: -0.01em;
+    gap: 5px;
+    order: 1;
+    margin-left: auto;
+    font-weight: 600;
     color: var(--ink-2);
   }
   h2 {
@@ -233,8 +232,13 @@
     font-weight: 600;
     letter-spacing: -0.02em;
     line-height: 1.14;
-    max-width: 24ch;
+    max-width: 32ch;
     text-wrap: balance;
+  }
+  /* A sentence that names two resolvers and their transports steps down a size so it holds to two lines. */
+  h2.long {
+    font-size: var(--t-xl);
+    max-width: 44ch;
   }
   .detail {
     margin-top: 10px;
@@ -420,7 +424,7 @@
     }
     .lead {
       display: grid;
-      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+      grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
       column-gap: 48px;
       align-items: start;
     }
@@ -535,7 +539,7 @@
   :global(html.mobile) .lead {
     display: contents;
   }
-  :global(html.mobile) .eyebrow {
+  :global(html.mobile) .credit {
     display: none;
   }
   :global(html.mobile) h2 {

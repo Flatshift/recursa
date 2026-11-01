@@ -370,12 +370,7 @@
   }
   .tablewrap {
     overflow-x: auto;
-    /* Scroll shadow: an edge shade that appears only while columns remain off to the right.
-       The local layer travels with the content and covers the shade at the end. */
-    background:
-      linear-gradient(to left, var(--surface) 40%, transparent) right / 48px 100% no-repeat local,
-      linear-gradient(to left, color-mix(in oklch, var(--ink) 14%, transparent), transparent) right / 18px 100% no-repeat scroll,
-      var(--surface);
+    background: var(--surface);
   }
   table {
     width: 100%;

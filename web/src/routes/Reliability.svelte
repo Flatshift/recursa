@@ -177,7 +177,7 @@
     <div class="content scroll wrap">
       <section class="verdict" aria-labelledby="rv-h">
         <div class="lead">
-          <h2 id="rv-h">{verdict?.sentence ?? (mon.data ? 'No record from this network yet.' : '')}</h2>
+          <h2 id="rv-h" class:long={(verdict?.sentence.length ?? 0) > 72}>{verdict?.sentence ?? (mon.data ? 'No record from this network yet.' : '')}</h2>
           {#if verdict}
             <p class="detail">{verdict.detail}</p>
           {:else if mon.data}
@@ -393,9 +393,13 @@
     font-weight: 600;
     letter-spacing: -0.02em;
     line-height: 1.14;
-    max-width: 24ch;
+    max-width: 32ch;
     text-wrap: balance;
     min-height: 1.14em;
+  }
+  h2#rv-h.long {
+    font-size: var(--t-xl);
+    max-width: 44ch;
   }
   .detail {
     margin-top: 10px;
@@ -442,7 +446,7 @@
   @container rverdict (min-width: 1060px) {
     .lead {
       display: grid;
-      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+      grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
       column-gap: 48px;
       align-items: start;
     }

@@ -210,7 +210,7 @@
     const few = (xs: string[]) => (xs.length > 3 ? `${xs.slice(0, 3).join(', ')} and ${xs.length - 3} more` : xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs[0]);
     if (gaps.length) {
       const listed = gaps.slice(0, 3).map((g) => `${g.l.line.label} (${few(g.who)})`);
-      detail += ` Gaps, marked ✕: ${listed.join(', ')}${gaps.length > 3 ? `, and ${gaps.length - 3} more` : ''}.`;
+      detail += ` Gaps: ${listed.join(', ')}${gaps.length > 3 ? `, and ${gaps.length - 3} more` : ''}.`;
     }
 
     const both = resolvers.filter((r) => capCell(run, r, 'dot').status === 'pass' && capCell(run, r, 'dot').prov === 'verified' && capCell(run, r, 'doh').status === 'pass' && capCell(run, r, 'doh').prov === 'verified');

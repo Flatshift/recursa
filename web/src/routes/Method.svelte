@@ -62,14 +62,14 @@
   </aside>
 
   <article>
-    <h1 class="page-title">How Recursa measures</h1>
+    <h2 class="page-title">How Recursa measures</h2>
     <p class="lede">
       This page tells how Recursa measures and what it sends where. It also shows how much time the tool itself adds to each
       result.
     </p>
 
     <section id="timing">
-      <h2>Timing</h2>
+      <h3>Timing</h3>
       <p>
         Each plain-DNS (UDP) target has its own connected socket, on a measurement thread apart from the web server. Recursa encodes
         each query before the clock starts. It takes the send stamp immediately before the <code>send()</code> system call. The
@@ -139,7 +139,7 @@
     </section>
 
     <section id="fairness">
-      <h2>Fairness</h2>
+      <h3>Fairness</h3>
       <ul>
         <li><b>Warm-up first.</b> Each target gets some queries that Recursa does not record. They fill the ARP, NAT and route caches, and put popular names into the resolver's cache. Recursa removes a target that never answers at this step, so the run does not wait on its timeouts.</li>
         <li><b>Interleaved rounds.</b> Each round sends one query to each target, in a new random order. Short congestion on your link thus hits resolvers at random, not the one under test at that moment.</li>
@@ -150,7 +150,7 @@
     </section>
 
     <section id="tests">
-      <h2>The three tests</h2>
+      <h3>The three tests</h3>
       <dl class="tests">
         <div>
           <dt><i class="key cached"></i>Cached</dt>
@@ -216,7 +216,7 @@
     </section>
 
     <section id="forwarders">
-      <h2>Your router or Pi-hole (dnsmasq)</h2>
+      <h3>Your router or Pi-hole (dnsmasq)</h3>
       <p>
         Most home routers, many ISP modems and Pi-hole use <b>dnsmasq</b>, a small DNS forwarder, to serve DNS on your network.
         Your devices ask it: it is the 192.168.x.x or 10.x.x.x address that your DHCP gives. It answers from its cache when it can,
@@ -255,7 +255,7 @@
     </section>
 
     <section id="interception">
-      <h2>Interception check</h2>
+      <h3>Interception check</h3>
       <p>
         Some routers, firewalls and Wi-Fi access points answer outbound port-53 traffic themselves and do not tell you (DNAT
         rules, or AP features such as UniFi DNS Assistance). Recursa uses two independent signals. First, it times TCP handshakes
@@ -278,7 +278,7 @@
     </section>
 
     <section id="probes">
-      <h2>Capability probes</h2>
+      <h3>Capability probes</h3>
       <p>
         Probes run after the latency tests. They use random labels, so no cache can answer them, not even a transparent proxy.
       </p>
@@ -295,7 +295,7 @@
     </section>
 
     <section id="cdn">
-      <h2>CDN mapping</h2>
+      <h3>CDN mapping</h3>
       <p>
         CDNs that steer by DNS choose an edge from the address that the query comes from. This is your subnet if the resolver sends
         EDNS Client Subnet and the CDN accepts it. If not, it is the resolver's own location. Each resolver looks up several
@@ -333,7 +333,7 @@
     </section>
 
     <section id="intel">
-      <h2>Network intel</h2>
+      <h3>Network intel</h3>
       <ul>
         <li>
           <b>RPKI:</b> checked on {here}, only if you turn it on in Settings. Recursa downloads the signed route data of the five regional
@@ -382,7 +382,7 @@
     </section>
 
     <section id="politeness">
-      <h2>Rate limits and politeness</h2>
+      <h3>Rate limits and politeness</h3>
       <p>
         Free public resolvers share their capacity. Some say that they will limit a client address that sends too much. Recursa
         sends each resolver one query at a time (sends go out at least 4 ms apart in Accurate mode, 1 ms in Quick), so a run sends a resolver tens
@@ -408,7 +408,7 @@
     </section>
 
     <section id="ntp">
-      <h2>Time (NTP)</h2>
+      <h3>Time (NTP)</h3>
       <p>
         The Time page asks public NTP servers for the time and compares them. One exchange records four times: T1 when {here}
         sent the request, T2 when the server received it, T3 when the server replied, and T4 when the reply arrived. The
@@ -531,7 +531,7 @@
     </section>
 
     <section id="footprint">
-      <h2>What Recursa sends where</h2>
+      <h3>What Recursa sends where</h3>
       <p>
         The web interface is served only on <code>127.0.0.1</code>. It refuses all other Host headers, which blocks DNS rebinding.
         It also requires a session token, which the page gets by trading the one-time code in the link Recursa opens or prints. Outbound, Recursa connects only to the resolvers you select, the
@@ -548,7 +548,7 @@
     </section>
 
     <section id="cli">
-      <h2>Command line</h2>
+      <h3>Command line</h3>
       <pre class="mono"><code>recursa                     # open the interface
 recursa run --samples 30    # benchmark the default set in the terminal
 recursa run --resolvers quad9,cloudflare --transports udp,doh --json
@@ -613,7 +613,7 @@ recursa list                # list resolver ids</code></pre>
     margin-top: 44px;
     scroll-margin-top: 80px;
   }
-  h2 {
+  h3 {
     font-size: var(--t-lg);
     font-weight: 650;
     margin-bottom: 10px;

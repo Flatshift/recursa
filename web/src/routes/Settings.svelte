@@ -392,6 +392,26 @@
     min-height: 0;
     flex: 1;
   }
+  /* A narrow window: the sections run across the top instead of taking half the width. */
+  @media (max-width: 560px) {
+    .panes {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    .nav {
+      border-right: 0;
+      border-bottom: 1px solid var(--rule);
+    }
+    .nav [role='tablist'] {
+      display: flex;
+      gap: 2px;
+      overflow-x: auto;
+    }
+    .nav .tab {
+      width: auto;
+      white-space: nowrap;
+    }
+  }
   .nav {
     padding: 10px 8px;
     background: var(--side);
@@ -427,6 +447,7 @@
   }
   .pane {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     align-content: start;
     gap: 14px;
     padding: 22px 28px 28px;
@@ -494,8 +515,9 @@
   }
   .row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 12px;
+    gap: 8px 12px;
     font-size: var(--t-sm);
   }
   .lbl {
