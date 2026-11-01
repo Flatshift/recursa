@@ -5,6 +5,10 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 ## Unreleased
 
 - Network map: the intro says it traces about 30 sites, not twenty.
+- Network intel: "Check My DNS unreachable" says why.
+- Network intel: the CDN edge count starts at zero instead of done, the network count leaves out resolvers with no
+  known exit, and screen readers reach each tile's detail. Progress mentions CDN edges only when that test is on.
+- Settings: in a narrow window the section list loses its side border and is announced as horizontal.
 
 ## 0.5.1 (2026-11-01)
 

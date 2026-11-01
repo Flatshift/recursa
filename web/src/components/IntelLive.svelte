@@ -60,7 +60,7 @@
   const flying = $derived(lanes.filter((r) => state(r) === 'run').length);
   // How many reported resolvers pass each check, and how many networks the queries leave from, for the foot.
   const tally = $derived(Array.from({ length: 3 }, (_, i) => Object.values(answers).filter((a) => a[i].status === 'pass').length));
-  const nets = $derived(new Set(Object.values(answers).map((a) => a[3].text)).size);
+  const nets = $derived(new Set(Object.values(answers).filter((a) => a[3].status !== 'unknown').map((a) => a[3].text)).size);
 
   const naming = $derived(run.cdn_naming);
   const stages = $derived.by((): Stage[] => {
@@ -74,13 +74,14 @@
         tone: 'var(--s-cached)',
       },
     ];
-    if (run.config.cdn && (naming || run.cdn)) {
-      const named = naming?.done ?? 0, toName = naming?.total ?? 0;
+    if (run.config.cdn && run.cdn) {
+      // The engine's count arrives with the first edge it names; until then the edges found are the total.
+      const named = naming?.done ?? 0, toName = naming?.total ?? Object.keys(run.cdn.edges).length;
       out.push({
         label: 'Name the CDN edges',
-        value: naming ? `${named} of ${toName} edges` : 'done',
-        share: naming && toName ? named / toName : 1,
-        state: !naming || named >= toName ? 'done' : 'now',
+        value: toName ? `${named} of ${toName} edges` : 'done',
+        share: toName ? named / toName : 1,
+        state: named >= toName ? 'done' : 'now',
         tone: 'var(--w-rose)',
       });
     }
@@ -123,17 +124,17 @@
           <span class="name"><b>{r.provider}</b> <span class="var">{r.variant}</span></span>
           {#if cached.get(r.id) != null}<span class="lat num">{ms(cached.get(r.id))} cached</span>{/if}
         </span>
-        <span class="tiles" aria-hidden="true">
+        <span class="tiles">
           <span class="group" style:--tone={GROUPS[0].tone} style:--n={GROUPS[0].n} style:--cols={1}>
-            <span class="tile {got?.[0].status ?? ''}" style:--k={0} title={got?.[0].tip}>{#if got}<Icon name={GLYPH[got[0].status]} size={12} />{/if}</span>
+            <span class="tile {got?.[0].status ?? ''}" style:--k={0} title={got?.[0].tip} role={got ? 'img' : undefined} aria-label={got?.[0].tip}>{#if got}<Icon name={GLYPH[got[0].status]} size={12} />{/if}</span>
           </span>
           <span class="group" style:--tone={GROUPS[1].tone} style:--n={GROUPS[1].n} style:--cols={2}>
             {#each [1, 2] as k}
-              <span class="tile {got?.[k].status ?? ''}" style:--k={k} title={got?.[k].tip}>{#if got}<Icon name={GLYPH[got[k].status]} size={12} />{/if}</span>
+              <span class="tile {got?.[k].status ?? ''}" style:--k={k} title={got?.[k].tip} role={got ? 'img' : undefined} aria-label={got?.[k].tip}>{#if got}<Icon name={GLYPH[got[k].status]} size={12} />{/if}</span>
             {/each}
           </span>
           <span class="group" style:--tone={GROUPS[2].tone} style:--n={GROUPS[2].n} style:--cols={1}>
-            <span class="tile net {got ? 'info' : ''}" style:--k={3} title={got?.[3].tip}>{#if got}{got[3].text}{/if}</span>
+            <span class="tile net {got ? 'info' : ''}" style:--k={3} title={got?.[3].tip} role={got ? 'img' : undefined} aria-label={got?.[3].tip}>{#if got}{got[3].text}{/if}</span>
           </span>
         </span>
         <span class="t num" aria-hidden="true">

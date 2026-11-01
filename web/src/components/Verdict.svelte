@@ -88,8 +88,6 @@
         <p class="caution" role="note"><Icon name="info" size={14} /><span><b>No reliability record.</b> {caution}</span></p>
       {/if}
       <div class="rule-line">
-        <!-- The one place the brand shows inside the Mac app, so a screenshot of the results says where they came from. -->
-        <span class="credit"><Mark size={13} />Recursa</span>
         How the picks work
         <Info label="How the picks work">
           <p>
@@ -145,6 +143,8 @@
           </p>
           <p>Plain-DNS targets that a device on your network answered are listed but never ranked.</p>
         </Info>
+        <!-- The one place the brand shows inside the Mac app, so a screenshot of the results says where they came from. -->
+        <span class="credit"><Mark size={13} />Recursa</span>
       </div>
     </div>
 
@@ -222,7 +222,6 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    order: 1;
     margin-left: auto;
     font-weight: 600;
     color: var(--ink-2);

@@ -77,14 +77,21 @@ pub enum Lookup {
 }
 
 /// One check's verdict from what the resolver did and what the server concluded (`succ`, `msg`).
-fn verdict(lookup: Option<&Lookup>, complete: Option<&(bool, String)>, answered_this_run: bool, reachable: bool) -> (Status, String) {
+fn verdict(
+    lookup: Option<&Lookup>,
+    complete: Option<&(bool, String)>,
+    answered_this_run: bool,
+    unreachable: Option<&str>,
+) -> (Status, String) {
     match (lookup, complete) {
         (Some(Lookup::Local(e)), _) => (Status::NotTested, format!("The test query never left this computer: {e}")),
         (Some(Lookup::Timeout), _) if !answered_this_run => (Status::NotTested, "The resolver didn't answer the test name".into()),
         (Some(_), Some((true, msg))) => (Status::Filtered, msg.clone()),
         (Some(_), Some((false, msg))) => (Status::Unfiltered, msg.clone()),
-        _ if reachable => (Status::NotTested, "Check My DNS didn't finish".into()),
-        _ => (Status::NotTested, "Check My DNS unreachable".into()),
+        _ => match unreachable {
+            Some(why) => (Status::NotTested, format!("Check My DNS unreachable: {why}")),
+            None => (Status::NotTested, "Check My DNS didn't finish".into()),
+        },
     }
 }
 
@@ -325,20 +332,30 @@ impl Socket {
     }
 }
 
-async fn connect(ws: &reqwest::Client) -> Option<Socket> {
+/// Open the websocket, or say why it wouldn't open.
+async fn connect(ws: &reqwest::Client, url: &str) -> Result<Socket, String> {
     let resp = ws
-        .get(URL)
+        .get(url)
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
         .header("Sec-WebSocket-Version", "13")
         .header("Sec-WebSocket-Key", base64(&random_bytes::<16>()))
         .send()
         .await
-        .ok()?;
+        .map_err(|e| cause(&e))?;
     if resp.status() != reqwest::StatusCode::SWITCHING_PROTOCOLS {
-        return None;
+        return Err(format!("the server answered {}", resp.status()));
     }
-    Some(Socket { io: resp.upgrade().await.ok()?, buf: Vec::new() })
+    Ok(Socket { io: resp.upgrade().await.map_err(|e| cause(&e))?, buf: Vec::new() })
+}
+
+/// The bottom of an error's chain. reqwest's own message only repeats the URL.
+fn cause(e: &reqwest::Error) -> String {
+    let mut at: &dyn std::error::Error = e;
+    while let Some(next) = at.source() {
+        at = next;
+    }
+    at.to_string()
 }
 
 /// The client `probe` needs: HTTP/1.1 only, since a websocket upgrade doesn't exist on HTTP/2.
@@ -356,7 +373,8 @@ pub fn client() -> reqwest::Client {
 /// What a session collected, kept outside the future so the cap leaves it intact.
 #[derive(Default)]
 struct Collected {
-    reached: bool,
+    /// Why the websocket isn't open. `probe` starts it as the cap's reason, since the cap leaves no error of its own.
+    unreachable: Option<String>,
     /// Per check name: the lookup name and what the resolver did with it.
     lookups: HashMap<String, (String, Lookup)>,
     /// Per check name: the server's `succ` and `msg`.
@@ -368,8 +386,9 @@ async fn session(
     resolve: &Arc<Mutex<impl FnMut(&str) -> Lookup + Send + 'static>>,
     got: &mut Collected,
 ) -> Option<()> {
-    let mut sock = connect(ws).await?;
-    got.reached = true;
+    let opened = connect(ws, URL).await;
+    got.unreachable = opened.as_ref().err().cloned();
+    let mut sock = opened.ok()?;
     sock.send(1, json!({ "prepare": { "checks": CHECKS } }).to_string().as_bytes()).await?;
     let mut proto = Protocol::default();
     while got.completes.len() < CHECKS.len() {
@@ -406,13 +425,13 @@ async fn session(
 /// anything else in this run, which is what makes a silent beacon lookup count as filtered rather than unknown.
 pub async fn probe(ws: &reqwest::Client, resolve: impl FnMut(&str) -> Lookup + Send + 'static, answered_this_run: bool) -> RovResult {
     let resolve = Arc::new(Mutex::new(resolve));
-    let mut got = Collected::default();
+    let mut got = Collected { unreachable: Some(format!("no answer in {} s", SESSION_CAP.as_secs())), ..Default::default() };
     if let Ok(_permit) = SESSIONS.acquire().await {
         let _ = tokio::time::timeout(SESSION_CAP, session(ws, &resolve, &mut got)).await;
     }
     let check = |name: &str| {
         let lookup = got.lookups.get(name);
-        let (status, detail) = verdict(lookup.map(|l| &l.1), got.completes.get(name), answered_this_run, got.reached);
+        let (status, detail) = verdict(lookup.map(|l| &l.1), got.completes.get(name), answered_this_run, got.unreachable.as_deref());
         RovCheck { status, detail, beacon: lookup.and_then(|l| beacon_of(&l.0)) }
     };
     RovResult { v4: check(CHECKS[0]), v6: check(CHECKS[1]) }
@@ -484,7 +503,7 @@ mod tests {
         let no = (false, "msg".to_string());
         let ans = Lookup::Answered { ok: false, err: "SERVFAIL".into() };
         let local = Lookup::Local("refused".into());
-        let v = |l: Option<&Lookup>, c: Option<&(bool, String)>, a: bool, r: bool| verdict(l, c, a, r);
+        let v = |l: Option<&Lookup>, c: Option<&(bool, String)>, a: bool, r: bool| verdict(l, c, a, (!r).then_some("refused"));
         assert_eq!(v(Some(&local), Some(&yes), true, true), (Status::NotTested, "The test query never left this computer: refused".into()));
         assert_eq!(
             v(Some(&Lookup::Timeout), Some(&yes), false, true),
@@ -495,6 +514,25 @@ mod tests {
         assert_eq!(v(Some(&ans), Some(&no), false, true), (Status::Unfiltered, "msg".into()));
         assert_eq!(v(Some(&Lookup::Timeout), Some(&no), true, true), (Status::Unfiltered, "msg".into()));
         assert_eq!(v(Some(&ans), None, true, true), (Status::NotTested, "Check My DNS didn't finish".into()));
-        assert_eq!(v(None, None, true, false), (Status::NotTested, "Check My DNS unreachable".into()));
+        assert_eq!(v(None, None, true, false), (Status::NotTested, "Check My DNS unreachable: refused".into()));
+    }
+
+    #[tokio::test]
+    async fn connect_says_why() {
+        let ws = client();
+        // Nothing listens on a port once its listener is gone.
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let why = connect(&ws, &format!("http://127.0.0.1:{port}/")).await.err().unwrap();
+        assert!(!why.is_empty() && !why.contains("127.0.0.1"), "{why}");
+
+        let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", server.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut s, _) = server.accept().await.unwrap();
+            let n = s.read(&mut [0; 1024]).await.unwrap();
+            assert!(n > 0);
+            s.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+        });
+        assert_eq!(connect(&ws, &url).await.err().unwrap(), "the server answered 503 Service Unavailable");
     }
 }

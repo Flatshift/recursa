@@ -34,6 +34,7 @@
     intel: 'Looking up each resolver’s network: RPKI, ROV, where its queries leave, and naming the CDN edges meanwhile',
     live: 'Looking up live malware hosts through every resolver',
   };
+  const work = $derived(run.phase === 'intel' && !run.config.cdn ? 'Looking up each resolver’s network: RPKI, ROV and where its queries leave' : (WORK[run.phase] ?? ''));
   // Seconds in the phase tick for the check that reports only at the end, so a silent phase still visibly moves.
   let since = $state(Date.now());
   let now = $state(Date.now());
@@ -80,7 +81,7 @@
       {#key run.phase}
         <span class="what" in:rise={{ on: true }}>
           <b>{phaseName(run.phase)}</b>
-          <span class="desc">{WORK[run.phase] ?? ''}</span>
+          <span class="desc">{work}</span>
         </span>
       {/key}
       {#if latest}

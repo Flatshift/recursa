@@ -3,6 +3,7 @@
   import { app } from '../lib/store.svelte';
   import { api, mobile, loginItem, shell } from '../lib/api';
   import type { ComponentProps } from 'svelte';
+  import { MediaQuery } from 'svelte/reactivity';
   import type { Housekeeping, MonitorConfig, RpkiStatus } from '../lib/types';
   import { RESOLVER_INTERVAL_MIN, RETENTION_DAYS, resolverMonitor } from '../lib/monitor.svelte';
   import { ago, pct, plural } from '../lib/format';
@@ -141,6 +142,8 @@
     if (mobile) history.pushState(null, '', `#${id}`);
     else history.replaceState(null, '', `#${id}`);
   }
+  // The same width as the CSS below: a narrow window runs the list across the top.
+  const narrow = new MediaQuery('(max-width: 560px)');
   // Up, Down, Home and End move through the list, as in any tab list.
   function paneKey(e: KeyboardEvent) {
     const i = panes.findIndex((p) => p.id === current);
@@ -182,7 +185,7 @@
       {/if}
     {:else}
     <nav class="nav" aria-label="Settings sections">
-      <div role="tablist" aria-orientation="vertical">
+      <div role="tablist" aria-orientation={narrow.current ? 'horizontal' : 'vertical'}>
         {#each panes as p (p.id)}
           {@const on = p.id === current}
           <button
@@ -392,6 +395,12 @@
     min-height: 0;
     flex: 1;
   }
+  .nav {
+    padding: 10px 8px;
+    background: var(--side);
+    border-right: 1px solid var(--rule);
+    font-size: var(--t-sm);
+  }
   /* A narrow window: the sections run across the top instead of taking half the width. */
   @media (max-width: 560px) {
     .panes {
@@ -411,12 +420,6 @@
       width: auto;
       white-space: nowrap;
     }
-  }
-  .nav {
-    padding: 10px 8px;
-    background: var(--side);
-    border-right: 1px solid var(--rule);
-    font-size: var(--t-sm);
   }
   .tab {
     display: flex;
