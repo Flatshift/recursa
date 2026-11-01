@@ -8,6 +8,9 @@ Thanks for helping. Bug reports, measurements from networks we can't test from, 
 - Keep to the project's principles: Recursa measures from the client, labels where every result comes from, and never
   sends live threat domains over plain DNS.
 - Run the checks in the README's Build section before you open a pull request.
+- A change to `Cargo.lock` or `web/package-lock.json` usually changes the third-party notices. CI fails until they are
+  current: after `npm ci` in `web/`, run `python3 -I tools/notices.py` and commit `web/src/legal/`. Dependabot branches
+  need the same commit before they merge.
 
 ## Contribution terms
 
