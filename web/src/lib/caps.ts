@@ -67,7 +67,7 @@ export const CAPS: CapDef[] = [
     key: 'filter_phishing',
     label: 'Phishing blocking',
     group: 'Blocking',
-    explain: "Whether the resolver blocked a phishing test name that Cloudflare or Cisco OpenDNS publishes. This confirms blocking happens, not how much. The live threat test, a run option, measures that against live OpenPhish hosts; Check live feeds does the same for one resolver on its page.",
+    explain: "Whether the resolver blocked a phishing test name that Cloudflare or Cisco OpenDNS publishes. This confirms blocking happens, not how much.",
     published: (p) => (p.filtering.includes('phishing') ? true : p.filtering.length === 0 ? false : null),
   },
   {

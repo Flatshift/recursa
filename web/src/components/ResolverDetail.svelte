@@ -519,7 +519,7 @@
       <h4>Test names</h4>
       <p class="muted small">
         Filtering services publish harmless names for testing their own blocking, and each mostly blocks only its own. A
-        blocked name confirms the filter works; how much it catches is what Check live feeds measures.
+        blocked name confirms the filter works; how much malware it catches is what Check live feeds measures.
       </p>
       {#if probe?.block_style}<p class="small">Blocks by answering <b class="mono">{probe.block_style}</b>.</p>{/if}
       {#each filt as [cat, f]}
