@@ -25,9 +25,8 @@ export const RESOLVER_VIEWS = ['overview', 'latency', 'path', 'behaviour', 'bloc
 export type ResolverView = (typeof RESOLVER_VIEWS)[number];
 
 /** The view where a live run's current phase shows its work: the latency rounds on Latency, the path check on Path, the
- *  probes on Capabilities, the CDN mapping on CDN. Network intel is too short to jump for, so it keeps the last one. */
-function liveView(r: Pick<RunState, 'phase'>, from: RunView = 'latency'): RunView {
-  if (r.phase === 'intel') return from === 'overview' ? 'latency' : from;
+ *  probes and network intel on Capabilities, the CDN mapping on CDN. */
+function liveView(r: Pick<RunState, 'phase'>): RunView {
   return phaseTab(r.phase) ?? 'latency';
 }
 
@@ -495,7 +494,7 @@ class AppState {
         // Follow the run to the view where this phase shows its work, unless the user picked one.
         if (!this.#viewChosen) {
           const from = this.#staged?.view ?? this.runView;
-          const v = liveView(next, from);
+          const v = liveView(next);
           return this.#show(next, v, v !== from);
         }
         break;
@@ -556,7 +555,8 @@ class AppState {
         break;
       }
       case 'cdn_owner': {
-        // The network behind one edge, named during the intel phase.
+        // The network behind one edge, named during the intel phase. The count moves even when a lookup found nothing.
+        if (ev.done != null) next.cdn_naming = { done: ev.done, total: ev.total, latest: ev.ip };
         const e = cur.cdn?.edges[ev.ip];
         if (!cur.cdn || !e) break;
         next.cdn = { ...cur.cdn, edges: { ...cur.cdn.edges, [ev.ip]: { ...e, asn: ev.asn, holder: ev.holder, on_net: ev.on_net } } };

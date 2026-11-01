@@ -4,6 +4,7 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 
 ## 0.5.0 (2026-10-29)
 
+- Network intel shows its checks live, resolver by resolver, and names CDN edges alongside them instead of after.
 - Network map: US routers are placed by city and state, so Ashburn, VA is not read as Washington.
 - Network map: a network no longer lands on another's row, and the labels of two links into one network sit on
   opposite sides.

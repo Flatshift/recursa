@@ -49,7 +49,14 @@
 
   // The networks behind the edges, named one by one during intel, each a beat after the one before.
   const edges = $derived(Object.values(run.cdn?.edges ?? {}));
-  const named = $derived(edges.filter((e) => e.asn != null).length);
+  // The engine's count includes edges whose lookup found nothing; before its first report, count the ones named.
+  const naming = $derived(run.cdn_naming);
+  const named = $derived(naming?.done ?? edges.filter((e) => e.asn != null).length);
+  const toName = $derived(naming?.total ?? edges.length);
+  const lastNamed = $derived.by(() => {
+    const e = naming?.latest ? run.cdn?.edges[naming.latest] : undefined;
+    return e ? (e.holder ?? (e.asn != null ? `AS${e.asn}` : e.ip)) : '';
+  });
   const enter = new Map<string, number>();
   const nets = $derived(edgeNets(edges));
   $effect.pre(() => {
@@ -76,9 +83,9 @@
     },
     {
       label: 'Name their networks',
-      value: stage === 'name' ? `${named} of ${edges.length} edges, ${nets.length} networks` : 'after the resolver checks',
-      share: stage === 'name' && edges.length ? named / edges.length : 0,
-      state: stage === 'name' ? (named >= edges.length ? 'done' : 'now') : 'wait',
+      value: stage === 'name' ? `${named} of ${toName} edges, ${nets.length} networks` : 'after the resolver checks',
+      share: stage === 'name' && toName ? named / toName : 0,
+      state: stage === 'name' ? (named >= toName ? 'done' : 'now') : 'wait',
       tone: 'var(--w-rose)',
     },
   ]);
@@ -132,7 +139,7 @@
       <PhaseStages {stages} label="CDN mapping progress" />
       {#if stage === 'name'}
         <EdgeNets {nets} live {enter}>
-          {#if named < edges.length}<span class="naming">naming {edges.length - named} more</span>{/if}
+          {#if named < toName}<span class="naming">naming {toName - named} more{#if lastNamed}, last {lastNamed}{/if}</span>{/if}
         </EdgeNets>
       {/if}
     {/if}

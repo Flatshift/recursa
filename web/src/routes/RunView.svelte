@@ -22,6 +22,7 @@
   import CdnLive from '../components/CdnLive.svelte';
   import PathLive from '../components/PathLive.svelte';
   import ProbesLive from '../components/ProbesLive.svelte';
+  import IntelLive from '../components/IntelLive.svelte';
   import Inspector from '../components/Inspector.svelte';
   import Shortlist, { type Pick } from '../components/Shortlist.svelte';
   import Info from '../components/Info.svelte';
@@ -200,8 +201,7 @@
 
   // The tab whose content is filling while the run works: a dot marks it, so a view the run isn't on still says where
   // the action is.
-  // Intel ends by naming the CDN edges' networks, which shows on the CDN view.
-  const liveTab = $derived(running && run ? (run.phase === 'intel' ? (run.cdn ? 'cdn' : 'caps') : (phaseTab(run.phase) ?? 'latency')) : null);
+  const liveTab = $derived(running && run ? (phaseTab(run.phase) ?? 'latency') : null);
 
   // The phone folds Numbers into Overview.
   const PHONE_VIEWS = RUN_VIEWS.filter((v) => v !== 'numbers');
@@ -523,6 +523,8 @@
               {/if}
             {:else if app.runView === 'caps' && running && run.phase === 'probes'}
               <ProbesLive {run} rows={ordered} />
+            {:else if app.runView === 'caps' && running && run.phase === 'intel'}
+              <IntelLive {run} rows={ordered} />
             {:else if app.runView === 'caps'}
               <CapMatrix {run} rows={ordered} {v} bind:view={capView} onopen={open} />
             {:else if app.runView === 'numbers'}

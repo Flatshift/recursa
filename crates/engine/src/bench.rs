@@ -359,6 +359,16 @@ pub struct CdnTiming {
     pub silent: BTreeSet<String>,
 }
 
+/// How far the CDN edge naming has got during intel, for the live view only.
+#[derive(Clone, Debug, Serialize)]
+pub struct CdnNaming {
+    pub done: u32,
+    pub total: u32,
+    /// The edge named last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct RunState {
     pub id: String,
@@ -391,6 +401,9 @@ pub struct RunState {
     /// The edge timing after the lookups, for the live view only. Cleared when the CDN report lands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cdn_timing: Option<CdnTiming>,
+    /// The edge naming during intel, for the live view only. Cleared when the run ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cdn_naming: Option<CdnNaming>,
     /// How the link to the gateway behaved while measuring (see [`link`]); absent in runs from before the check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<Value>,
@@ -523,6 +536,7 @@ pub(crate) fn spawn(mut cfg: RunConfig, mut deps: Deps) -> Arc<RunHandle> {
         cdn: None,
         cdn_lookups: BTreeMap::new(),
         cdn_timing: None,
+        cdn_naming: None,
         link: None,
         paths: BTreeMap::new(),
         routes: BTreeMap::new(),
@@ -561,6 +575,7 @@ pub(crate) fn spawn(mut cfg: RunConfig, mut deps: Deps) -> Arc<RunHandle> {
                 s.warm.clear();
                 s.cdn_lookups.clear();
                 s.cdn_timing = None;
+                s.cdn_naming = None;
             });
             let final_state = hh.with(|s| s.clone());
             on_finish(&final_state);
@@ -1668,28 +1683,28 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
                 (id, ip, eg, answered, resolve)
             })
             .collect();
+        // Each resolver reports as its checks finish, and the CDN edges are named meanwhile: naming
+        // needs only the network lookups, so it does not wait for the ROV sessions.
+        h.mark("cdn-owners");
         let intel = deps.intel.clone();
-        let results = deps.rt.block_on(async move {
-            let futs = jobs.into_iter().map(|(id, ip, eg, answered, resolve)| {
+        let owners = deps.rt.block_on(async {
+            let checks = futures_util::future::join_all(jobs.into_iter().map(|(id, ip, eg, answered, resolve)| {
                 let intel = intel.clone();
                 async move {
                     let (mut v, rov) = tokio::join!(intel.resolver_intel(ip, eg), rov::probe(&intel.ws, resolve, answered));
                     v["rov"] = rov.to_json();
-                    (id, v)
+                    h.publish(|s| {
+                        s.intel.insert(id.clone(), v.clone());
+                        s.done += 1;
+                        json!({"type": "intel", "resolver_id": id, "intel": v, "done": s.done})
+                    });
                 }
-            });
-            futures_util::future::join_all(futs).await
+            }));
+            let (_, owners) = tokio::join!(checks, name_edges(h, deps));
+            owners
         });
-        for (id, v) in results {
-            h.publish(|s| {
-                s.intel.insert(id.clone(), v.clone());
-                s.done += 1;
-                json!({"type": "intel", "resolver_id": id, "intel": v, "done": s.done})
-            });
-        }
         explain_egress(h);
-        h.mark("cdn-owners");
-        enrich_cdn(h, deps);
+        finish_cdn(h, deps, owners);
     }
 
     // ---- Live threats: the same live malware hosts through every resolver. Opt-in, last, since
@@ -2434,33 +2449,45 @@ fn name_route_hops(h: &RunHandle, deps: &Deps) {
     std::thread::sleep(Duration::from_millis(1500));
 }
 
-/// After intel: name each edge's network and explain each resolver's mapping basis.
-fn enrich_cdn(h: &RunHandle, deps: &Deps) {
-    let Some(ips) = h.with(|s| s.cdn.as_ref().map(|c| c.edges.keys().cloned().collect::<Vec<_>>())) else { return };
+/// Name the network behind each CDN edge, six at a time, publishing each as it lands with a count for the live view.
+async fn name_edges(h: &RunHandle, deps: &Deps) -> Vec<(String, Value)> {
+    use futures_util::StreamExt;
+    let Some(ips) = h.with(|s| s.cdn.as_ref().map(|c| c.edges.keys().cloned().collect::<Vec<_>>())) else { return vec![] };
+    let total = ips.len() as u32;
+    h.with(|s| s.cdn_naming = Some(CdnNaming { done: 0, total, latest: None }));
     let intel = deps.intel.clone();
     let client_asn = deps.env.pointer("/vantage/network/asn").and_then(Value::as_u64);
-    let owners: Vec<(String, Value)> = deps.rt.block_on(async move {
-        use futures_util::StreamExt;
-        futures_util::stream::iter(ips.into_iter().map(|ip| {
-            let intel = intel.clone();
-            async move {
-                let v = match ip.parse::<IpAddr>() {
-                    Ok(a) => intel.asn_of(a).await,
-                    Err(_) => Value::Null,
-                };
-                (ip, v)
-            }
-        }))
-        .buffer_unordered(6)
-        // Name each edge's network as it comes back, for the live view.
-        .inspect(|(ip, v)| {
-            let asn = v["asn"].as_u64();
-            let on_net = client_asn.is_some() && asn == client_asn;
-            h.publish(|_| json!({"type": "cdn_owner", "ip": ip, "asn": asn, "holder": v["holder"], "on_net": on_net}));
-        })
-        .collect()
-        .await
-    });
+    futures_util::stream::iter(ips.into_iter().map(|ip| {
+        let intel = intel.clone();
+        async move {
+            let v = match ip.parse::<IpAddr>() {
+                Ok(a) => intel.asn_of(a).await,
+                Err(_) => Value::Null,
+            };
+            (ip, v)
+        }
+    }))
+    .buffer_unordered(6)
+    .inspect(|(ip, v)| {
+        let asn = v["asn"].as_u64();
+        let on_net = client_asn.is_some() && asn == client_asn;
+        h.publish(|s| {
+            let n = s.cdn_naming.get_or_insert(CdnNaming { done: 0, total, latest: None });
+            n.done += 1;
+            n.latest = Some(ip.clone());
+            json!({"type": "cdn_owner", "ip": ip, "asn": asn, "holder": v["holder"], "on_net": on_net, "done": n.done, "total": n.total})
+        });
+    })
+    .collect()
+    .await
+}
+
+/// Fold the named edges into the CDN report and settle each resolver's basis, which needs the intel egress.
+fn finish_cdn(h: &RunHandle, deps: &Deps, owners: Vec<(String, Value)>) {
+    if h.with(|s| s.cdn.is_none()) {
+        return;
+    }
+    let client_asn = deps.env.pointer("/vantage/network/asn").and_then(Value::as_u64);
     let client_v4: Option<std::net::Ipv4Addr> = deps.env.pointer("/vantage/ipv4").and_then(Value::as_str).and_then(|s| s.parse().ok());
     h.publish(|s| {
         let RunState { cdn, probes, intel, .. } = s;
@@ -2940,6 +2967,7 @@ mod tests {
             cdn: None,
             cdn_lookups: BTreeMap::new(),
             cdn_timing: None,
+            cdn_naming: None,
             link: None,
             paths: BTreeMap::new(),
             routes: BTreeMap::new(),
@@ -3169,6 +3197,7 @@ mod tests {
             cdn: None,
             cdn_lookups: BTreeMap::new(),
             cdn_timing: None,
+            cdn_naming: None,
             link: None,
             paths: BTreeMap::new(),
             routes: BTreeMap::new(),
@@ -3219,6 +3248,7 @@ mod tests {
             cdn: None,
             cdn_lookups: BTreeMap::new(),
             cdn_timing: None,
+            cdn_naming: None,
             link: None,
             paths: BTreeMap::new(),
             routes: BTreeMap::new(),
@@ -3283,6 +3313,7 @@ mod tests {
             cdn: None,
             cdn_lookups: BTreeMap::new(),
             cdn_timing: None,
+            cdn_naming: None,
             link: None,
             paths: BTreeMap::new(),
             routes: BTreeMap::new(),

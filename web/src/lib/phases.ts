@@ -31,7 +31,7 @@ const PHASES: Phase[] = [
   { id: 'path', name: 'Path check', check: true, tab: 'path' },
   { id: 'probes', name: 'Probes', check: true, opt: 'probes', tab: 'caps' },
   { id: 'cdn', name: 'CDN mapping', check: true, opt: 'cdn', tab: 'cdn' },
-  { id: 'intel', name: 'Network intel', check: true },
+  { id: 'intel', name: 'Network intel', check: true, tab: 'caps' },
   { id: 'live', name: 'Live threats', check: true, opt: 'live', tab: 'caps' },
 ];
 
@@ -46,5 +46,5 @@ export const checksOf = (c: { probes: boolean; cdn: boolean; live: boolean }): s
 /** Every phase this run goes through, in order. */
 export const phasesOf = (c: { tests: string[]; probes: boolean; cdn: boolean; live: boolean }): string[] => [...PHASES.filter((p) => p.lead).map((p) => p.id), ...c.tests, ...checksOf(c)];
 
-/** The view a phase fills. Network intel has none of its own: where it shows depends on the caller. */
+/** The view a phase fills. */
 export const phaseTab = (id: string): RunView | undefined => PHASES.find((p) => p.id === id)?.tab;

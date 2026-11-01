@@ -31,7 +31,7 @@
     path: 'Five rounds of TCP handshakes find each resolver’s network distance and catch port 53 interception',
     probes: 'Asking each resolver what it does: DNSSEC, ECS, QNAME minimisation, blocking',
     cdn: 'Looking up CDN hostnames through every resolver, then timing each edge it sent you to',
-    intel: 'Looking up each resolver’s network: RPKI, ROV, where its queries leave',
+    intel: 'Looking up each resolver’s network: RPKI, ROV, where its queries leave, and naming the CDN edges meanwhile',
     live: 'Looking up live malware hosts through every resolver',
   };
   // Seconds in the phase tick for the check that reports only at the end, so a silent phase still visibly moves.
@@ -55,6 +55,10 @@
   });
   const count = $derived.by(() => {
     if (run.phase === 'path') return run.done > 0 ? `${run.done} of ${run.total} handshakes` : duration(now - since);
+    if (run.phase === 'intel' && run.cdn_naming) {
+      const n = run.cdn_naming;
+      return `${run.done} of ${run.total} resolvers, ${n.done} of ${n.total} edges named`;
+    }
     if (run.phase === 'probes' || run.phase === 'intel' || run.phase === 'live') return run.total > 0 ? `${run.done} of ${run.total} resolvers` : '';
     // The CDN lookups report per resolver; timing the edges they found comes after the last one.
     if (run.phase === 'cdn') {

@@ -143,6 +143,13 @@ export interface CdnTiming {
   silent?: string[];
 }
 
+/** How far the CDN edge naming has got during intel; `latest` is the edge named last. */
+export interface CdnNaming {
+  done: number;
+  total: number;
+  latest?: string;
+}
+
 export type CheckStatus = 'pass' | 'fail' | 'partial' | 'info' | 'unknown';
 
 export interface Check {
@@ -510,6 +517,8 @@ export interface RunState {
   cdn_lookups?: Record<string, CdnLookup>;
   /** The edge timing after the lookups, present only while it runs. */
   cdn_timing?: CdnTiming;
+  /** The edge naming during intel, present only while it runs. */
+  cdn_naming?: CdnNaming;
   /** Absent in runs from before the link check, and when it is turned off. */
   link?: LinkStats | LinkUnavailable;
   paths: Record<string, PathInfo>;
