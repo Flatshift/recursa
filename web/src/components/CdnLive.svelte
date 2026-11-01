@@ -9,6 +9,7 @@
   import { app } from '../lib/store.svelte';
   import { ms } from '../lib/format';
   import { edgeNets, median, silentEdges } from '../lib/cdn';
+  import { answered } from '../lib/cells';
   import CdnLogo from './CdnLogo.svelte';
   import EdgeNets from './EdgeNets.svelte';
   import PhaseStages, { type Stage } from './PhaseStages.svelte';
@@ -29,13 +30,7 @@
   const slot = $derived(new Map(run.resolvers.map((r, i) => [r.id, i])));
   const lookups = $derived(run.cdn_lookups ?? {});
   // The engine leaves out a resolver that answered none of the earlier tests.
-  const skipped = $derived(
-    new Set(
-      resolvers
-        .filter((r) => !run.targets.some((t) => t.resolver_id === r.id && Object.values(t.stats).some((x) => (x?.ok ?? 0) > 0)))
-        .map((r) => r.id),
-    ),
-  );
+  const skipped = $derived(new Set(resolvers.filter((r) => !answered(run, r.id)).map((r) => r.id)));
   const timing = $derived(run.cdn_timing);
   const best = $derived(timing?.best ?? {});
   const silent = $derived(new Set(silentEdges(timing)));

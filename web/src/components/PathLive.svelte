@@ -6,6 +6,7 @@
   import { untrack } from 'svelte';
   import type { Resolver, RunState, TraceHop } from '../lib/types';
   import type { Row } from '../lib/verdict';
+  import { answered } from '../lib/cells';
   import { holder, ms } from '../lib/format';
   import PhaseStages, { type Stage } from './PhaseStages.svelte';
 
@@ -98,6 +99,7 @@
       return {
         r,
         t,
+        off: !answered(run, r.id),
         hops: pts,
         segs,
         last: t?.reached ? answering[answering.length - 1] : undefined,
@@ -112,9 +114,10 @@
   const shook = $derived(Math.max(0, run.done - rounds));
   const hopsSeen = $derived(Object.values(routes).reduce((n, t) => n + t.hops.filter((h) => h.addrs.length).length, 0));
   const nets = $derived(new Set(Object.values(routes).flatMap((t) => t.hops.flatMap((h) => (h.asn != null ? [h.asn] : [])))).size);
-  const traceTotal = $derived(lanes.length * ROUNDS);
+  const measured = $derived(view.filter((l) => !l.off).length);
+  const traceTotal = $derived(measured * ROUNDS);
   const stages = $derived.by((): Stage[] => {
-    const hsTotal = lanes.length * HANDSHAKES;
+    const hsTotal = measured * HANDSHAKES;
     const hsShare = hsTotal ? Math.min(1, shook / hsTotal) : 1;
     const out: Stage[] = [
       { label: 'Handshake each resolver', value: `${Math.min(shook, hsTotal)} of ${hsTotal}`, share: hsShare, state: hsShare >= 1 ? 'done' : 'now', tone: 'var(--s-cached)' },
@@ -159,13 +162,13 @@
 
   <ol class="lanes" style:--cols={cols}>
     {#each view as l, n (l.r.id)}
-      <li class="lane cascade" class:waiting={live && canTrace && !l.t} style:--i={n}>
+      <li class="lane cascade" class:waiting={live && canTrace && !l.t && !l.off} style:--i={n}>
         <div class="who">
           <span class="name">{l.r.name}</span>
           {#if l.r.variant}<span class="var">{l.r.variant}</span>{/if}
         </div>
         {#if canTrace}
-          <div class="strip" title={l.t || !live ? '' : 'Waiting for the first round'}>
+          <div class="strip" title={l.t || !live || l.off ? '' : 'Waiting for the first round'}>
             <svg width="100%" height={H} role="img" aria-label="Route to {l.r.name}, {l.hops.length} hops">
               {#each grid as v (v)}
                 <line class="grid" x1="0" x2="100%" y1={y(v)} y2={y(v)} />
@@ -198,7 +201,7 @@
         <div class="end">
           {#if canTrace}
             <span class="hops num">
-              {#if !l.t}{live ? 'tracing' : 'no route'}{:else if l.t.reached}{l.t.hops.length} hops{:else}{l.hops.filter((x) => x.h.addrs.length).length} answered{/if}
+              {#if !l.t}{!live ? 'no route' : l.off ? 'silent' : 'tracing'}{:else if l.t.reached}{l.t.hops.length} hops{:else}{l.hops.filter((x) => x.h.addrs.length).length} answered{/if}
             </span>
           {/if}
           <span class="shakes" aria-label="{l.shakes} of {HANDSHAKES} handshakes">

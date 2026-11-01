@@ -4,8 +4,9 @@
 //! Netflix with two hosts each, your system resolver, two public resolvers and the NTP pool), over IPv4 and, when
 //! this computer has an IPv6 route, over IPv6 as well. It names each router's network from CAIDA's prefix-to-AS table
 //! held locally, and merges the traces into groups and links. Where traffic leaves your ISP, each trace gets a
-//! claim that says how sure the map is (see [`say`]). No hop address is sent to any service: the only lookups are
-//! per network number (its registered name) and, when the user turns it on, reverse names for the routers.
+//! claim that says how sure the map is (see [`say`]). By default no hop address is sent to any service: the only
+//! lookups are per network number (its registered name). When the user turns them on, reverse names for the routers
+//! and registry records for unannounced blocks each send a router's address.
 
 pub mod asrel;
 pub mod attr;

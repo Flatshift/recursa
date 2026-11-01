@@ -1,9 +1,28 @@
 import { describe, it, expect } from 'vitest';
-import { rovCell } from './cells';
+import { answered, rovCell } from './cells';
 import type { RovCheck, RunState } from './types';
 
 const chk = (status: RovCheck['status'], detail = 'd'): RovCheck => ({ status, detail, beacon: 'cmdns3-sjc.dns-oarc.net' });
 const runWith = (rov?: { v4: RovCheck; v6: RovCheck }): RunState => ({ intel: rov ? { r: { service: null, egress: null, rov } } : {} }) as unknown as RunState;
+
+describe('answered', () => {
+  const run = {
+    targets: [
+      { resolver_id: 'a', stats: { cached: { ok: 0 } } },
+      { resolver_id: 'a', stats: { cached: { ok: 0 }, tld: { ok: 1 } } },
+      { resolver_id: 'b', stats: { cached: { ok: 0 }, uncached: {} } },
+      { resolver_id: 'c', stats: {} },
+    ],
+  } as unknown as RunState;
+
+  it('counts an answer on any target and test', () => {
+    expect(answered(run, 'a')).toBe(true);
+  });
+
+  it('is false for a resolver that answered nothing', () => {
+    expect(['b', 'c', 'missing'].map((id) => answered(run, id))).toEqual([false, false, false]);
+  });
+});
 
 describe('rovCell', () => {
   it('is blank with no intel', () => {

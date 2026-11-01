@@ -5,7 +5,7 @@
   // how many resolvers pass that check so far. Eight are probed at a time.
   import type { CheckStatus, Resolver, RunState } from '../lib/types';
   import type { Row } from '../lib/verdict';
-  import { capCell } from '../lib/cells';
+  import { answered, capCell } from '../lib/cells';
   import { CAP, CAP_KEYS } from '../lib/caps';
   import { ms } from '../lib/format';
   import { GLYPH } from './Glyph.svelte';
@@ -51,8 +51,8 @@
     return [...run.resolvers].sort((a, b) => (at(a) === at(b) ? 0 : at(a) - at(b)));
   });
   // The engine works through the run's own order, so the next few without a report are the ones in flight.
-  const flying = $derived(new Set(run.resolvers.filter((r) => !run.probes[r.id]).slice(0, AT_ONCE).map((r) => r.id)));
-  const phase = (r: Resolver) => (run.probes[r.id] ? 'done' : flying.has(r.id) ? 'run' : 'queued');
+  const flying = $derived(new Set(run.resolvers.filter((r) => !run.probes[r.id] && answered(run, r.id)).slice(0, AT_ONCE).map((r) => r.id)));
+  const phase = (r: Resolver) => (run.probes[r.id] ? 'done' : !answered(run, r.id) ? 'off' : flying.has(r.id) ? 'run' : 'queued');
 
   // Every probed resolver's answers, one per check in board order. Unprobed ones have none yet, rather than the
   // operator's published claims the finished views fall back to.
@@ -123,7 +123,7 @@
       <div
         class="lane cascade {st}"
         role="listitem"
-        aria-label="{r.provider} {r.variant}: {got ? `${score(r.id)} of ${TOTAL} checks passed` : st === 'run' ? 'probing' : 'queued'}"
+        aria-label="{r.provider} {r.variant}: {got ? `${score(r.id)} of ${TOTAL} checks passed` : st === 'off' ? 'never answered' : st === 'run' ? 'probing' : 'queued'}"
         style:--i={n}
       >
         <span class="who">
@@ -149,7 +149,7 @@
           {/each}
         </span>
         <span class="t num" aria-hidden="true">
-          {#if got}<b>{score(r.id)}</b><span class="of">/{TOTAL}</span>{:else}{st === 'run' ? 'probing' : 'queued'}{/if}
+          {#if got}<b>{score(r.id)}</b><span class="of">/{TOTAL}</span>{:else}{st === 'off' ? 'silent' : st === 'run' ? 'probing' : 'queued'}{/if}
         </span>
       </div>
     {/each}
@@ -239,7 +239,8 @@
   .lat {
     color: var(--ink-3);
   }
-  .queued .name {
+  .queued .name,
+  .off .name {
     color: var(--ink-3);
   }
 
@@ -332,7 +333,8 @@
   .of {
     color: var(--ink-3);
   }
-  .queued .t {
+  .queued .t,
+  .off .t {
     color: var(--ink-3);
   }
 

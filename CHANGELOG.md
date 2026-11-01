@@ -7,6 +7,8 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 - Network intel shows its checks live, resolver by resolver, and names CDN edges alongside them instead of after.
 - Network map: grows to fit the pane. The setup dial now opens it and the Time test.
 - Interface: tabular figures throughout, no text under 11px, and long headlines step down a size.
+- Path and probe boards: a resolver that never answered reads silent, and progress no longer waits for it.
+- Method: corrected the router privacy note. Router names and registry records each send a router's address when turned on.
 
 ## 0.5.0 (2026-10-29)
 

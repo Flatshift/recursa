@@ -13,6 +13,10 @@ export interface Cell {
 /** A cell with nothing measured or published to show. */
 export const isBlank = (c: Cell): boolean => c.prov === 'unknown' && (c.text === '—' || c.text === '');
 
+/** Whether a resolver answered any test. The engine leaves out one that didn't: no path check, probes, CDN lookups or intel. */
+export const answered = (run: RunState, id: string): boolean =>
+  run.targets.some((t) => t.resolver_id === id && Object.values(t.stats).some((x) => (x?.ok ?? 0) > 0));
+
 /** A capability value: measured beats published beats unknown. */
 export function capCell(run: RunState | null, r: Resolver, key: string): Cell {
   let c = run ? check(run, r.id, key) : undefined;

@@ -1,12 +1,12 @@
 <script lang="ts">
   // The network intel while it runs, as a board of answers. Each resolver gets a tile per check (its route origin,
   // whether invalid routes are filtered over IPv4 and IPv6, and the network its queries leave from); a tile turns over
-  // when the resolver's report lands, filled with its group's colour when the check passes. Every resolver is checked
-  // at once; the route-filtering test is a live session with Check My DNS that can take half a minute, so the rows
-  // land one by one. Rows stay put, fastest cached lookup first.
+  // when the resolver's report lands, filled with its group's colour when the check passes. Every resolver that
+  // answered is checked at once; the route-filtering test is a live session with Check My DNS that can take half a
+  // minute, so the rows land one by one. Rows stay put, fastest cached lookup first.
   import type { Resolver, RovCheck, RunState } from '../lib/types';
   import type { Row } from '../lib/verdict';
-  import { egressCell, roaCell, type Cell } from '../lib/cells';
+  import { answered, egressCell, roaCell, type Cell } from '../lib/cells';
   import { ms } from '../lib/format';
   import { GLYPH } from './Glyph.svelte';
   import Icon from './Icon.svelte';
@@ -27,7 +27,7 @@
     const at = (r: Resolver) => cached.get(r.id) ?? Infinity;
     return [...run.resolvers].sort((a, b) => (at(a) === at(b) ? 0 : at(a) - at(b)));
   });
-  const state = (r: Resolver) => (run.intel[r.id] ? 'done' : 'run');
+  const state = (r: Resolver) => (run.intel[r.id] ? 'done' : answered(run, r.id) ? 'run' : 'off');
 
   const rov = (c: RovCheck): Cell => ({
     status: c.status === 'filtered' ? 'pass' : c.status === 'unfiltered' ? 'fail' : 'unknown',
@@ -58,7 +58,7 @@
     return out;
   });
   const reported = $derived(Object.keys(answers).length);
-  const flying = $derived(run.resolvers.length - reported);
+  const flying = $derived(lanes.filter((r) => state(r) === 'run').length);
   // How many reported resolvers pass each check, and how many networks the queries leave from, for the foot.
   const tally = $derived(Array.from({ length: 3 }, (_, i) => Object.values(answers).filter((a) => a[i].status === 'pass').length));
   const nets = $derived(new Set(Object.values(answers).map((a) => a[3].text)).size);
@@ -119,7 +119,7 @@
       {@const st = state(r)}
       {@const got = answers[r.id]}
       {@const passed = got?.slice(0, 3).filter((a) => a.status === 'pass').length ?? 0}
-      <div class="lane {st}" role="listitem" aria-label="{r.provider} {r.variant}: {got ? `${passed} of 3 checks passed, queries leave from ${got[3].text}` : 'checking'}" style:--i={n}>
+      <div class="lane {st}" role="listitem" aria-label="{r.provider} {r.variant}: {got ? `${passed} of 3 checks passed, queries leave from ${got[3].text}` : st === 'off' ? 'never answered' : 'checking'}" style:--i={n}>
         <span class="who">
           <span class="name"><b>{r.provider}</b> <span class="var">{r.variant}</span></span>
           {#if cached.get(r.id) != null}<span class="lat num">{ms(cached.get(r.id))} cached</span>{/if}
@@ -138,7 +138,7 @@
           </span>
         </span>
         <span class="t num" aria-hidden="true">
-          {#if got}<b>{passed}</b><span class="of">/3</span>{:else}checking{/if}
+          {#if got}<b>{passed}</b><span class="of">/3</span>{:else}{st === 'off' ? 'silent' : 'checking'}{/if}
         </span>
       </div>
     {/each}
@@ -229,7 +229,8 @@
     font-size: var(--t-sm);
   }
   .var,
-  .lat {
+  .lat,
+  .off .name {
     color: var(--ink-3);
   }
 
@@ -319,7 +320,8 @@
     color: var(--ink);
     font-size: var(--t-md);
   }
-  .of {
+  .of,
+  .off .t {
     color: var(--ink-3);
   }
 
