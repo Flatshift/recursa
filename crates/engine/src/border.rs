@@ -11,7 +11,7 @@ use crate::bench;
 use crate::edge::RollCall;
 use crate::lock;
 use crate::resolve::Resolve;
-use crate::stats::{median, quantile};
+use crate::stats::{median, quantile, round1};
 use crate::trace::{self, Trace, TraceCap};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -467,7 +467,7 @@ fn verdict(hours: &[(i64, f64, f64)]) -> Verdict {
     if peak.is_empty() {
         return Verdict::Steady;
     }
-    let adds_ms = ((peak.iter().map(|h| h.2).fold(f64::MIN, f64::max) - base_delta) * 10.0).round() / 10.0;
+    let adds_ms = round1(peak.iter().map(|h| h.2).fold(f64::MIN, f64::max) - base_delta);
     let near = median(peak.iter().map(|h| h.1)).unwrap_or(base_near);
     if near <= base_near + 2.0 {
         let mut hours: Vec<u32> = peak.iter().map(|h| h.0.div_euclid(HOUR_MS).rem_euclid(24) as u32).collect();

@@ -52,6 +52,11 @@ pub fn median(v: impl Iterator<Item = f64>) -> Option<f64> {
     (!v.is_empty()).then(|| quantile(&v, 0.5))
 }
 
+/// `v` to one decimal place.
+pub fn round1(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
+}
+
 /// Nearest-rank value at `q` over sorted data, or `None` when there is none.
 pub fn nearest_rank<T: Copy>(sorted: &[T], q: f64) -> Option<T> {
     (!sorted.is_empty()).then(|| sorted[((sorted.len() - 1) as f64 * q).round() as usize])

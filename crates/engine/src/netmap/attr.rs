@@ -8,7 +8,7 @@ use super::asrel::{AsRel, Rel};
 use super::pdb::Pdb;
 use super::rdap::Block;
 use crate::catalog::is_private;
-use crate::stats::median;
+use crate::stats::{median, round1};
 use crate::store::Store;
 use crate::trace::Trace;
 use flate2::read::GzDecoder;
@@ -710,7 +710,7 @@ pub fn merge(paths: &[(&str, Vec<Seg>)], rels: &AsRel) -> (Vec<Group>, Vec<Link>
         ids.push(mine);
     }
     for (g, at) in groups.iter_mut().zip(arrive) {
-        g.rtt_ms = median(at.into_iter()).map(|v| (v * 10.0).round() / 10.0);
+        g.rtt_ms = median(at.into_iter()).map(round1);
         g.label = label(g.role, g.asn, g.holder.as_deref(), g.ix_name.as_deref());
         g.city_hint = g.members.iter().find_map(|m| m.hint.clone());
         g.aliases = aliases(&g.members);
@@ -718,7 +718,7 @@ pub fn merge(paths: &[(&str, Vec<Seg>)], rels: &AsRel) -> (Vec<Group>, Vec<Link>
     for ((l, step), fed) in links.iter_mut().zip(steps).zip(fed) {
         let to = &groups[l.to];
         // Below zero is noise between two best-of-four readings, not a shortcut.
-        l.rtt_step_ms = median(step.into_iter()).map(|v| (v * 10.0).round() / 10.0).map(|v| if v > 0.0 { v } else { 0.0 });
+        l.rtt_step_ms = median(step.into_iter()).map(round1).map(|v| if v > 0.0 { v } else { 0.0 });
         l.kind = match to.role {
             Role::Exchange => LinkKind::Exchange { ix_id: to.ix_id.unwrap_or_default() },
             // Nobody answered from the destination: where the traffic was handed to it is not known.

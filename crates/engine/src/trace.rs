@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 
 use crate::cymru;
 use crate::resolve::Resolve;
+use crate::stats::round1;
 
 /// Whether a trace can run here: `env.trace` in the API.
 #[derive(Serialize, Clone, Copy, PartialEq, Debug)]
@@ -51,10 +52,6 @@ pub struct Hop {
 /// One round's probes: `(ttl, Some((reply host, round trip ms)))`, or `None` for a probe still unanswered at round end.
 /// Probes that were never sent are left out.
 type RoundProbes = Vec<(u8, Option<(IpAddr, f64)>)>;
-
-fn round1(ms: f64) -> f64 {
-    (ms * 10.0).round() / 10.0
-}
 
 /// Per-TTL table from the rounds. Hops run densely from 1 to the cut: the first TTL answered by `target` (Trippy
 /// probes past it in the first round), else the highest TTL that ever answered. Returns the hops and whether the

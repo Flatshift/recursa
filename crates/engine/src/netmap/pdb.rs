@@ -113,20 +113,14 @@ impl Pdb {
         store.with_conn(|c| Pdb::read(c).unwrap_or_default())
     }
 
-    /// When the tables were last synced and how many rows they hold, without loading them.
-    pub fn stats(store: &Store) -> (Option<i64>, usize) {
+    /// When the tables were last synced, without loading them.
+    pub fn last_sync(store: &Store) -> Option<i64> {
         store.with_conn(|c| {
             // The oldest table's time, and none until every table has synced once: a sync that stopped halfway is
             // taken up again at the next refresh, not counted fresh.
-            let synced = c
-                .query_row("SELECT MIN(synced_at), COUNT(*) FROM pdb_sync", [], |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, i64>(1)?)))
+            c.query_row("SELECT MIN(synced_at), COUNT(*) FROM pdb_sync", [], |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, i64>(1)?)))
                 .ok()
-                .and_then(|(t, n)| if n as usize == TABLES.len() { t } else { None });
-            let rows = TABLES
-                .iter()
-                .map(|(t, _)| c.query_row(&format!("SELECT COUNT(*) FROM pdb_{t}"), [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize)
-                .sum();
-            (synced, rows)
+                .and_then(|(t, n)| if n as usize == TABLES.len() { t } else { None })
         })
     }
 

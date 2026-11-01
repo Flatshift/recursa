@@ -89,9 +89,6 @@ pub struct Sample {
     pub refid: String,
     pub root_delay_ms: f64,
     pub root_dispersion_ms: f64,
-    /// The server's clock resolution, in milliseconds.
-    pub precision_ms: f64,
-    pub poll: u8,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -199,8 +196,6 @@ fn read_reply(b: &[u8], sent: u64, t1: i128, t4: i128) -> Result<Sample, NtpErro
         refid,
         root_delay_ms: short_ms(be32(&b[4..])),
         root_dispersion_ms: short_ms(be32(&b[8..])),
-        precision_ms: 2f64.powi(b[3] as i8 as i32) * 1000.0,
-        poll: b[2],
     })
 }
 
@@ -1666,7 +1661,6 @@ mod tests {
         assert!((s.offset_ms - 25.0).abs() < 0.001, "{}", s.offset_ms);
         assert!((s.delay_ms - 20.0).abs() < 0.001, "{}", s.delay_ms);
         assert_eq!((s.stratum, s.version, s.refid.as_str()), (2, 4, "71.80.83.0"));
-        assert!((s.precision_ms - 2f64.powi(-20) * 1000.0).abs() < 1e-9);
         // Stratum 1 names its source.
         let b = reply(0, 5_000_000, 1, sent, from_ntp(sent));
         assert_eq!(read_reply(&b, sent, from_ntp(sent), from_ntp(sent) + 10_000_000).unwrap().refid, "GPS");
@@ -1728,8 +1722,6 @@ mod tests {
                 refid: "x".into(),
                 root_delay_ms: 1.0,
                 root_dispersion_ms: 2.0,
-                precision_ms: 0.001,
-                poll: 3,
             })
         };
         let r = vec![s(5.0, 30.0), s(1.0, 12.0), s(3.0, 20.0), Err(NtpError::Timeout)];
@@ -2006,8 +1998,6 @@ mod tests {
                 refid: "x".into(),
                 root_delay_ms: 4.0,
                 root_dispersion_ms: 1.5,
-                precision_ms: 0.001,
-                poll: 3,
             })
         };
         // Best query is the 10 ms one: 4/2 + 1.5 + 10/2.

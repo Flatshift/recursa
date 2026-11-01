@@ -6,6 +6,9 @@
 /// Which build this is: the git commit (`+dirty` when the tree had uncommitted changes) and when it was built.
 pub const BUILD: &str = env!("RECURSA_BUILD");
 
+/// What the engine calls itself to the services it fetches from.
+pub(crate) const USER_AGENT: &str = concat!("Recursa-DNS-Benchmark/", env!("CARGO_PKG_VERSION"));
+
 pub mod app;
 pub mod bench;
 pub mod border;

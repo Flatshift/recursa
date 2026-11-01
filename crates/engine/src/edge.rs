@@ -1,18 +1,17 @@
-//! The edge roll call: which site each CDN serves this connection from, by the CDN's own answer, with the name of the
-//! network the answering address belongs to. One request per CDN over the system resolver; a CDN that doesn't say
-//! shows its address and no site. Nothing is stored: the last roll call is kept in memory.
+//! The edge roll call: which site each CDN serves this connection from, by the CDN's own answer, with the network the
+//! answering address belongs to. One request per CDN over the system resolver; a CDN that doesn't say shows its address
+//! and no site. Nothing is stored: the last roll call is kept in memory.
 
 use crate::app::AppState;
-use crate::bench;
 use crate::cdn;
 use crate::cymru;
 use crate::dns;
 use crate::resolve::Resolve;
-use serde::Serialize;
+use crate::stats::round1;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::LazyLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// How long one CDN gets to answer.
 const TIMEOUT: Duration = Duration::from_secs(6);
@@ -25,7 +24,7 @@ pub(crate) const KM_PER_MS: f64 = 100.0;
 pub(crate) static AIRPORTS: LazyLock<HashMap<String, (String, String, f64, f64)>> =
     LazyLock::new(|| serde_json::from_str(include_str!("../data/iata.json")).expect("iata.json"));
 
-#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct You {
     pub asn: Option<u32>,
     pub holder: Option<String>,
@@ -35,37 +34,27 @@ pub struct You {
     pub lon: Option<f64>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct EdgeSite {
     pub cdn: &'static str,
-    pub name: &'static str,
-    pub host: &'static str,
-    pub method: &'static str,
     /// IATA code, upper case.
     pub site: Option<String>,
-    /// What the CDN said, as received.
-    pub site_raw: Option<String>,
     pub site_city: Option<String>,
-    pub site_country: Option<String>,
     /// The address the request connected to.
     pub ip: Option<IpAddr>,
     pub asn: Option<u32>,
-    pub holder: Option<String>,
     pub error: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default)]
 pub struct RollCall {
-    pub ts: i64,
-    pub elapsed_ms: f64,
     pub you: You,
     pub edges: Vec<EdgeSite>,
 }
 
-/// What one request found, before the addresses are named and timed.
+/// What one request found, before its address is looked up.
 #[derive(Default)]
 struct Got {
-    site_raw: Option<String>,
     site: Option<String>,
     ip: Option<IpAddr>,
     you: Option<You>,
@@ -116,10 +105,6 @@ fn ptr_site(name: &str) -> Option<String> {
     })
 }
 
-fn round1(v: f64) -> f64 {
-    (v * 10.0).round() / 10.0
-}
-
 /// You, from Cloudflare's speed-test headers. The geo-IP fields are plain names (`city`); the `cf-meta-` ones are the
 /// same values as exposed to browsers, and are used when the plain ones are missing. The address header is never read.
 fn cloudflare_you(h: &http::HeaderMap) -> You {
@@ -146,27 +131,14 @@ pub(crate) fn great_circle_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 // The roll call
 // ---------------------------------------------------------------------------------------------
 
-/// The CDN as the table names it: the benchmark's labels ("anycast control") are about resolver steering, not this.
-fn short_name(id: &str) -> &'static str {
-    match id {
-        "cloudflare" => "Cloudflare",
-        "fastly" => "Fastly",
-        "cloudfront" => "CloudFront",
-        "google" => "Google",
-        "meta" => "Meta",
-        "akamai" => "Akamai",
-        _ => "",
-    }
-}
-
-/// Per CDN: id, the method that names its site, the property asked.
-const ASKED: [(&str, &str, &str); 6] = [
-    ("cloudflare", "cf-headers", "speed.cloudflare.com"),
-    ("fastly", "x-served-by", "pypi.org"),
-    ("cloudfront", "x-amz-cf-pop", "d1.awsstatic.com"),
-    ("google", "report_mapping", "redirector.googlevideo.com"),
-    ("meta", "fb-rdns", "www.facebook.com"),
-    ("akamai", "none", "www.microsoft.com"),
+/// Per CDN: id, the property asked.
+const ASKED: [(&str, &str); 6] = [
+    ("cloudflare", "speed.cloudflare.com"),
+    ("fastly", "pypi.org"),
+    ("cloudfront", "d1.awsstatic.com"),
+    ("google", "redirector.googlevideo.com"),
+    ("meta", "www.facebook.com"),
+    ("akamai", "www.microsoft.com"),
 ];
 
 fn header(r: &reqwest::Response, name: &str) -> Option<String> {
@@ -191,18 +163,11 @@ async fn ask(client: &reqwest::Client, id: &str, host: &str) -> Got {
     let mut got = Got { ip: r.remote_addr().map(|a| a.ip()), ..Default::default() };
     match id {
         "cloudflare" => {
-            got.site_raw = header(&r, "colo");
-            got.site = got.site_raw.as_deref().and_then(|c| iata(c.trim()));
+            got.site = header(&r, "colo").as_deref().and_then(|c| iata(c.trim()));
             got.you = Some(cloudflare_you(r.headers()));
         }
-        "fastly" => {
-            got.site_raw = header(&r, "x-served-by");
-            got.site = got.site_raw.as_deref().and_then(fastly_site);
-        }
-        "cloudfront" => {
-            got.site_raw = header(&r, "x-amz-cf-pop");
-            got.site = got.site_raw.as_deref().and_then(cloudfront_site);
-        }
+        "fastly" => got.site = header(&r, "x-served-by").as_deref().and_then(fastly_site),
+        "cloudfront" => got.site = header(&r, "x-amz-cf-pop").as_deref().and_then(cloudfront_site),
         "google" => {
             let mut body = Vec::new();
             while body.len() < REPORT_MAX
@@ -211,15 +176,7 @@ async fn ask(client: &reqwest::Client, id: &str, host: &str) -> Got {
                 body.extend_from_slice(&chunk);
             }
             body.truncate(REPORT_MAX);
-            let text = String::from_utf8_lossy(&body);
-            // The token alone: the address before the arrow and the prefix after it are the client's.
-            got.site_raw = text
-                .lines()
-                .next()
-                .and_then(|l| l.split_once("=> "))
-                .and_then(|(_, rest)| rest.split_whitespace().next())
-                .map(str::to_string);
-            got.site = google_site(&text);
+            got.site = google_site(&String::from_utf8_lossy(&body));
         }
         _ => {}
     }
@@ -239,44 +196,37 @@ pub(crate) fn ptr(res: &Resolve, ip: IpAddr) -> Option<String> {
     m.answers.iter().find_map(|r| if let dns::RData::Name(n) = &r.data { Some(n.trim_end_matches('.').to_string()) } else { None })
 }
 
-/// Name the addresses (Cymru), read Meta's reverse name, and look up each site's city and country. Blocks.
+/// Find each address's network (Cymru), read Meta's reverse name, and look up each site's city. Blocks.
 fn finish(res: &Resolve, you: &mut You, edges: &mut [EdgeSite]) {
-    let holder = |asn: u32| cymru::name_of(res, asn).ok().flatten().map(|n| cymru::holder_name(&n));
     if let (Some(asn), None) = (you.asn, &you.holder) {
-        you.holder = holder(asn);
+        you.holder = cymru::name_of(res, asn).ok().flatten().map(|n| cymru::holder_name(&n));
     }
     for e in edges.iter_mut() {
         let Some(ip) = e.ip else { continue };
         if let Ok(Some(o)) = cymru::origin_of(res, ip) {
             e.asn = Some(o.asn);
-            e.holder = holder(o.asn);
         }
         if e.cdn == "meta" {
-            let name = ptr(res, ip);
-            e.site = name.as_deref().and_then(ptr_site);
-            e.site_raw = name;
+            e.site = ptr(res, ip).as_deref().and_then(ptr_site);
         }
     }
     for e in edges.iter_mut() {
-        if let Some((city, country, ..)) = e.site.as_deref().and_then(|s| AIRPORTS.get(s)) {
+        if let Some((city, ..)) = e.site.as_deref().and_then(|s| AIRPORTS.get(s)) {
             e.site_city = Some(city.clone());
-            e.site_country = Some(country.clone());
         }
     }
 }
 
 /// Ask the six CDNs which site serves this connection. Takes a few seconds.
 pub async fn roll_call(app: &AppState) -> RollCall {
-    let t0 = Instant::now();
-    let ts = bench::now_ms();
     let client = reqwest::Client::builder()
-        .user_agent(concat!("Recursa-DNS-Benchmark/", env!("CARGO_PKG_VERSION")))
+        .user_agent(crate::USER_AGENT)
         .timeout(TIMEOUT)
         // The peer must be the host asked, not wherever it sends us.
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("http client");
-    let got = futures_util::future::join_all(ASKED.iter().map(|(id, _, host)| ask(&client, id, host))).await;
+    let got = futures_util::future::join_all(ASKED.iter().map(|(id, host)| ask(&client, id, host))).await;
     let mut you = got.iter().find_map(|g| g.you.clone()).unwrap_or_default();
     if you.asn.is_none() {
         let v = app.vantage.read().unwrap();
@@ -286,18 +236,12 @@ pub async fn roll_call(app: &AppState) -> RollCall {
     let mut edges: Vec<EdgeSite> = ASKED
         .iter()
         .zip(got)
-        .map(|((id, method, host), g)| EdgeSite {
+        .map(|((id, _), g)| EdgeSite {
             cdn: cdn::CDNS.iter().find(|c| c.id == *id).map_or("", |c| c.id),
-            name: short_name(id),
-            host,
-            method,
             site: g.site,
-            site_raw: g.site_raw,
             site_city: None,
-            site_country: None,
             ip: g.ip,
             asn: None,
-            holder: None,
             error: g.error,
         })
         .collect();
@@ -308,7 +252,7 @@ pub async fn roll_call(app: &AppState) -> RollCall {
     })
     .await
     .unwrap_or_default();
-    RollCall { ts, elapsed_ms: round1(t0.elapsed().as_secs_f64() * 1000.0), you, edges }
+    RollCall { you, edges }
 }
 
 #[cfg(test)]
@@ -386,17 +330,15 @@ mod tests {
         let db = std::env::temp_dir().join(format!("recursa-edge-{:x}.db", fastrand::u64(..)));
         let app = AppState::open(Some(db), false, crate::caps::Caps::BROWSER).unwrap();
         let rc = roll_call(&app).await;
-        println!("you: {:?} ({} ms)", rc.you, rc.elapsed_ms);
+        println!("you: {:?}", rc.you);
         for e in &rc.edges {
             println!(
-                "{:<10} {:<4} {:<12} raw={:?} ip={:?} AS{:?} {:?} err={:?}",
+                "{:<10} {:<4} {:<12} ip={:?} AS{:?} err={:?}",
                 e.cdn,
                 e.site.as_deref().unwrap_or("-"),
                 e.site_city.as_deref().unwrap_or("-"),
-                e.site_raw,
                 e.ip,
                 e.asn,
-                e.holder,
                 e.error
             );
         }

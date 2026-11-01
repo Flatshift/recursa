@@ -57,7 +57,7 @@ fn config(cache: &Path) -> Config {
     c.rrdp_connect_timeout = Some(Duration::from_secs(10));
     // ARIN's snapshot is several hundred MB; the library's default of ten minutes for one request is too tight on a slow link.
     c.rrdp_timeout = Some(Duration::from_secs(30 * 60));
-    c.rrdp_user_agent = concat!("Recursa-DNS-Benchmark/", env!("CARGO_PKG_VERSION")).into();
+    c.rrdp_user_agent = crate::USER_AGENT.into();
     c
 }
 

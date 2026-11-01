@@ -108,11 +108,7 @@ fn feed_hosts(text: &str) -> impl Iterator<Item = String> + '_ {
 
 impl Intel {
     pub fn new(store: Arc<Store>, measuring: Arc<AtomicBool>, system: Arc<RwLock<Vec<IpAddr>>>) -> Self {
-        let http = reqwest::Client::builder()
-            .user_agent(concat!("Recursa-DNS-Benchmark/", env!("CARGO_PKG_VERSION")))
-            .timeout(Duration::from_secs(12))
-            .build()
-            .expect("http client");
+        let http = reqwest::Client::builder().user_agent(crate::USER_AGENT).timeout(Duration::from_secs(12)).build().expect("http client");
         #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
         let rpki = crate::rpki::Rpki::new(
             store.path.parent().map(|p| p.to_path_buf()).unwrap_or_default().join("rpki"),

@@ -14,18 +14,21 @@ use std::time::Duration;
 
 const PROBES: &[(&str, &str)] = &[("1.1.1.1", "Cloudflare"), ("8.8.8.8", "Google"), ("9.9.9.9", "Quad9")];
 
+/// Best of three TCP handshakes, in milliseconds.
+fn handshake(ip: &str, port: u16, timeout: Duration) -> Option<f64> {
+    let addr: SocketAddr = format!("{ip}:{port}").parse().ok()?;
+    (0..3)
+        .filter_map(|_| {
+            let t = clock::now_ns();
+            TcpStream::connect_timeout(&addr, timeout).ok()?;
+            Some(clock::since(t) as f64 / 1e6)
+        })
+        .reduce(f64::min)
+}
+
 /// Best of three TCP handshakes to the DoT port, or HTTPS where 853 is blocked.
 fn handshake_ms(ip: &str) -> Option<f64> {
-    [853, 443].into_iter().find_map(|port| {
-        let addr: SocketAddr = format!("{ip}:{port}").parse().ok()?;
-        (0..3)
-            .filter_map(|_| {
-                let t = clock::now_ns();
-                TcpStream::connect_timeout(&addr, Duration::from_millis(1500)).ok()?;
-                Some(clock::since(t) as f64 / 1e6)
-            })
-            .reduce(f64::min)
-    })
+    [853, 443].into_iter().find_map(|port| handshake(ip, port, Duration::from_millis(1500)))
 }
 
 /// Fastest cached plain-DNS answer (ms) and the fewest router hops any answer crossed.
@@ -74,14 +77,7 @@ fn fresh_name_ms(ip: &str) -> Option<f64> {
 
 /// Best of three TCP handshakes to port 53.
 fn handshake53_ms(ip: &str) -> Option<f64> {
-    let addr: SocketAddr = format!("{ip}:53").parse().ok()?;
-    (0..3)
-        .filter_map(|_| {
-            let t = clock::now_ns();
-            TcpStream::connect_timeout(&addr, Duration::from_millis(1000)).ok()?;
-            Some(clock::since(t) as f64 / 1e6)
-        })
-        .reduce(f64::min)
+    handshake(ip, 53, Duration::from_millis(1000))
 }
 
 /// A device this computer uses for DNS, and what it says its version is.

@@ -344,7 +344,7 @@ async fn connect(ws: &reqwest::Client) -> Option<Socket> {
 /// The client `probe` needs: HTTP/1.1 only, since a websocket upgrade doesn't exist on HTTP/2.
 pub fn client() -> reqwest::Client {
     reqwest::Client::builder()
-        .user_agent(concat!("Recursa-DNS-Benchmark/", env!("CARGO_PKG_VERSION")))
+        .user_agent(crate::USER_AGENT)
         .http1_only()
         .connect_timeout(Duration::from_secs(8))
         .build()

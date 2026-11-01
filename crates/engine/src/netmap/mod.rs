@@ -115,15 +115,9 @@ pub struct Target {
     pub host: String,
     pub addr: IpAddr,
     /// 4 or 6: the IP version this target is traced over. The IPv6 target's id is the IPv4 one's plus `-v6`.
-    #[serde(default = "four")]
     pub family: u8,
     /// The serving site the roll call found, for an edge target.
     pub site: Option<String>,
-}
-
-/// A stored run from before IPv6 has no family: it was IPv4.
-fn four() -> u8 {
-    4
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -131,7 +125,6 @@ pub struct MapTrace {
     pub target: Target,
     pub trace: Trace,
     /// For an IPv6 trace: whether it crosses the same networks as the IPv4 trace of the same target. `None` for IPv4.
-    #[serde(default)]
     pub same_route: Option<bool>,
 }
 
@@ -154,17 +147,13 @@ pub struct You {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AsrelInfo {
-    pub fetched_at: Option<i64>,
-    pub rows: usize,
     pub source: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Pfx2asInfo {
     pub fetched_at: Option<i64>,
-    pub rows: usize,
     pub source: Option<String>,
-    pub rows6: usize,
     pub source6: Option<String>,
 }
 
@@ -172,7 +161,6 @@ pub struct Pfx2asInfo {
 pub struct PdbInfo {
     pub accepted: bool,
     pub synced_at: Option<i64>,
-    pub rows: usize,
 }
 
 /// The registry lookups: allowed or not, and how many blocks are kept.
@@ -205,7 +193,6 @@ pub struct MapRun {
     pub claims: Vec<Claim>,
     pub headline: Option<Headline>,
     pub skipped: Vec<Skipped>,
-    pub datasets: Datasets,
 }
 
 /// How far a run has got, with the map as it stands.
@@ -232,17 +219,10 @@ pub struct State {
 }
 
 pub fn datasets(store: &crate::store::Store) -> Datasets {
-    let (synced_at, rows) = Pdb::stats(store);
     Datasets {
-        pfx2as: Pfx2asInfo {
-            fetched_at: store.get(attr::FETCHED_AT),
-            rows: store.pfx2as_count(),
-            source: store.get(attr::SOURCE),
-            rows6: store.pfx2as6_count(),
-            source6: store.get(attr::SOURCE6),
-        },
-        asrel: AsrelInfo { fetched_at: store.get(asrel::FETCHED_AT), rows: store.asrel_count(), source: store.get(asrel::SOURCE) },
-        peeringdb: PdbInfo { accepted: store.get(pdb::ACCEPTED) == Some(true), synced_at, rows },
+        pfx2as: Pfx2asInfo { fetched_at: store.get(attr::FETCHED_AT), source: store.get(attr::SOURCE), source6: store.get(attr::SOURCE6) },
+        asrel: AsrelInfo { source: store.get(asrel::SOURCE) },
+        peeringdb: PdbInfo { accepted: store.get(pdb::ACCEPTED) == Some(true), synced_at: Pdb::last_sync(store) },
         rdns: store.get(RDNS) == Some(true),
         rdap: RdapInfo { accepted: store.get(rdap::ACCEPTED) == Some(true), blocks: rdap::count(store) },
     }
@@ -362,7 +342,7 @@ pub(crate) fn refresh_in_background(app: &Arc<AppState>) {
         if app.store.asrel_count() == 0 || app.store.get::<i64>(asrel::FETCHED_AT).is_none_or(|t| now - t > asrel::REFRESH_MS) {
             let _ = fetch_asrel(&app).await;
         }
-        if app.store.get::<bool>(pdb::ACCEPTED) == Some(true) && stale(Pdb::stats(&app.store).0) {
+        if app.store.get::<bool>(pdb::ACCEPTED) == Some(true) && stale(Pdb::last_sync(&app.store)) {
             let fetch = |url: String| {
                 let app = app.clone();
                 async move { get(&app, url, true).await }
@@ -548,19 +528,7 @@ fn assemble(
     let (claims, headline) = say::say(&say_paths, &groups, &edges, inp.you.asn, inp.pdb, month.as_deref());
     drop(say_paths);
     drop(paths);
-    MapRun {
-        ts,
-        elapsed_ms,
-        you: inp.you.clone(),
-        traces,
-        ipv6: inp.ipv6,
-        groups,
-        edges,
-        claims,
-        headline,
-        skipped,
-        datasets: datasets(&inp.app.store),
-    }
+    MapRun { ts, elapsed_ms, you: inp.you.clone(), traces, ipv6: inp.ipv6, groups, edges, claims, headline, skipped }
 }
 
 /// The router addresses in unknown networks after the last run of your ISP; none before it, and none of yours.
@@ -753,20 +721,7 @@ mod tests {
     use super::*;
 
     fn edge(cdn: &'static str, ip: &str) -> crate::edge::EdgeSite {
-        crate::edge::EdgeSite {
-            cdn,
-            name: "Cloudflare",
-            host: "speed.cloudflare.com",
-            method: "test",
-            site: Some("IAD".into()),
-            site_raw: None,
-            site_city: None,
-            site_country: None,
-            ip: ip.parse().ok(),
-            asn: None,
-            holder: None,
-            error: None,
-        }
+        crate::edge::EdgeSite { cdn, site: Some("IAD".into()), site_city: None, ip: ip.parse().ok(), asn: None, error: None }
     }
 
     #[test]

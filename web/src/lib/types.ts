@@ -1071,9 +1071,9 @@ export interface NetTarget {
 }
 
 export interface NetDatasets {
-  pfx2as: { fetched_at: number | null; rows: number; source: string | null; rows6: number; source6: string | null };
-  asrel: { fetched_at: number | null; rows: number; source: string | null };
-  peeringdb: { accepted: boolean; synced_at: number | null; rows: number };
+  pfx2as: { fetched_at: number | null; source: string | null; source6: string | null };
+  asrel: { source: string | null };
+  peeringdb: { accepted: boolean; synced_at: number | null };
   rdns: boolean;
   /** Registry (RDAP) lookups for addresses no network announces, and how many blocks are kept. */
   rdap: { accepted: boolean; blocks: number };
@@ -1093,7 +1093,6 @@ export interface MapRun {
   claims: NetClaim[];
   headline: { text: string; tier: NetTier } | null;
   skipped: { target: string; reason: string }[];
-  datasets: NetDatasets;
 }
 
 interface MapProgress {
