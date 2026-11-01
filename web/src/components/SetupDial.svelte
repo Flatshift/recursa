@@ -144,8 +144,10 @@
   const STOP = ['tld', 'uncached', 'answer'];
 </script>
 
-<div class="dial" aria-hidden="true" in:fade={{ duration: reduceMotion ? 0 : 360 }} out:fade={{ duration: reduceMotion ? 0 : 220 }}>
-  <svg viewBox="170 170 684 684" width="132" height="132" fill="none" stroke-width={W} stroke-linecap="round">
+<div class="dial" aria-hidden="true">
+  <!-- Faded apart from the mark: fading the parent would cut the glass off from what it frosts until the fade ended. -->
+  <div class="glass" in:fade={{ duration: reduceMotion ? 0 : 360 }} out:fade={{ duration: reduceMotion ? 0 : 220 }}></div>
+  <svg viewBox="170 170 684 684" width="132" height="132" fill="none" stroke-width={W} stroke-linecap="round" in:fade={{ duration: reduceMotion ? 0 : 360 }} out:fade={{ duration: reduceMotion ? 0 : 220 }}>
     <circle class="root" cx="512" cy="512" r={RADII[0]} pathLength="1" />
     {#each RINGS as ring, i}
       <g class="ring" use:turn={{ i, still }}>
@@ -167,15 +169,25 @@
 
 <style>
   .dial {
+    position: relative;
     display: grid;
     place-items: center;
     width: 220px;
     height: 220px;
-    /* A disc of surface under the mark, so the placeholder rows stop at it instead of running through it. */
-    background: var(--surface);
-    border-radius: 50%;
+  }
+  /* One layer of frosted glass, masked so the frost and the tint fade out together and no edge survives. */
+  .glass {
+    --feather: radial-gradient(closest-side, #000 36%, rgb(0 0 0 / 0.78) 50%, rgb(0 0 0 / 0.46) 64%, rgb(0 0 0 / 0.2) 78%, rgb(0 0 0 / 0.05) 90%, transparent);
+    position: absolute;
+    inset: -80px;
+    background: color-mix(in oklch, var(--surface) 68%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    mask-image: var(--feather);
+    -webkit-mask-image: var(--feather);
   }
   svg {
+    position: relative;
     overflow: visible;
   }
   .ring,

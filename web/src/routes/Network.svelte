@@ -47,7 +47,7 @@
     {#if view === 'monitor'}
       <BorderMonitor />
     {/if}
-    <div class="content scroll wrap" style:display={view === 'monitor' ? 'none' : null}>
+    <div class="content scroll" style:display={view === 'monitor' ? 'none' : null}>
       <NetMapPanel {nm} />
     </div>
   </div>
@@ -71,8 +71,5 @@
     margin-right: 8px;
     font-size: var(--t-xs);
     color: var(--ink-3);
-  }
-  .wrap > :global(*) {
-    max-width: 1280px;
   }
 </style>

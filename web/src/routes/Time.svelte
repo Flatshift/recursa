@@ -221,9 +221,9 @@
   const progress = $derived(run ? Math.min(1, Math.max(run.total ? run.done / run.total : 0, elapsed / span)) : 0);
   const left = $derived(Math.max(0, Math.round(span - elapsed)));
   const ticks = $derived(Array.from({ length: Math.floor(span / 10) + 1 }, (_, i) => i * 10));
-  // The dial tunes in while the first queries are still waiting their random start, then locks and lifts.
-  const settling = $derived(elapsed >= (run?.spacing_s ?? spacing) - 1.4);
-  const tuning = $derived(elapsed < (run?.spacing_s ?? spacing) + 0.2);
+  // One pass of the dial and no more, while the first queries wait their random start: it tunes in, locks and lifts.
+  const settling = $derived(elapsed >= 2);
+  const tuning = $derived(elapsed < 3.2);
 
   /** A server you typed has no catalog entry; this stands in for one. */
   const yours = (r: NtpResult): NtpEntry => ({
@@ -589,7 +589,7 @@
             <div class="axis">
               {#each ticks as t (t)}<span style:left="{(t / span) * 100}%">{t} s</span>{/each}
             </div>
-            <div class="rows">
+            <div class="rows" class:tuning>
               {#each liveRows as l, i (i)}
                 <div class="lrow">
                   <div class="who">
@@ -1256,6 +1256,13 @@
   }
   .rows {
     position: relative;
+    min-height: 0;
+    transition: min-height 300ms var(--ease-out);
+  }
+  /* Room for the dial on a short sheet, handed back as it lifts. */
+  .rows.tuning {
+    min-height: 240px;
+    transition: none;
   }
   .lrow {
     display: grid;

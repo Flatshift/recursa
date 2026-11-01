@@ -131,10 +131,13 @@ export function layout(groups: NetGroup[], edges: NetLink[], o: TreeOpts = TREE,
     into.set(e.to, above);
     return { index, d: `M${x1} ${y1}C${xm} ${y1} ${xm} ${y2} ${x2} ${y2}`, lx: x2 - (o.colW - o.nodeW) / 2, ly: y2, above };
   });
+  const laid = paths.filter((p): p is TreeEdge => p != null);
+  // A label stacked down from the last row (up to three lines of 14) reaches past the box; the height keeps it in.
+  const below = laid.filter((p) => !p.above).map((p) => p.ly + 48 + o.pad);
   return {
     nodes,
-    edges: paths.filter((p): p is TreeEdge => p != null),
+    edges: laid,
     width: o.pad + Math.max(o.pad + o.nodeW, ...nodes.map((n) => n.x + n.w)),
-    height: o.pad * 2 + Math.max(0, ...y.values()) * o.rowH + o.nodeH,
+    height: Math.max(o.pad * 2 + Math.max(0, ...y.values()) * o.rowH + o.nodeH, ...below),
   };
 }

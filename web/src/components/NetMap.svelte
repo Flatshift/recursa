@@ -12,10 +12,13 @@
   import { logScale } from '../lib/scale';
   import { reduceMotion } from '../lib/motion';
   import Provenance from './Provenance.svelte';
+  import SetupDial from './SetupDial.svelte';
 
-  let { run, label }: { run: MapRun | null; label: string } = $props();
+  let { run, label, running = false }: { run: MapRun | null; label: string; running?: boolean } = $props();
 
   const groups = $derived(run?.groups ?? []);
+  // Nothing can be drawn until the first trace is back, which takes the address tables, the roll call and a whole trace.
+  const starting = $derived(running && !groups.length);
   const cdnClouds = $derived(run ? clouds(run) : []);
   const tree = $derived(layout(groups, run?.edges ?? [], TREE, cdnClouds.map((c) => c.ids)));
   const byId = $derived(new Map(groups.map((g) => [g.id, g])));
@@ -84,12 +87,13 @@
     );
   };
   const delay = (col: number) => (reduceMotion ? undefined : `${col * 110}ms`);
-  // The map fits the pane by default, never larger than life; the zoom buttons scale it from there and it scrolls
-  // sideways when it no longer fits, with a fade at the right edge to say there is more.
+  // The map fills the pane's width by default, growing a little past life size on a wide pane and sitting centred
+  // when it cannot; the zoom buttons scale it from there and it scrolls sideways when it no longer fits, with a fade
+  // at the right edge to say there is more.
   let viewW = $state(0);
   let scrolled = $state(0);
   let zoom = $state<number | null>(null);
-  const fit = $derived(viewW > 0 ? Math.min(1, (viewW - 24) / tree.width) : 1);
+  const fit = $derived(viewW > 0 ? Math.min(1.25, (viewW - 24) / tree.width) : 1);
   const scale = $derived(zoom ?? fit);
   const svgW = $derived(Math.round(tree.width * scale));
   const svgH = $derived(Math.round(tree.height * scale));
@@ -138,7 +142,7 @@
   const path = (ids: string[]) => groups.filter((g) => g.members.length && g.targets.some((t) => ids.includes(t))).sort((a, b) => a.ttl_from - b.ttl_from);
 </script>
 
-<div class="map panel" class:more>
+<div class="map panel" class:more class:running>
   <div class="scroller" bind:clientWidth={viewW} onscroll={(e) => (scrolled = e.currentTarget.scrollLeft)}>
     {#if groups.length}
       <svg width={svgW} height={svgH} viewBox="0 0 {tree.width} {tree.height}" role="img" aria-label={label}>
@@ -223,8 +227,8 @@
           </g>
         {/each}
       </svg>
-    {:else}
-      <!-- Mapping, before the first trace finishes: your home and the ISP column, ready to fill. -->
+    {:else if !running}
+      <!-- A run that left nothing to draw: your home and the ISP column, empty. -->
       <svg width={SKEL_W} height={SKEL_H} viewBox="0 0 {SKEL_W} {SKEL_H}" role="img" aria-label={label} aria-busy="true">
         <title>{label}</title>
         <rect class="skel-node" x={TREE.pad} y={TREE.pad} width={TREE.nodeH} height={TREE.nodeH} rx="6" />
@@ -233,6 +237,9 @@
       </svg>
     {/if}
   </div>
+  {#if starting}
+    <div class="starting" role="img" aria-label={label} aria-busy="true"><SetupDial /></div>
+  {/if}
   {#if groups.length}
     <div class="zoom" role="group" aria-label="Zoom">
       <button type="button" aria-label="Zoom out" disabled={scale <= 0.4} onclick={() => zoomBy(1 / 1.25)}>&minus;</button>
@@ -310,6 +317,17 @@
     overflow-x: auto;
     padding: 12px;
   }
+  /* Room for the dial, kept through the run so the first boxes don't pull the panel in behind it. */
+  .map.running .scroller {
+    min-height: 320px;
+  }
+  .starting {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+  }
   .map.more::after {
     content: '';
     position: absolute;
@@ -322,6 +340,7 @@
   }
   svg {
     display: block;
+    margin: 0 auto;
   }
   /* The label inside a box: one line each, the name alone may take two. */
   .nbox {

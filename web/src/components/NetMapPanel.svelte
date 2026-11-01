@@ -147,7 +147,7 @@
   {#if view === 'table' && run}
     <NetMapTable {run} />
   {:else}
-    <NetMap {run} {label} />
+    <NetMap {run} {label} {running} />
   {/if}
   {#if run?.skipped.length}
     <p class="fine">Not traced: {run.skipped.map((s) => `${s.target} (${s.reason})`).join(', ')}.</p>
