@@ -10,7 +10,7 @@
   import { label, ms, pct, plural } from '../lib/format';
   import { TEST_LABEL } from '../lib/phases';
   import { logDomain, logScale, tickLabel } from '../lib/scale';
-  import { warmByTarget, warmJitter } from '../lib/warm';
+  import { warmByTarget, warmCount, warmJitter } from '../lib/warm';
   import { flip } from 'svelte/animate';
   import { onMount } from 'svelte';
   import { fade } from 'svelte/transition';
@@ -72,9 +72,8 @@
   };
 
   // Warm-up answers per target. They never count; until something is measured they set the axis.
-  const warmBy = $derived(live ? warmByTarget(warm, tests) : new Map<number, Partial<Record<TestKind, WarmSample[]>>>());
+  const warmBy = $derived(warmByTarget(live ? warm : [], tests));
   const warmAxis = $derived(!shown.length && warmBy.size > 0);
-  const warmN = (idx: number) => tests.reduce((n, k) => n + (warmBy.get(idx)?.[k]?.length ?? 0), 0);
 
   // One log axis for every strip, as in the Latency view; while live it also spans the warm-up answers, so it holds
   // when measuring starts.
@@ -156,7 +155,7 @@
     </li>
     {#each order as idx (idx)}
       {@const r = byIdx.get(idx)!}
-      {@const wn = warmN(idx)}
+      {@const wn = warmCount(warmBy, idx, tests)}
       <li animate:flip={RERANK} in:rise={riseOn()}>
         {#if r.measured}
           <button
@@ -340,12 +339,6 @@
   /* A row that climbed: its numeral starts in full ink at a heavier weight and settles back. */
   .rn.up {
     animation: climb 1200ms var(--ease-out);
-  }
-  @keyframes climb {
-    from {
-      color: var(--ink);
-      font-weight: 760;
-    }
   }
   @media (prefers-reduced-motion: reduce) {
     .rn.up {

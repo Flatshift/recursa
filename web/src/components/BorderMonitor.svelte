@@ -3,13 +3,12 @@
   // the last one inside it and the first one beyond, towards each CDN. When only the far one slows at the same hours
   // each day, the queue is on the link between them. Kept for weeks, so the daily shape shows.
   import { app } from '../lib/store.svelte';
-  import { RETENTION_DAYS, monitor } from '../lib/monitor.svelte';
-  import type { BorderPairHistory, BorderPoint, BorderMonitorConfig, BorderResp } from '../lib/types';
+  import { RETENTION_DAYS, W, line, monitor } from '../lib/monitor.svelte';
+  import type { BorderPairHistory, BorderMonitorConfig, BorderResp } from '../lib/types';
   import { ago, holder, ms, when } from '../lib/format';
   import CdnLogo from './CdnLogo.svelte';
   import Icon from './Icon.svelte';
 
-  const W = 240;
   // Up to 30 minutes: a verdict wants at least two probes in an hour.
   const INTERVALS = [5, 10, 15, 30];
 
@@ -32,23 +31,6 @@
   const empty = $derived(!!h && h.cycles === 0);
   const home = $derived(h?.home.holder ? holder(h.home.holder) : h?.home.asn ? `AS${h.home.asn}` : 'your ISP');
 
-  /** A line over the window, broken wherever there is no value, scaled to fit. */
-  function line(pts: BorderPoint[], pick: (p: BorderPoint) => number | null, since: number, until: number, lo: number, hi: number, hgt: number) {
-    const span = Math.max(1, until - since);
-    const y = (v: number) => (hi === lo ? hgt / 2 : hgt - 2 - ((v - lo) / (hi - lo)) * (hgt - 4));
-    let d = '';
-    let pen = false;
-    for (const p of pts) {
-      const v = pick(p);
-      if (v == null) {
-        pen = false;
-        continue;
-      }
-      d += `${pen ? 'L' : 'M'}${(((p.ts - since) / span) * W).toFixed(1)} ${y(v).toFixed(1)}`;
-      pen = true;
-    }
-    return d;
-  }
   function chart(ph: BorderPairHistory, since: number, until: number) {
     const vals = ph.points.flatMap((p) => [p.near_ms, p.far_ms]).filter((v): v is number => v != null);
     const lo = vals.length ? Math.min(0, ...vals) : 0;

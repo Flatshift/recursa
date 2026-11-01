@@ -22,7 +22,7 @@
   import { HIT_SHARE, RELIABLE, TESTS, expectsBlock, verdict } from '../lib/verdict';
   import { CAPS, PUBLISHED_ONLY, type CapGroup } from '../lib/caps';
   import { capCell, cdnCell, roaCell, rovCell } from '../lib/cells';
-  import { TRANSPORT_LABEL, day, holder, label, list, ms, pct, when } from '../lib/format';
+  import { TRANSPORT_LABEL, day, holder, label, list, ms, pct, timeOfDay, when } from '../lib/format';
   import { TEST_LABEL } from '../lib/phases';
   import { status, stateLabel, stateGlyph, localNote } from '../lib/status.svelte';
   import { logDomain } from '../lib/scale';
@@ -120,7 +120,6 @@
   const picks = $derived(runState && rows.length ? verdict(runState, rows, HIT_SHARE[app.mix]).picks.filter((p) => p.resolverId === id) : []);
   // When a check last ran here, so the headline and the line under it say where the findings came from.
   const checkedAt = $derived(Math.max(0, ...(Object.keys(results) as CheckKind[]).filter((k) => results[k][id]).map((k) => ranAt[`${k}:${id}`] ?? 0)));
-  const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const line = $derived.by(() => {
     if (!runState) return checkedAt ? 'Not benchmarked yet.' : 'Not measured yet: run a benchmark, or test it below.';
     if (!row) return 'Not in this benchmark.';
@@ -213,7 +212,7 @@
     return [...all.filter((s) => s.bad), ...all.filter((s) => !s.bad)];
   });
   const from = $derived.by(() => {
-    const src = [runState ? `the benchmark of ${when(runState.started_at)}` : '', checkedAt ? `checks run at ${clock(checkedAt)}` : ''].filter(Boolean);
+    const src = [runState ? `the benchmark of ${when(runState.started_at)}` : '', checkedAt ? `checks run at ${timeOfDay(checkedAt)}` : ''].filter(Boolean);
     return src.length ? `From ${src.join(' and ')}.` : '';
   });
 
@@ -247,7 +246,7 @@
     if (isRunning(k, id)) return phase(k, name, ip);
     const at = ranAt[`${k}:${id}`];
     if (errorOf(k, id)) return errorOf(k, id)!;
-    return at && has(k) ? `Last run at ${clock(at)}. ${tips[k]}.` : hints[k];
+    return at && has(k) ? `Last run at ${timeOfDay(at)}. ${tips[k]}.` : hints[k];
   };
 </script>
 

@@ -10,6 +10,7 @@
   import Icon from '../components/Icon.svelte';
   import Toolbar from '../components/Toolbar.svelte';
   import Info from '../components/Info.svelte';
+  import Picks from '../components/Picks.svelte';
   import Record, { type Mark } from '../components/Record.svelte';
 
   const RANGES: [number, string, string][] = [
@@ -188,14 +189,7 @@
           {/if}
         </div>
         {#if verdict?.picks.length}
-          <dl class="picks">
-            {#each verdict.picks as p}
-              <div class="pick">
-                <dt>{p.goal}</dt>
-                <dd><span class="pn">{p.name}</span><span class="ev">{p.ev}</span></dd>
-              </div>
-            {/each}
-          </dl>
+          <Picks picks={verdict.picks} rows />
         {/if}
       </section>
 
@@ -406,43 +400,6 @@
     color: var(--ink-2);
     max-width: 62ch;
   }
-  .picks {
-    margin: 0;
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(0, 1fr);
-    padding-top: 16px;
-    border-top: 1px solid var(--rule);
-  }
-  .pick {
-    display: grid;
-    align-content: start;
-    gap: 4px;
-    padding: 0 18px;
-    border-left: 1px solid var(--rule);
-  }
-  .pick:first-child {
-    padding-left: 0;
-    border-left: 0;
-  }
-  dt {
-    font-size: var(--t-xs);
-    color: var(--ink-3);
-  }
-  dd {
-    margin: 0;
-    display: grid;
-    gap: 2px;
-    min-width: 0;
-  }
-  .pn {
-    font-weight: 620;
-    font-size: var(--t-sm);
-  }
-  .ev {
-    font-size: var(--t-xs);
-    color: var(--ink-2);
-  }
   @container rverdict (min-width: 1060px) {
     .lead {
       display: grid;
@@ -452,21 +409,6 @@
     }
     .detail {
       margin-top: 3px;
-    }
-  }
-  @container rverdict (max-width: 640px) {
-    .picks {
-      grid-auto-flow: row;
-      padding-top: 0;
-      border-top: 0;
-    }
-    .pick,
-    .pick:first-child {
-      grid-template-columns: 150px minmax(0, 1fr);
-      gap: 12px;
-      padding: 9px 0;
-      border-left: 0;
-      border-top: 1px solid var(--rule);
     }
   }
 
@@ -836,10 +778,6 @@
   }
   :global(html.mobile) h2#rv-h {
     font-size: var(--t-xl);
-  }
-  :global(html.mobile) .pick,
-  :global(html.mobile) .pick:first-child {
-    grid-template-columns: 112px minmax(0, 1fr);
   }
   /* Outages: the missed-cycle count is the same fact as the duration, so the phone drops it. */
   :global(html.mobile) .outs th:nth-child(4),

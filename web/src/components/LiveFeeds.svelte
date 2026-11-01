@@ -1,7 +1,7 @@
 <script lang="ts">
   import { app } from '../lib/store.svelte';
   import type { LiveBlocking, LiveCategory } from '../lib/types';
-  import { ago, resolverName } from '../lib/format';
+  import { ago, resolverName, timeOfDay } from '../lib/format';
   import { results, LIVE_SAMPLE_TTL_MS } from '../lib/checks.svelte';
   import { expectsBlock } from '../lib/verdict';
 
@@ -42,7 +42,6 @@
       .sort((a, b) => b.rate - a.rate);
   });
 
-  const clock = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 </script>
 
 {#if live}
@@ -140,7 +139,7 @@
       </table>
     {/if}
     <p class="why">
-      Every resolver checked before {clock(live.sample_taken_at + LIVE_SAMPLE_TTL_MS)} is asked for these same hosts, so their
+      Every resolver checked before {timeOfDay(live.sample_taken_at + LIVE_SAMPLE_TTL_MS)} is asked for these same hosts, so their
       results line up here. After that a fresh sample is drawn. A host counts as blocked on NXDOMAIN, REFUSED, an empty answer,
       a sinkhole address, a known block page or an EDE code 15–18.
     </p>

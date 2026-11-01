@@ -11,6 +11,26 @@ import type { MonitorConfig, MonitorResp } from './types';
 export const RESOLVER_INTERVAL_MIN = [1, 5, 10, 15, 30, 60];
 /** How long either monitor may keep its history, in days. */
 export const RETENTION_DAYS = [7, 30, 90, 365];
+/** The width the Border and Time charts are drawn at, before they scale to fit. */
+export const W = 240;
+
+/** A line over the window, broken wherever there is no value, scaled to fit. */
+export function line<P extends { ts: number }>(pts: P[], pick: (p: P) => number | null, since: number, until: number, lo: number, hi: number, h: number) {
+  const span = Math.max(1, until - since);
+  const y = (v: number) => (hi === lo ? h / 2 : h - 2 - ((v - lo) / (hi - lo)) * (h - 4));
+  let d = '';
+  let pen = false;
+  for (const p of pts) {
+    const v = pick(p);
+    if (v == null) {
+      pen = false;
+      continue;
+    }
+    d += `${pen ? 'L' : 'M'}${(((p.ts - since) / span) * W).toFixed(1)} ${y(v).toFixed(1)}`;
+    pen = true;
+  }
+  return d;
+}
 
 interface MonitorOptions<C> {
   /** `/api/monitor`, `/api/ntp/monitor` or `/api/network/border`; `/last` and `/history` hang off it. */

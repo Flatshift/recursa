@@ -5,7 +5,7 @@
   // status bars; outages are struck through in red; operator-reported incidents sit on top as hollow marks.
   import type { MonitorCell, MonitorHist, MonitorHistory } from '../lib/types';
   import { logDomain } from '../lib/scale';
-  import { ms, pct, plural, when } from '../lib/format';
+  import { ms, pct, plural, timeOfDay, when } from '../lib/format';
 
   export interface Mark {
     t: number;
@@ -207,7 +207,7 @@
   function span(i: number): string {
     const t = startOf(i);
     const a = when(t);
-    const b = new Date(t + history.cell).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    const b = timeOfDay(t + history.cell);
     return `${a} – ${b}`;
   }
   function summary(r: Row, i: number): string {

@@ -134,11 +134,13 @@ export function holder(h: string | null | undefined): string {
   return i > 0 ? h.slice(i + 3) : h;
 }
 
+/** The time of day: "9:48 PM". */
+export const timeOfDay = (ts: number) => new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+
 /** Compact timestamp for lists: "Today 9:48 PM", "Yesterday 3:10 PM", "Oct 6, 9:48 PM". */
 export function shortWhen(ts: number | null | undefined): string {
   if (ts == null) return '—';
-  const d = new Date(ts);
-  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const time = timeOfDay(ts);
   const days = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(ts).setHours(0, 0, 0, 0)) / 86_400_000);
   if (days === 0) return `Today ${time}`;
   if (days === 1) return `Yesterday ${time}`;

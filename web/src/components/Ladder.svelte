@@ -16,7 +16,7 @@
   import { RERANK, TICK_FADE, ZOOM, jitterOf, rankTracker, reduceMotion, rise, roll, sinFrac } from '../lib/motion';
   import { pacedOrder } from '../lib/paced.svelte';
   import { logDomain, logInvert, logScale, logTicks, tickLabel } from '../lib/scale';
-  import { warmByTarget, warmJitter } from '../lib/warm';
+  import { warmByTarget, warmCount, warmJitter } from '../lib/warm';
 
   let {
     rows,
@@ -77,8 +77,7 @@
   };
 
   // Warm-up answers per target and lane. They never count; they show the run is working.
-  const warmBy = $derived(live ? warmByTarget(warm, lanes) : new Map<number, Partial<Record<TestKind, WarmSample[]>>>());
-  const warmN = (idx: number) => lanes.reduce((n, k) => n + (warmBy.get(idx)?.[k]?.length ?? 0), 0);
+  const warmBy = $derived(warmByTarget(live ? warm : [], lanes));
   // Until a row has measured answers, the axis is drawn from the warm-up answers, if there are any.
   const warmAxis = $derived(!measured.length && warmBy.size > 0);
 
@@ -333,7 +332,7 @@
       {@const m = r.measured}
       {@const byLane = dots.get(idx) ?? {}}
       {@const warmLane = warmBy.get(idx) ?? {}}
-      {@const wn = warmN(idx)}
+      {@const wn = warmCount(warmBy, idx, lanes)}
       {@const to = timeouts(r)}
       {@const er = errors(r)}
       <!-- A waiting row has no role or tab stop until it has answers; clicks on it do nothing. -->
@@ -611,12 +610,6 @@
   /* A row that climbed: its numeral starts in full ink and heavier, and settles back. */
   .rn.up {
     animation: climb 1200ms var(--ease-out);
-  }
-  @keyframes climb {
-    from {
-      color: var(--ink);
-      font-weight: 760;
-    }
   }
   .rank :global(svg) {
     color: var(--warning);

@@ -20,6 +20,7 @@
   import Cell from './Cell.svelte';
   import Glyph from './Glyph.svelte';
   import Info from './Info.svelte';
+  import Picks from './Picks.svelte';
   import Provenance from './Provenance.svelte';
 
   let {
@@ -241,14 +242,7 @@
       <p class="detail">{head.detail}</p>
     </div>
     {#if head.picks.length}
-      <dl class="picks">
-        {#each head.picks as p}
-          <div class="pick">
-            <dt>{p.goal}</dt>
-            <dd><span class="pn">{p.name}</span><span class="ev">{p.ev}</span></dd>
-          </div>
-        {/each}
-      </dl>
+      <Picks picks={head.picks} />
     {/if}
   </section>
 {/if}
@@ -384,43 +378,6 @@
     color: var(--ink-2);
     max-width: 64ch;
   }
-  .picks {
-    margin: 0;
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(0, 1fr);
-    padding-top: 16px;
-    border-top: 1px solid var(--rule);
-  }
-  .pick {
-    display: grid;
-    align-content: start;
-    gap: 4px;
-    padding: 0 18px;
-    border-left: 1px solid var(--rule);
-  }
-  .pick:first-child {
-    padding-left: 0;
-    border-left: 0;
-  }
-  dt {
-    font-size: var(--t-xs);
-    color: var(--ink-3);
-  }
-  dd {
-    margin: 0;
-    display: grid;
-    gap: 2px;
-    min-width: 0;
-  }
-  .pn {
-    font-weight: 620;
-    font-size: var(--t-sm);
-  }
-  .ev {
-    font-size: var(--t-xs);
-    color: var(--ink-2);
-  }
   @container cverdict (min-width: 1060px) {
     .lead {
       display: grid;
@@ -430,21 +387,6 @@
     }
     .detail {
       margin-top: 3px;
-    }
-  }
-  @container cverdict (max-width: 640px) {
-    .picks {
-      grid-auto-flow: row;
-      gap: 12px;
-    }
-    .pick {
-      padding: 12px 0 0;
-      border-left: 0;
-      border-top: 1px solid var(--rule);
-    }
-    .pick:first-child {
-      padding-top: 0;
-      border-top: 0;
     }
   }
 

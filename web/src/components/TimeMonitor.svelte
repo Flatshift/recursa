@@ -2,15 +2,13 @@
   // The Time page's "Over time" view: a light background check of a few time servers, kept for weeks, so what one run
   // can't show comes through: how steady each server is, whether it drops out, and whether this computer's clock wanders.
   import { app } from '../lib/store.svelte';
-  import { RETENTION_DAYS, monitor } from '../lib/monitor.svelte';
+  import { RETENTION_DAYS, W, line, monitor } from '../lib/monitor.svelte';
   import type { NtpEntry, NtpMonitorConfig, NtpMonitorPoint, NtpMonitorResp, NtpMonitorServer } from '../lib/types';
   import { ago, ms, signedMs, when } from '../lib/format';
   import { MAX_CUSTOM, MAX_SERVERS, idMap, nameOf } from '../lib/ntp';
   import Icon from './Icon.svelte';
 
   let { catalog }: { catalog: NtpEntry[] } = $props();
-
-  const W = 240;
 
   let days = $state(7);
   let customText = $state('');
@@ -46,23 +44,6 @@
     ({ dns: 'its name didn’t resolve', no_address: 'no address', timeout: 'no answer', kiss: 'asked us to stop', unsynchronized: 'not synchronised', bad_reply: 'a reply that didn’t check out', network: 'the network refused' } as Record<string, string>)[k ?? ''] ??
     'no answer';
 
-  /** A line over the window, broken wherever there is no value, scaled to fit. */
-  function line(pts: NtpMonitorPoint[], pick: (p: NtpMonitorPoint) => number | null, since: number, until: number, lo: number, hi: number, h: number) {
-    const span = Math.max(1, until - since);
-    const y = (v: number) => (hi === lo ? h / 2 : h - 2 - ((v - lo) / (hi - lo)) * (h - 4));
-    let d = '';
-    let pen = false;
-    for (const p of pts) {
-      const v = pick(p);
-      if (v == null) {
-        pen = false;
-        continue;
-      }
-      d += `${pen ? 'L' : 'M'}${(((p.ts - since) / span) * W).toFixed(1)} ${y(v).toFixed(1)}`;
-      pen = true;
-    }
-    return d;
-  }
   function band(pts: NtpMonitorPoint[], since: number, until: number, lo: number, hi: number, h: number) {
     const span = Math.max(1, until - since);
     const y = (v: number) => (hi === lo ? h / 2 : h - 2 - ((v - lo) / (hi - lo)) * (h - 4));

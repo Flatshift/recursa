@@ -4,7 +4,7 @@
   import { api, mobile, saveExport } from '../lib/api';
   import { app, readLocal, writeLocal } from '../lib/store.svelte';
   import type { NtpEntry, NtpResult, NtpRun } from '../lib/types';
-  import { plural } from '../lib/format';
+  import { plural, timeOfDay } from '../lib/format';
   import { MAX_CUSTOM, addrs, idMap, nameOf, num, reachMs, sgn } from '../lib/ntp';
   import Icon from '../components/Icon.svelte';
   import Info from '../components/Info.svelte';
@@ -143,7 +143,6 @@
     const names = [...picked.map((id) => nameOf(byId, id)), ...customHosts];
     return names.length > 4 ? `${names.slice(0, 3).join(', ')} and ${names.length - 3} more` : names.join(', ');
   });
-  const at = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   /** When a server may next be asked, and why not yet. */
   function resting(e: NtpEntry): { until: number; kiss: string | null } | null {
     const a = asked[e.nts_only ? (e.nts ?? e.host) : e.host];
@@ -563,7 +562,7 @@
                           <span class="where">{e.anycast ? 'anycast' : (e.country ?? '')}</span>
                           {#if resting(e)}
                             {@const w = resting(e)!}
-                            <span class="rest">{w.kiss ? `told us to stop (${w.kiss}); left alone until ${at(w.until)}` : `asked a few minutes ago; ready at ${at(w.until)}`}</span>
+                            <span class="rest">{w.kiss ? `told us to stop (${w.kiss}); left alone until ${timeOfDay(w.until)}` : `asked a few minutes ago; ready at ${timeOfDay(w.until)}`}</span>
                           {/if}
                         </label>
                       </li>
@@ -651,7 +650,7 @@
           <Icon name="info" size={14} />
           <span>
             Left alone in the last run, to be gentle:
-            {run.skipped.map((s) => `${byId.get(s.id)?.name ?? s.host} (${s.why === 'kiss' ? `it told us to stop, ${s.kiss}` : 'asked a few minutes before'}; ready ${at(s.until)})`).join(', ')}.
+            {run.skipped.map((s) => `${byId.get(s.id)?.name ?? s.host} (${s.why === 'kiss' ? `it told us to stop, ${s.kiss}` : 'asked a few minutes before'}; ready ${timeOfDay(s.until)})`).join(', ')}.
           </span>
         </p>
       {/if}

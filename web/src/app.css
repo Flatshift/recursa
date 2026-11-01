@@ -959,6 +959,14 @@ html.mobile .segmented button {
   }
 }
 
+/* A row that climbed the ranking: its numeral starts in full ink and heavier, and settles back. */
+@keyframes climb {
+  from {
+    color: var(--ink);
+    font-weight: 760;
+  }
+}
+
 /* A check in progress: a small dot that breathes. */
 .live-dot {
   display: inline-block;
