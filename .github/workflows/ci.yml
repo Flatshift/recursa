@@ -24,11 +24,14 @@ jobs:
         with:
           fetch-depth: 0
       - name: Commit hygiene
-        # Every commit carries a DCO sign-off and names a person, not a tool.
+        # Every commit carries a DCO sign-off and names a person, not a tool. On a pull request HEAD is GitHub's test
+        # merge, which nobody signs, so the sign-off walk starts at the branch tip.
+        env:
+          TIP: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           if git log --format='%an <%ae> %cn <%ce>' | grep -iE 'claude|anthropic'; then exit 1; fi
           if git log --format=%B | grep -iE '^co-authored-by:.*(claude|anthropic)|^claude-session:'; then exit 1; fi
-          for c in $(git rev-list HEAD); do
+          for c in $(git rev-list "$TIP"); do
             git log -1 --format=%B "$c" | grep -q '^Signed-off-by: ' || { echo "missing sign-off: $c"; exit 1; }
           done
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
