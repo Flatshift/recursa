@@ -361,8 +361,9 @@
                       <span>No ROA covers {intel.service.prefix} from AS{intel.service.asn ?? '?'}</span>
                     {/each}
                     <span class="muted"
-                      >{intel.service.prefix} as announced by AS{intel.service.asn ?? '?'}{#if intel.service.rpki.vrp_time != null}, checked on this computer ({intel.service.rpki
-                          .validator ?? 'RPKI validator'}), data from {when(intel.service.rpki.vrp_time)}{:else}; route-origin result from an earlier version{/if}</span
+                      >{intel.service.prefix} as announced by AS{intel.service.asn ?? '?'}, checked on this computer ({intel.service.rpki.validator ?? 'RPKI validator'}), data from {when(
+                        intel.service.rpki.vrp_time,
+                      )}</span
                     >
                   </span>
                 {/if}

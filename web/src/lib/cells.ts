@@ -19,9 +19,7 @@ export const answered = (run: RunState, id: string): boolean =>
 
 /** A capability value: measured beats published beats unknown. */
 export function capCell(run: RunState | null, r: Resolver, key: string): Cell {
-  let c = run ? check(run, r.id, key) : undefined;
-  // Runs saved before the engine stopped reporting "no endpoint" as a measurement.
-  if (c?.value === 'Not published') c = { ...c, status: 'unknown', value: r.group === 'system' || r.group === 'custom' ? 'Not set' : 'Not offered' };
+  const c = run ? check(run, r.id, key) : undefined;
   if (c && c.status !== 'unknown') {
     // Not blocking isn't a failure for a resolver that never claimed to filter.
     if (key.startsWith('filter_') && c.status === 'fail' && !r.published.filtering.includes(key.slice(7))) {
@@ -72,7 +70,7 @@ export function roaCell(run: RunState, id: string): Cell {
     return { status: 'unknown', text: s.rpki?.state === 'syncing' ? 'Syncing…' : 'Not checked', prov: 'unknown', evidence: s.rpki?.reason };
   }
   const roa = s.rpki?.roas?.[0];
-  const ev = `${s.prefix ?? ''} origin AS${s.asn ?? '?'} · ${roa ? `ROA AS${roa.origin} ${roa.prefix} max /${roa.max_length}` : 'no covering ROA'} (${s.rpki?.vrp_time != null ? `checked on this computer, data from ${when(s.rpki.vrp_time)}; ${s.rpki.validator ?? 'RPKI validator'}` : 'route-origin result from an earlier version'})`;
+  const ev = `${s.prefix ?? ''} origin AS${s.asn ?? '?'} · ${roa ? `ROA AS${roa.origin} ${roa.prefix} max /${roa.max_length}` : 'no covering ROA'} (checked on this computer, data from ${when(s.rpki?.vrp_time)}; ${s.rpki?.validator ?? 'RPKI validator'})`;
   if (st === 'valid') return { status: 'pass', text: 'Valid', prov: 'verified', evidence: ev };
   if (st.startsWith('invalid')) return { status: 'fail', text: 'Invalid', prov: 'verified', evidence: ev };
   return { status: 'partial', text: 'No ROA', prov: 'verified', evidence: ev };

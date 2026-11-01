@@ -86,8 +86,7 @@ export const isV6 = (t: NetTarget) => t.family === 6;
 
 /** Whether every one of these target ids belongs to an IPv6 target: what only IPv6 traffic crosses. */
 export function v6Only(ids: string[], run: MapRun): boolean {
-  // A run saved before IPv6 tracing has no target lists on its links.
-  return !!ids?.length && ids.every((id) => run.traces.some((t) => t.target.id === id && isV6(t.target)));
+  return ids.every((id) => run.traces.some((t) => t.target.id === id && isV6(t.target)));
 }
 
 interface Dest {
