@@ -565,13 +565,12 @@ fn aliases(members: &[Member]) -> Vec<Vec<IpAddr>> {
 }
 
 /// Join the traces' runs into one picture. A named network or exchange is one group however it is reached, carrier
-/// or destination, unless a
-/// trace comes back to it after leaving (a second visit) or its routers decode to another city; silence between two
-/// groups that answer goes on the link between them as `silent_hops`, and silence at the end of a trace or unknown
-/// addresses are only the same group when they follow the same group. When the routers differ at one hop on the
-/// same side the group is marked `parallel`. Returns the groups, the links between them, and for each input the ids
-/// of its groups in order. `rels` sets each link's kind where it knows the pair; a link out of an exchange is asked
-/// about the last named network before the exchange on the trace that crossed it.
+/// or destination, unless a trace comes back to it after leaving (a second visit) or its routers decode to another
+/// city; silence between two groups that answer goes on the link between them as `silent_hops`, and silence at the end
+/// of a trace or unknown addresses are only the same group when they follow the same group. When the routers differ at
+/// one hop on the same side the group is marked `parallel`. Returns the groups, the links between them, and for each
+/// input the ids of its groups in order. `rels` sets each link's kind where it knows the pair; a link out of an
+/// exchange is asked about the last named network before the exchange on the trace that crossed it.
 pub fn merge(paths: &[(&str, Vec<Seg>)], rels: &AsRel) -> (Vec<Group>, Vec<Link>, Vec<Vec<usize>>) {
     let mut groups: Vec<Group> = Vec::new();
     let mut before: Vec<Option<usize>> = Vec::new();

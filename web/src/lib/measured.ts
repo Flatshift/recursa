@@ -5,12 +5,12 @@ import type { Check, RunRow, RunState } from './types';
 const cache = new Map<string, Record<string, Check[]>>();
 
 /**
- * The newest measured result of one probe check for each resolver, looking back over the last
- * few finished runs (a resolver left out of the latest run keeps its earlier measurement).
+ * The newest measured ECS check for each resolver, looking back over the last
+ * six finished runs (a resolver left out of the latest run keeps its earlier measurement).
  */
-export async function latestChecks(runs: RunRow[], key: string, lookback = 6): Promise<Map<string, Check>> {
+export async function latestChecks(runs: RunRow[]): Promise<Map<string, Check>> {
   const out = new Map<string, Check>();
-  for (const row of runs.filter((r) => r.status === 'done').slice(0, lookback)) {
+  for (const row of runs.filter((r) => r.status === 'done').slice(0, 6)) {
     let probes = cache.get(row.id);
     if (!probes) {
       try {
@@ -23,7 +23,7 @@ export async function latestChecks(runs: RunRow[], key: string, lookback = 6): P
     }
     for (const [id, checks] of Object.entries(probes)) {
       if (out.has(id)) continue;
-      const c = checks.find((c) => c.key === key && c.status !== 'unknown');
+      const c = checks.find((c) => c.key === 'ecs' && c.status !== 'unknown');
       if (c) out.set(id, c);
     }
   }

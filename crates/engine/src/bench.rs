@@ -11,7 +11,7 @@
 use crate::catalog::Resolver;
 use crate::dns::{self, QuerySpec};
 use crate::endpoints;
-use crate::intel::{Intel, ThreatFeeds};
+use crate::intel::{Feed, Intel};
 use crate::net::{self, Endpoint, Exchanger, Transport, UdpX, XErr};
 use crate::probes::{self, check, rand_label};
 use crate::rov;
@@ -1994,10 +1994,10 @@ fn run_probes(h: &RunHandle, selected: &[Resolver], intercepted: &[String], ctx:
 
 fn run_live(h: &RunHandle, selected: &[Resolver], timeout: Duration, deps: &Deps, plain: bool) {
     h.phase("live", selected.len() as u32);
-    let feeds = deps.rt.block_on(deps.intel.threat_feeds());
+    let feed = deps.rt.block_on(deps.intel.threat_feed());
     // One sample for the whole run, so every resolver is asked the same hosts.
     let quick = timeout.min(Duration::from_millis(1500));
-    let sample = match deepdive::live_sample(feeds, quick, &h.cancel) {
+    let sample = match deepdive::live_sample(feed, quick, &h.cancel) {
         Ok(sample) => sample,
         Err(e) => {
             h.note("warn", e, None);
@@ -2021,7 +2021,7 @@ fn run_live(h: &RunHandle, selected: &[Resolver], timeout: Duration, deps: &Deps
                 while !h.cancelled() {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(r) = selected.get(i) else { break };
-                    let ask = || deepdive::live_blocking(r, Some(sample.clone()), ThreatFeeds::default(), false, timeout, &h.cancel);
+                    let ask = || deepdive::live_blocking(r, Some(sample.clone()), Feed::default(), false, timeout, &h.cancel);
                     let Ok(out) = catch_unwind(AssertUnwindSafe(ask)) else { continue };
                     let Ok((live, _)) = out else {
                         untested.lock().unwrap_or_else(|e| e.into_inner()).push(i);

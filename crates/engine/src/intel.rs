@@ -39,11 +39,6 @@ pub struct Intel {
     permits: Semaphore,
 }
 
-#[derive(Default)]
-pub struct ThreatFeeds {
-    pub malware: Feed,
-}
-
 /// One threat feed's usable hosts, and when it was downloaded (Unix ms; none if it never was).
 #[derive(Default)]
 pub struct Feed {
@@ -51,7 +46,7 @@ pub struct Feed {
     pub fetched_at: Option<i64>,
 }
 
-/// Shared-hosting suffixes: a phishing page on one of these doesn't make the whole
+/// Shared-hosting suffixes: a malicious page on one of these doesn't make the whole
 /// platform blockable, so such names are useless for testing DNS filters.
 const SHARED_HOSTING: &[&str] = &[
     "amazonaws.com",
@@ -118,8 +113,6 @@ impl Intel {
             .timeout(Duration::from_secs(12))
             .build()
             .expect("http client");
-        // Earlier builds downloaded a location database here; remove what they left behind.
-        let _ = std::fs::remove_dir_all(store.path.parent().map(|p| p.to_path_buf()).unwrap_or_default().join("dbip"));
         #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
         let rpki = crate::rpki::Rpki::new(
             store.path.parent().map(|p| p.to_path_buf()).unwrap_or_default().join("rpki"),
@@ -190,7 +183,7 @@ impl Intel {
         self.store.cache_get_any(key)
     }
 
-    pub async fn threat_feeds(&self) -> ThreatFeeds {
+    pub async fn threat_feed(&self) -> Feed {
         let malware = self
             .cached("feed:malware", HOUR, async {
                 // URLhaus's online hosts through the malware-filter mirror (its second host if the first is down), plus
@@ -209,11 +202,10 @@ impl Intel {
                 (!hosts.is_empty()).then(|| json!(hosts))
             })
             .await;
-        let feed = |got: Option<(Value, i64)>| match got {
+        match malware {
             Some((v, at)) => Feed { hosts: serde_json::from_value(v).unwrap_or_default(), fetched_at: Some(at) },
             None => Feed::default(),
-        };
-        ThreatFeeds { malware: feed(malware) }
+        }
     }
 
     /// Origin AS and covering prefix from Team Cymru. `None` when the lookup failed; an address no

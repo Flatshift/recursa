@@ -25,7 +25,7 @@ Download from the [Releases page](https://github.com/flatshift/recursa/releases)
   certificate, so Windows warns once. When SmartScreen appears, choose **More info**, then
   **Run anyway**.
 
-Or build it yourself (Rust 1.88+, Node 22.12+, Python 3):
+Or build it yourself (Rust 1.90+, Node 22.12+, Python 3):
 
 ```bash
 ./build.sh            # installs the UI's packages if needed, builds the UI, then the command-line binary
@@ -49,7 +49,7 @@ Or build it yourself (Rust 1.88+, Node 22.12+, Python 3):
 | **Link check** | While a run measures, Recursa pings your default gateway every 100 ms and times the replies with the same kernel stamps. If the link stalls (a Wi-Fi scan, a busy channel), the run says its scores are inflated, and on macOS names the likely cause. The scores are not changed. |
 | **Reliability** | Live operator status (Cloudflare, Quad9, AdGuard, Cisco Umbrella/OpenDNS) judged for your country, a sourced incident history, and optional background monitoring that tests each resolver's primary and secondary server and builds an uptime record from your network. |
 | **Time (NTP)** | How accurate and how fast about 60 public time servers are from your network: offset, an error bound, latency, jitter, stratum and source, and each server's distance from the consensus of all of them (which is also how far your clock is off). Queries go out eight seconds apart, a server is left alone for ten minutes after it is asked, and a Kiss-o'-Death is obeyed and remembered; a Features view sets leap-second handling, anycast, policy, IPv6 and a live NTS key-exchange check side by side. |
-| **Peering** (beta) | A map of where your ISP hands traffic off. Recursa traces the way to about twenty sites (the six big CDNs, public DNS and an NTP server) with its own echo probes, names each router's network from a local copy of CAIDA's prefix table, and draws the networks in path order with the hand-off between them. With your permission it adds exchange and facility names from PeeringDB, and names address space that no network announces for the holder its regional registry lists (one RDAP query per block, kept a month). Every sentence shows its evidence: seen in the trace, read from a list, or inferred. A table view carries the same findings. Over time, a light background probe of the two routers either side of your ISP's border towards each CDN; when only the far one slows at the same hours each day, the queue is on the link between them. |
+| **Peering** (beta) | A map of where your ISP hands traffic off. Recursa traces the way to about thirty sites (nine CDNs, public DNS and an NTP server) with its own echo probes, names each router's network from a local copy of CAIDA's prefix table, and draws the networks in path order with the hand-off between them. With your permission it adds exchange and facility names from PeeringDB, and names address space that no network announces for the holder its regional registry lists (one RDAP query per block, kept a month). Every sentence shows its evidence: seen in the trace, read from a list, or inferred. A table view carries the same findings. Over time, a light background probe of the two routers either side of your ISP's border towards each CDN; when only the far one slows at the same hours each day, the queue is on the link between them. |
 | **NTP over time** | Optional background monitoring of up to eight time servers, one light query per server every 15 minutes or more while Recursa runs, kept for weeks: each server's uptime, offset and delay, and how your own clock drifts. |
 
 Results are labeled by provenance: **●** measured from your network, **○** published by the operator, **–** unknown.
@@ -61,6 +61,8 @@ recursa                                   # open the interface (default port 735
 recursa --no-open --port 8080             # serve without opening a browser
 recursa run --samples 30                  # benchmark the default set in the terminal
 recursa run --resolvers quad9,cloudflare,google --transports udp,dot,doh
+recursa run --quick                       # up to 8 queries in flight to different resolvers
+recursa run --latency-only                # skip capability probes and CDN mapping
 recursa run --json > result.json          # full result as JSON
 recursa run --cached-names example.com,wikipedia.org   # your own names for the Cached test
 recursa run --cached-names-file names.txt # or a file of them (one per line)
@@ -76,14 +78,14 @@ recursa trace cloudflare                  # the route to a resolver (an id or an
 
 ## Build
 
-Requirements: Rust 1.88+ (edition 2024), Node 22.12+ and Python 3. `./build.sh` runs these steps, the last only with `app`:
+Requirements: Rust 1.90+ (edition 2024), Node 22.12+ and Python 3. `./build.sh` runs these steps, the last only with `app`:
 
 ```bash
 cd web && npm ci && cd ..
 python3 -I tools/notices.py                                      # third-party notices, embedded in both builds
 cd web && npm run build && cd ..
 cargo build --release                                            # the CLI
-cd crates/desktop && ../../web/node_modules/.bin/tauri build     # the app (Tauri 2); see build.sh for signing
+cd crates/desktop && ../../web/node_modules/.bin/tauri build     # the app (Tauri 2); see build.sh for signing and the DMG
 ```
 
 The UI in `web/dist` is embedded into both at compile time. For UI work, run `recursa --no-open` and `npm run dev` in
@@ -119,7 +121,7 @@ crates/engine/src/   the engine (library), shared by both front ends
   regions.rs     where an operator's status report applies, so a report about another region doesn't count here
   cdn.rs         CDN mapping: resolution, edge timing, penalty scoring
   edge.rs        the edge roll call: which site each CDN serves this connection from, by the CDN's own answer
-  netmap/        the network map: traces to about twenty sites, routers named by network from CAIDA's prefix table, PeeringDB and RDAP lookups when allowed, and the wording of each claim
+  netmap/        the network map: traces to about thirty sites, routers named by network from CAIDA's prefix table, PeeringDB and RDAP lookups when allowed, and the wording of each claim
   border.rs      background border-link monitoring: the routers either side of your ISP's border towards each CDN, probed for weeks
   endpoints.rs   per-transport endpoints, DoH/DoT bootstrap that bypasses the system resolver
   intercept.rs   standalone port-53 interception check (timing + TTL hops, and what answered)

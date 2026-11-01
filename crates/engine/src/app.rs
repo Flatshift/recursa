@@ -711,7 +711,6 @@ impl AppState {
                 self.netmap.cancel.store(true, Ordering::SeqCst);
                 ok(json!({ "cancelled": self.netmap_running() }))
             }
-            ("GET", ["network", "map", "datasets"]) => ok(json!(crate::netmap::datasets(&self.store))),
             ("PUT", ["network", "map", "peeringdb"]) => {
                 #[derive(Deserialize)]
                 struct Accept {
@@ -871,9 +870,9 @@ impl AppState {
         let prior =
             self.live_sample.lock().unwrap().clone().filter(|s| crate::bench::now_ms() - s.taken_at < crate::deepdive::LIVE_SAMPLE_TTL_MS);
         // Download the feeds first: the intel cache doesn't fetch while measuring.
-        let feeds = if prior.is_none() { self.intel.threat_feeds().await } else { Default::default() };
+        let feed = if prior.is_none() { self.intel.threat_feed().await } else { Default::default() };
         let out = self
-            .measure_blocking(move |cancel| crate::deepdive::live_blocking(&r, prior, feeds, opts.plain, DEEP_DIVE_TIMEOUT, cancel))
+            .measure_blocking(move |cancel| crate::deepdive::live_blocking(&r, prior, feed, opts.plain, DEEP_DIVE_TIMEOUT, cancel))
             .await?;
         let (result, sample) = out.map_err(|m| ApiError::new(502, m))?;
         if sample.categories.values().any(|c| !c.hosts.is_empty()) {
@@ -981,7 +980,6 @@ impl AppState {
         reload(&self.border_monitor, stored_border_monitor(&self.store));
     }
 
-    /// Run an edge roll call and keep it as the last one.
     /// Whether a map run is going: it holds the progress slot from its first trace to its end.
     fn netmap_running(&self) -> bool {
         self.netmap.running.load(Ordering::SeqCst)
@@ -1008,6 +1006,7 @@ impl AppState {
         Ok(json!({ "started": true }).to_string())
     }
 
+    /// Run an edge roll call and keep it as the last one.
     pub(crate) async fn run_roll_call(&self) -> crate::edge::RollCall {
         let rc = crate::edge::roll_call(self).await;
         *self.edges.lock().unwrap() = Some(rc.clone());

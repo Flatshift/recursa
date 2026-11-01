@@ -90,7 +90,7 @@ export function v6Only(ids: string[], run: MapRun): boolean {
   return !!ids?.length && ids.every((id) => run.traces.some((t) => t.target.id === id && isV6(t.target)));
 }
 
-export interface Dest {
+interface Dest {
   target: NetTarget;
   trace: Trace;
   /** For an IPv6 trace: whether its route is the IPv4 one's. */

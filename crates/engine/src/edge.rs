@@ -1,6 +1,6 @@
-//! The edge roll call: which site each CDN serves this connection from, by the CDN's own answer, with the next
-//! network's name and a handshake time to the address that answered. One request per CDN over the system resolver;
-//! a CDN that doesn't say shows its address and no site. Nothing is stored: the last roll call is kept in memory.
+//! The edge roll call: which site each CDN serves this connection from, by the CDN's own answer, with the name of the
+//! network the answering address belongs to. One request per CDN over the system resolver; a CDN that doesn't say
+//! shows its address and no site. Nothing is stored: the last roll call is kept in memory.
 
 use crate::app::AppState;
 use crate::bench;
@@ -239,7 +239,7 @@ pub(crate) fn ptr(res: &Resolve, ip: IpAddr) -> Option<String> {
     m.answers.iter().find_map(|r| if let dns::RData::Name(n) = &r.data { Some(n.trim_end_matches('.').to_string()) } else { None })
 }
 
-/// Name the addresses (Cymru), read Meta's reverse name, time the handshakes, and work out each floor. Blocks.
+/// Name the addresses (Cymru), read Meta's reverse name, and look up each site's city and country. Blocks.
 fn finish(res: &Resolve, you: &mut You, edges: &mut [EdgeSite]) {
     let holder = |asn: u32| cymru::name_of(res, asn).ok().flatten().map(|n| cymru::holder_name(&n));
     if let (Some(asn), None) = (you.asn, &you.holder) {

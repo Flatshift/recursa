@@ -55,7 +55,7 @@
   <div class="empty panel">
     {#if withMap}
       <p><b>Nothing mapped yet.</b></p>
-      <p class="ink-2">Recursa traces the way to twenty sites and draws where your ISP hands them off.</p>
+      <p class="ink-2">Recursa traces the way to about 30 sites and draws where your ISP hands them off.</p>
     {/if}
     <p><b>What leaves this machine.</b> About 60 small probe packets to each of about 30 named sites (nine CDNs, two public DNS services and an NTP server), again over IPv6 when this computer has a route, and nothing else.</p>
     <p>

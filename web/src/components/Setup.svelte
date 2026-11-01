@@ -71,7 +71,7 @@
     return documented(r) && r.published.ecs === true;
   };
   async function pickEcs() {
-    const measured = await latestChecks(app.boot?.runs ?? [], 'ecs');
+    const measured = await latestChecks(app.boot?.runs ?? []);
     const list = resolvers.filter((r) => sendsEcs(r, measured));
     setAll(list.map((r) => r.id));
     draft.probes = true;

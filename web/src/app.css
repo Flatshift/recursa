@@ -99,9 +99,6 @@
   --z-toast: 50;
   --z-tooltip: 60;
 
-  --page-max: 1380px;
-  --gutter: clamp(16px, 3vw, 32px);
-
   /* App shell: a second neutral layer for the sidebar, a toolbar that doubles as the title
      bar, and a status bar. */
   --side: oklch(0.958 0.003 285);
@@ -471,13 +468,6 @@ input[type='checkbox']:focus-visible {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
-}
-
-.page {
-  width: 100%;
-  max-width: var(--page-max);
-  margin: 0 auto;
-  padding: 0 var(--gutter);
 }
 
 .page-title {

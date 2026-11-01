@@ -144,7 +144,7 @@ export interface CdnTiming {
 }
 
 /** How far the CDN edge naming has got during intel; `latest` is the edge named last. */
-export interface CdnNaming {
+interface CdnNaming {
   done: number;
   total: number;
   latest?: string;

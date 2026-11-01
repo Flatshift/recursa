@@ -13,7 +13,7 @@ use crate::bench::{ACCURATE_GAP, on_local_network};
 use crate::catalog::Resolver;
 use crate::dns::{self, QuerySpec};
 use crate::endpoints;
-use crate::intel::ThreatFeeds;
+use crate::intel::Feed;
 use crate::net::{self, Endpoint, Exchanger, Transport};
 use crate::probes::{self, FilterCategory, rand_label};
 use crate::stats::{self, Summary};
@@ -398,9 +398,9 @@ fn live_over_plain(r: &Resolver, allow_plain: bool) -> bool {
     allow_plain || (r.group == "system" && r.any_ip().is_some_and(|ip| on_local_network(&ip)))
 }
 
-/// Draw hosts from each feed and keep those an unfiltered resolver still resolves. The baseline is encrypted: a
+/// Draw hosts from the feed and keep those an unfiltered resolver still resolves. The baseline is encrypted: a
 /// blocking box on the path would otherwise make live hosts look dead.
-pub(crate) fn live_sample(feeds: ThreatFeeds, timeout: Duration, cancel: &AtomicBool) -> Result<LiveSample, String> {
+pub(crate) fn live_sample(feed: Feed, timeout: Duration, cancel: &AtomicBool) -> Result<LiveSample, String> {
     let mut base = [("8.8.8.8", "dns.google"), ("1.1.1.1", "one.one.one.one")]
         .iter()
         .find_map(|(ip, host)| {
@@ -414,39 +414,37 @@ pub(crate) fn live_sample(feeds: ThreatFeeds, timeout: Duration, cancel: &Atomic
         })
         .ok_or("Couldn't reach an unfiltered resolver over DoT (8.8.8.8 or 1.1.1.1) to confirm which feed hosts are live.")?;
     let mut sample = LiveSample { taken_at: crate::bench::now_ms(), categories: BTreeMap::new(), notes: Vec::new() };
-    for (cat, feed, source) in [("malware", feeds.malware, "URLhaus and ThreatView")] {
-        if cancel.load(Ordering::Relaxed) {
-            break;
-        }
-        let mut list = feed.hosts;
-        if list.is_empty() {
-            sample.notes.push(format!("Couldn't download {source}, so {cat} wasn't tested."));
-            continue;
-        }
-        fastrand::shuffle(&mut list);
-        list.truncate(LIVE_SAMPLE);
-        let live = probes::validate_live(base.as_mut(), &list, LIVE_WANT, timeout);
-        if live.len() < 3 {
-            sample.notes.push(format!(
-                "Only {} of {} {source} hosts sampled still resolve, so the {cat} result is less certain.",
-                live.len(),
-                list.len()
-            ));
-        }
-        sample.categories.insert(
-            cat.to_string(),
-            SampleCategory { source: source.into(), fetched_at: feed.fetched_at, sampled: list.len(), hosts: live },
-        );
+    let (cat, source) = ("malware", "URLhaus and ThreatView");
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(sample);
     }
+    let mut list = feed.hosts;
+    if list.is_empty() {
+        sample.notes.push(format!("Couldn't download {source}, so {cat} wasn't tested."));
+        return Ok(sample);
+    }
+    fastrand::shuffle(&mut list);
+    list.truncate(LIVE_SAMPLE);
+    let live = probes::validate_live(base.as_mut(), &list, LIVE_WANT, timeout);
+    if live.len() < 3 {
+        sample.notes.push(format!(
+            "Only {} of {} {source} hosts sampled still resolve, so the {cat} result is less certain.",
+            live.len(),
+            list.len()
+        ));
+    }
+    sample
+        .categories
+        .insert(cat.to_string(), SampleCategory { source: source.into(), fetched_at: feed.fetched_at, sampled: list.len(), hosts: live });
     Ok(sample)
 }
 
 /// Run the live-feed check against `r`, with `prior` as the sample if it is still fresh, else a new one drawn
-/// from `feeds`. Returns the sample used, to keep for the next check. Errors are messages for the user.
+/// from `feed`. Returns the sample used, to keep for the next check. Errors are messages for the user.
 pub fn live_blocking(
     r: &Resolver,
     prior: Option<LiveSample>,
-    feeds: ThreatFeeds,
+    feed: Feed,
     allow_plain: bool,
     timeout: Duration,
     cancel: &AtomicBool,
@@ -465,7 +463,7 @@ pub fn live_blocking(
     let quick = timeout.min(Duration::from_millis(1500));
     let sample = match prior {
         Some(s) => s,
-        None => live_sample(feeds, quick, cancel)?,
+        None => live_sample(feed, quick, cancel)?,
     };
     let mut categories = BTreeMap::new();
     for (cat, sc) in &sample.categories {

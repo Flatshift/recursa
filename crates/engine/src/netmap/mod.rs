@@ -1,7 +1,7 @@
 //! The network map: where your traffic goes between your ISP and the networks you reach most.
 //!
-//! One run traces to a fixed set of targets (the six roll-call CDN edges plus two hosts each, Apple, Microsoft and
-//! Netflix with two hosts each, your system resolver, two public resolvers and the NTP pool), over IPv4 and, when
+//! One run traces to a fixed set of targets (the six roll-call CDN edges plus two hosts each, Apple and Microsoft with
+//! three each, Netflix with two, your system resolver, two public resolvers and the NTP pool), over IPv4 and, when
 //! this computer has an IPv6 route, over IPv6 as well. It names each router's network from CAIDA's prefix-to-AS table
 //! held locally, and merges the traces into groups and links. Where traffic leaves your ISP, each trace gets a
 //! claim that says how sure the map is (see [`say`]). By default no hop address is sent to any service: the only
@@ -175,7 +175,6 @@ pub struct PdbInfo {
     pub rows: usize,
 }
 
-/// The data the map reads besides the traces, and whether router names are decoded.
 /// The registry lookups: allowed or not, and how many blocks are kept.
 #[derive(Clone, Debug, Serialize)]
 pub struct RdapInfo {
@@ -183,6 +182,7 @@ pub struct RdapInfo {
     pub blocks: usize,
 }
 
+/// The data the map reads besides the traces, and whether router names are decoded.
 #[derive(Clone, Debug, Serialize)]
 pub struct Datasets {
     pub pfx2as: Pfx2asInfo,

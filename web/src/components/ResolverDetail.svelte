@@ -54,14 +54,12 @@
     resolver,
     run: runState = null,
     rows = [],
-    wide = false,
     view = 'overview',
     onview,
   }: {
     resolver: Resolver;
     run?: RunState | null;
     rows?: Row[];
-    wide?: boolean;
     view?: ResolverView;
     onview?: (v: ResolverView) => void;
   } = $props();
@@ -602,7 +600,7 @@
     </dl>
   {/if}
 {/snippet}
-<div class="detail" class:wide>
+<div class="detail">
   {#if view === 'overview'}
     <h2 class="headline">{line}</h2>
     {#if from}<p class="from">{from}</p>{/if}
@@ -1073,9 +1071,6 @@
     display: flex;
     gap: 14px;
     flex-wrap: wrap;
-  }
-  .wide .facts > div {
-    grid-template-columns: 220px minmax(0, 1fr);
   }
   @media (max-width: 560px) {
     .facts > div {

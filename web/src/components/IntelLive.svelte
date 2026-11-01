@@ -19,7 +19,6 @@
     { title: 'Invalid routes filtered', tone: 'var(--s-tld)', checks: ['IPv4', 'IPv6'], n: 2 },
     { title: 'Queries leave from', tone: 'var(--w-amber)', checks: ['Network'], n: 3 },
   ];
-  const TOTAL = 4;
 
   // Rows keep one order for the whole phase: fastest cached lookup first, from the phases that already ran.
   const cached = $derived(new Map(rows.flatMap((r) => (r.resolver ? [[r.target.resolver_id, r.dist.cached?.p50 ?? null]] : []))));

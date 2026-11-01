@@ -30,7 +30,7 @@ class StatusStore {
         this.loading = false;
         this.#inflight = null;
       });
-    return this.#inflight ?? Promise.resolve();
+    return this.#inflight;
   }
 
   /** Resolver ids with any monitoring history from this network; null until loaded. */

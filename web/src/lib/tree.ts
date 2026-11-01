@@ -3,7 +3,7 @@
 // reach from different sides hangs under the parent that carries most of them; its other links are still drawn.
 import type { NetGroup, NetLink } from './types';
 
-export interface TreeOpts {
+interface TreeOpts {
   colW: number;
   rowH: number;
   nodeW: number;
@@ -32,7 +32,7 @@ interface TreeEdge {
   ly: number;
   above: boolean;
 }
-export interface Tree {
+interface Tree {
   nodes: TreeNode[];
   edges: TreeEdge[];
   width: number;
