@@ -2,10 +2,6 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
-
-- Network map: Fastly's "Served from" now matches its round trip instead of naming a far site.
-
 ## 0.5.1 (2026-11-01)
 
 - Network intel shows its checks live, resolver by resolver, and names CDN edges alongside them instead of after.
@@ -14,6 +10,7 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 - Path and probe boards: a resolver that never answered reads silent, and progress no longer waits for it.
 - Method: corrected the router privacy note. Router names and registry records each send a router's address when turned on.
 - Network map: the intro says it traces about 30 sites, not twenty.
+- Network map: Fastly's "Served from" now matches its round trip instead of naming a far site.
 - Network intel: "Check My DNS unreachable" says why.
 - Network intel: the CDN edge count starts at zero instead of done, the network count leaves out resolvers with no
   known exit, and screen readers reach each tile's detail. Progress mentions CDN edges only when that test is on.
