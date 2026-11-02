@@ -76,10 +76,10 @@ fn letters_before_digit(s: &str) -> Option<String> {
 }
 
 /// `x-served-by: cache-dfw-kdfw8210040-DFW, cache-iad-kiad7000123-IAD`. The last entry is the edge that served the
-/// client; the ones before it are shields nearer the origin. Checked 2026-10-27 against a second Fastly host:
-/// www.fastly.com listed `cache-sjc`, then `cache-iad`, and read IAD from here; pypi.org listed `cache-iad`,
-/// `cache-iad`, `cache-dfw`, and a handshake to its address took 42 ms against 17 ms to developer.fastly.com (IAD),
-/// so its last entry (DFW) is the edge too. The code is the suffix after the last `-`.
+/// client; the ones before it are shields nearer the origin. Checked 2026-11-01 over 996 connections to 10 Fastly
+/// hosts: it was always the first delivery node in `Fastly-Debug-Path`, and the handshake time fit it. From a client
+/// near IAD, www.fastly.com listed `cache-sjc`, then `cache-iad`, and took 15 ms; pypi.org listed `cache-iad` twice,
+/// then `cache-mfe`, and took 56 ms. The code is the suffix after the last `-`.
 fn fastly_site(header: &str) -> Option<String> {
     let last = header.split(',').map(str::trim).rfind(|e| !e.is_empty())?;
     iata(last.rsplit('-').next()?)
@@ -131,10 +131,12 @@ pub(crate) fn great_circle_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 // The roll call
 // ---------------------------------------------------------------------------------------------
 
-/// Per CDN: id, the property asked.
+/// Per CDN: id, the property asked. The map traces the address the roll call connected to, with ICMP, so the property
+/// has to be answered where that trace ends. Fastly's debug page is. pypi.org isn't: its connections took 56 to 80 ms,
+/// one hop past the 14 ms ingress the trace stops at, and named McAllen or Vancouver.
 const ASKED: [(&str, &str); 6] = [
     ("cloudflare", "speed.cloudflare.com"),
-    ("fastly", "pypi.org"),
+    ("fastly", "www.fastly-debug.com"),
     ("cloudfront", "d1.awsstatic.com"),
     ("google", "redirector.googlevideo.com"),
     ("meta", "www.facebook.com"),
@@ -263,6 +265,7 @@ mod tests {
     fn fastly_edge_is_the_last_entry() {
         let h = "cache-iad-khef600071-IAD, cache-iad-khef600051-IAD, cache-dfw-kdfw8210059-DFW";
         assert_eq!(fastly_site(h).as_deref(), Some("DFW"));
+        assert_eq!(fastly_site("cache-iad-khef600083-IAD, cache-iad-khef600051-IAD, cache-mfe400027-MFE").as_deref(), Some("MFE"));
         assert_eq!(fastly_site("cache-sjc1000097-SJC, cache-iad-kiad7000160-IAD").as_deref(), Some("IAD"));
         assert_eq!(fastly_site("cache-dfw-kdfw8210040-DFW").as_deref(), Some("DFW"));
         assert_eq!(fastly_site(""), None);

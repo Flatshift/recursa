@@ -77,7 +77,7 @@ const TARGETS: &[Spec] = &[
     spec("cloudflare", Some("cloudflare"), "Cloudflare", "speed.cloudflare.com", Via::Edge("cloudflare")),
     spec("cloudflare-apex", Some("cloudflare"), "Cloudflare", "cloudflare.com", Via::Name),
     spec("cloudflare-assets", Some("cloudflare"), "Cloudflare", "cdnjs.cloudflare.com", Via::Name),
-    spec("fastly", Some("fastly"), "Fastly", "pypi.org", Via::Edge("fastly")),
+    spec("fastly", Some("fastly"), "Fastly", "www.fastly-debug.com", Via::Edge("fastly")),
     spec("fastly-apex", Some("fastly"), "Fastly", "www.fastly.com", Via::Name),
     spec("fastly-assets", Some("fastly"), "Fastly", "global.ssl.fastly.net", Via::Name),
     spec("cloudfront", Some("cloudfront"), "Amazon CloudFront", "d1.awsstatic.com", Via::Edge("cloudfront")),

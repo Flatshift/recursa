@@ -2,6 +2,10 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Network map: Fastly's "Served from" now matches its round trip instead of naming a far site.
+
 ## 0.5.1 (2026-11-01)
 
 - Network intel shows its checks live, resolver by resolver, and names CDN edges alongside them instead of after.
