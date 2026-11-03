@@ -1,6 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <!-- Recursa iOS app icon: the Cantor dial on the Slate tile, full bleed. iOS masks the corners
-       itself, so no margin, rounded rect or shadow (those are the macOS grid in app.svg). -->
+       itself, so no margin, rounded rect or shadow (those are the macOS grid in app.svg).
+       No build step reads this file: it is the source of the PNGs in
+       gen/apple/Assets.xcassets/AppIcon.appiconset, kept so they can be regenerated. -->
   <defs>
     <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3b4452"/><stop offset="1" stop-color="#171c25"/></linearGradient>
     <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.15"/><stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/></linearGradient>

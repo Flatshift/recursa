@@ -3,8 +3,8 @@
   // hand-off is an edge, not a node, so it carries the label (exchange, direct or via transit), the traces crossing it
   // as width and the round trip it adds as a luminance; under each box is the round trip to its first router, so the
   // steps along a path add up to the traceroute figure. Colour is the kind of network and shape says it again; there is no
-  // red or green. The picture fits the pane and zooms from there, scrolling sideways once it is wider. Below it, one
-  // hairline row per finding says what was found and what it rests on.
+  // red or green. The picture opens at a size its labels can be read at, scrolling sideways once it is wider than the
+  // pane, and zooms from there. Below it, one hairline row per finding says what was found and what it rests on.
   import type { MapRun, NetClaim, NetGroup, NetRole } from '../lib/types';
   import { DIAMOND, layout, TREE, type TreeNode } from '../lib/tree';
   import { clouds, destinations, evidenceLabel, evidenceText, linkLabel, linkWay, markOf, siteName, v6Only, type Cloud } from '../lib/netview';
@@ -87,14 +87,14 @@
     );
   };
   const delay = (col: number) => (reduceMotion ? undefined : `${col * 110}ms`);
-  // The map fills the pane's width by default, growing a little past life size on a wide pane and sitting centred
-  // when it cannot; the zoom buttons scale it from there and it scrolls sideways when it no longer fits, with a fade
-  // at the right edge to say there is more.
+  // The map opens at life size so its labels stay readable, growing a little past it on a wide pane and sitting
+  // centred when it cannot; wider than the pane, it scrolls sideways, with a fade at the right edge to say there is
+  // more. Fit shows all of it at whatever size that takes, and the zoom buttons scale it from there.
   let viewW = $state(0);
   let scrolled = $state(0);
   let zoom = $state<number | null>(null);
   const fit = $derived(viewW > 0 ? Math.min(1.25, (viewW - 24) / tree.width) : 1);
-  const scale = $derived(zoom ?? fit);
+  const scale = $derived(zoom ?? Math.max(1, fit));
   const svgW = $derived(Math.round(tree.width * scale));
   const svgH = $derived(Math.round(tree.height * scale));
   const zoomBy = (f: number) => (zoom = Math.min(2, Math.max(0.4, scale * f)));
@@ -244,7 +244,7 @@
     <div class="zoom" role="group" aria-label="Zoom">
       <button type="button" aria-label="Zoom out" disabled={scale <= 0.4} onclick={() => zoomBy(1 / 1.25)}>&minus;</button>
       <button type="button" aria-label="Zoom in" disabled={scale >= 2} onclick={() => zoomBy(1.25)}>+</button>
-      <button type="button" disabled={zoom == null} onclick={() => (zoom = null)}>Fit</button>
+      <button type="button" disabled={scale === fit} onclick={() => (zoom = fit)}>Fit</button>
     </div>
     <p class="legend" aria-hidden="true">
       <span class="kitem"><svg width="36" height="8" viewBox="0 0 36 8"><path d="M0 4H36" stroke="var(--ink-2)" stroke-width="1" /><path d="M0 4H36" stroke="var(--ink-2)" stroke-width="4" stroke-dasharray="0 18 18" /></svg>Line width: traces crossing</span>

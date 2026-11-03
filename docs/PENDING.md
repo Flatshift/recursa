@@ -4,18 +4,6 @@ Known problems that can't be fixed in this repository yet, because the fix has t
 run checks each one with `tools/pending.py`, writes the result to the run's summary, and raises a warning when a fix
 can be applied. Remove an entry here and in `tools/pending.py` once its fix is in.
 
-## quick-xml denial of service (RUSTSEC-2026-0194, RUSTSEC-2026-0195)
-
-- **What:** quick-xml 0.39 has quadratic run time on duplicate attribute checks and unbounded memory for namespace
-  declarations. Both are fixed in 0.41.
-- **Where it comes from:** `rpki` 0.19.3, through `routinator` 0.15.2, which parses RRDP XML from RPKI repositories.
-  Both are their newest releases.
-- **Exposure:** only with local route-origin validation turned on in Settings (`rpki-local`), and only to a hostile
-  RPKI publication point. Denial of service, no code execution.
-- **Meanwhile:** `.cargo/audit.toml` ignores the two advisories so that `cargo audit` in CI fails on anything new.
-- **Fixed when:** `cargo update` moves quick-xml to 0.41 or later, or a newer `routinator` does. Then remove the two
-  ignores.
-
 ## Unmaintained or unsound crates under Tauri
 
 - **What:** RustSec warnings, not vulnerabilities: `paste` (RUSTSEC-2024-0436), `proc-macro-error`

@@ -3,20 +3,21 @@
   // the last one inside it and the first one beyond, towards each CDN. When only the far one slows at the same hours
   // each day, the queue is on the link between them. Kept for weeks, so the daily shape shows.
   import { app } from '../lib/store.svelte';
-  import { RETENTION_DAYS, W, line, monitor } from '../lib/monitor.svelte';
+  import { W, line, monitor } from '../lib/monitor.svelte';
   import type { BorderPairHistory, BorderMonitorConfig, BorderResp } from '../lib/types';
   import { ago, holder, ms, when } from '../lib/format';
   import CdnLogo from './CdnLogo.svelte';
   import Icon from './Icon.svelte';
+  import MonitorPanel from './MonitorPanel.svelte';
 
   // Up to 30 minutes: a verdict wants at least two probes in an hour.
   const INTERVALS = [5, 10, 15, 30];
 
-  let hours = $state(72);
+  let days = $state(3);
 
   const mon = monitor<BorderMonitorConfig, BorderResp>({
     endpoint: '/api/network/border',
-    query: () => `hours=${hours}`,
+    query: () => `hours=${days * 24}`,
     saved: (c) => (c.enabled ? `Probing the border links every ${c.interval_min} min while Recursa runs.` : 'Border probing paused.'),
     onsaved: (c) => {
       if (app.boot) app.boot = { ...app.boot, border_monitor: c };
@@ -28,7 +29,6 @@
   const needsAdmin = $derived(cap === 'needs_admin');
   const unsupported = $derived(cap === 'unsupported');
   const h = $derived(mon.data?.history);
-  const empty = $derived(!!h && h.cycles === 0);
   const home = $derived(h?.home.holder ? holder(h.home.holder) : h?.home.asn ? `AS${h.home.asn}` : 'your ISP');
 
   function chart(ph: BorderPairHistory, since: number, until: number) {
@@ -90,129 +90,80 @@
       <p class="ink-2">It needs the path tracer, which this platform does not offer.</p>
     </div>
   {:else}
-    {#if mon.cfg}
-      <div class="mcfg panel">
-        <label class="toggle">
-          <input
-            type="checkbox"
-            aria-label="Probe the border links in the background"
-            checked={mon.cfg.enabled}
-            disabled={mon.saving || needsAdmin}
-            onchange={(e) => mon.save({ ...mon.cfg!, enabled: (e.currentTarget as HTMLInputElement).checked })}
-          />
-          <span><b>Probe in the background</b> while Recursa is running</span>
-        </label>
-        <label class="inline">
-          Every
-          <select value={mon.cfg.interval_min} disabled={needsAdmin} onchange={(e) => mon.save({ ...mon.cfg!, interval_min: Number((e.currentTarget as HTMLSelectElement).value) })}>
-            {#each INTERVALS as m}<option value={m}>{m} min</option>{/each}
-          </select>
-        </label>
-        <label class="inline">
-          Keep
-          <select value={mon.cfg.retention_days} disabled={needsAdmin} onchange={(e) => mon.save({ ...mon.cfg!, retention_days: Number((e.currentTarget as HTMLSelectElement).value) })}>
-            {#each RETENTION_DAYS as d}<option value={d}>{d} days</option>{/each}
-          </select>
-        </label>
+    <MonitorPanel
+      {mon}
+      bind:days
+      windows={[1, 3, 7]}
+      intervals={INTERVALS}
+      toggleLabel="Probe the border links in the background"
+      toggleName="Probe in the background"
+      locked={needsAdmin}
+    >
+      {#snippet extra()}
         {#if needsAdmin}
           <p class="admin"><Icon name="lock" size={13} />Needs administrator rights on {app.env?.platform === 'windows' ? 'Windows' : 'this computer'}. Start Recursa as an administrator to switch it on.</p>
         {/if}
-      </div>
-      <p class="hint">
+      {/snippet}
+      {#snippet hint()}
         Each cycle sends two short probes towards each CDN edge: one that stops at the last router inside your ISP, one at the first
         router beyond it. When only the second slows down at the same hours each day, the queue is on the link between them. The
         pair is found once a day with one path trace{mon.data?.last ? `; last probe ${ago(mon.data.last)}` : ''}.
-      </p>
-    {/if}
+      {/snippet}
+      {#snippet nothing()}
+        {#if needsAdmin}Border probing needs administrator rights here, so there is nothing to show.{:else if mon.cfg?.enabled}The first cycle finds the border pairs with a path trace, then probes within the interval; this page updates when it has.{:else}Switch on "Probe in the background" above. Recursa probes while it is open, so a day's record needs it left running.{/if}
+      {/snippet}
 
-    <div class="bar">
-      <div class="segmented" role="tablist" aria-label="Window">
-        {#each [24, 72, 168] as hs}
-          <button role="tab" aria-selected={hours === hs} onclick={() => (hours = hs)}>{hs === 24 ? '24 hours' : `${hs / 24} days`}</button>
-        {/each}
-      </div>
-      {#if h && h.cycles}
-        <button class="btn ghost sm danger" onclick={mon.clearHistory}><Icon name="trash" size={13} />Clear history</button>
-      {/if}
-    </div>
-
-    {#if !mon.data}
-      <div class="card panel" aria-busy="true">
-        <div class="ch"><span class="skel now w40"></span></div>
-        <div class="skel now chart"></div>
-      </div>
-    {:else if empty}
-      <div class="empty">
-        <p><b>Nothing recorded {hours === 24 ? 'in the last 24 hours' : `in the last ${hours / 24} days`}.</b></p>
-        <p class="ink-2">
-          {#if needsAdmin}Border probing needs administrator rights here, so there is nothing to show.{:else if mon.cfg?.enabled}The first cycle finds the border pairs with a path trace, then probes within the interval; this page updates when it has.{:else}Switch on "Probe in the background" above. Recursa probes while it is open, so a day's record needs it left running.{/if}
-        </p>
-      </div>
-    {:else if h}
-      {#each h.pairs as ph (ph.pair.id)}
-        {@const c = chart(ph, h.since, h.until)}
-        {@const v = verdict(ph)}
-        <section class="card panel">
-          <div class="ch">
-            <span class="cdn"><CdnLogo id={ph.pair.cdn} name={name(ph.pair.cdn)} />{name(ph.pair.cdn)}</span>
-            <span class="pair" title="Inside: {ph.pair.near}. Beyond: {ph.pair.far}. Found {when(ph.pair.found_at)}.">{kindText(ph)}</span>
-          </div>
-          <div class="cc">
-            <svg viewBox="0 0 {W} 48" preserveAspectRatio="none" role="img" aria-label="Round trips to the router inside {home} and the first beyond it, over the window, up to {ms(c.hi)}">
-              <path d={c.near} fill="none" stroke="var(--ink-3)" stroke-width="1.25" vector-effect="non-scaling-stroke" />
-              <path d={c.far} fill="none" stroke="var(--accent)" stroke-width="1.5" vector-effect="non-scaling-stroke" />
-              {#each c.gaps as x}<path d="M{x.toFixed(1)} 42V48" stroke="var(--critical)" stroke-width="2" vector-effect="non-scaling-stroke" />{/each}
-            </svg>
-            <span class="axis num"><span>{ms(c.hi, false)} ms</span><span>0</span></span>
-          </div>
-          <p class="verdict {v.tone}">{v.text}</p>
-          <p class="fine">
-            <span class="leg"><i class="near"></i>inside {home}</span>
-            <span class="leg"><i class="far"></i>first router beyond</span>
-            {#if ph.last}
-              <span>Last probe {ago(ph.last.ts)}: {ph.last.near_ms == null ? 'inside silent' : `inside ${ms(ph.last.near_ms)}`}, {ph.last.far_ms == null ? 'beyond silent' : `beyond ${ms(ph.last.far_ms)}`}.</span>
-            {/if}
-          </p>
-        </section>
-      {/each}
-      {#each h.missing as m (m.cdn)}
-        <div class="card panel thin">
-          <span class="cdn"><CdnLogo id={m.cdn} name={name(m.cdn)} />{name(m.cdn)}</span>
-          <span class="ink-2">Border not found: {m.reason}. It is looked for again at the next discovery.</span>
+      {#if !mon.data}
+        <div class="card panel" aria-busy="true">
+          <div class="ch"><span class="skel now w40"></span></div>
+          <div class="skel now chart"></div>
         </div>
-      {/each}
-      <p class="fine foot">
-        Hours are UTC, so a peak moves with your own evening. A rise that only the far router shows is evidence of a busy link
-        between the two networks, not proof: the far router may also answer probes slowly on its own. A rise on both sides is before
-        the border.
-      </p>
-    {/if}
+      {:else if h}
+        {#each h.pairs as ph (ph.pair.id)}
+          {@const c = chart(ph, h.since, h.until)}
+          {@const v = verdict(ph)}
+          <section class="card panel">
+            <div class="ch">
+              <span class="cdn"><CdnLogo id={ph.pair.cdn} name={name(ph.pair.cdn)} />{name(ph.pair.cdn)}</span>
+              <span class="pair" title="Inside: {ph.pair.near}. Beyond: {ph.pair.far}. Found {when(ph.pair.found_at)}.">{kindText(ph)}</span>
+            </div>
+            <div class="cc">
+              <svg viewBox="0 0 {W} 48" preserveAspectRatio="none" role="img" aria-label="Round trips to the router inside {home} and the first beyond it, over the window, up to {ms(c.hi)}">
+                <path d={c.near} fill="none" stroke="var(--ink-3)" stroke-width="1.25" vector-effect="non-scaling-stroke" />
+                <path d={c.far} fill="none" stroke="var(--accent)" stroke-width="1.5" vector-effect="non-scaling-stroke" />
+                {#each c.gaps as x}<path d="M{x.toFixed(1)} 42V48" stroke="var(--critical)" stroke-width="2" vector-effect="non-scaling-stroke" />{/each}
+              </svg>
+              <span class="axis num"><span>{ms(c.hi, false)} ms</span><span>0</span></span>
+            </div>
+            <p class="verdict {v.tone}">{v.text}</p>
+            <p class="fine">
+              <span class="leg"><i class="near"></i>inside {home}</span>
+              <span class="leg"><i class="far"></i>first router beyond</span>
+              {#if ph.last}
+                <span>Last probe {ago(ph.last.ts)}: {ph.last.near_ms == null ? 'inside silent' : `inside ${ms(ph.last.near_ms)}`}, {ph.last.far_ms == null ? 'beyond silent' : `beyond ${ms(ph.last.far_ms)}`}.</span>
+              {/if}
+            </p>
+          </section>
+        {/each}
+        {#each h.missing as m (m.cdn)}
+          <div class="card panel thin">
+            <span class="cdn"><CdnLogo id={m.cdn} name={name(m.cdn)} />{name(m.cdn)}</span>
+            <span class="ink-2">Border not found: {m.reason}. It is looked for again at the next discovery.</span>
+          </div>
+        {/each}
+        <p class="fine foot">
+          Hours are UTC, so a peak moves with your own evening. A rise that only the far router shows is evidence of a busy link
+          between the two networks, not proof: the far router may also answer probes slowly on its own. A rise on both sides is before
+          the border.
+        </p>
+      {/if}
+    </MonitorPanel>
   {/if}
 </div>
 
 <style>
   .wrap > :global(*) {
     max-width: 1280px;
-  }
-  .mcfg {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 14px 22px;
-    align-items: center;
-    padding: 12px 16px;
-  }
-  .toggle {
-    display: flex;
-    gap: 9px;
-    align-items: center;
-    font-size: var(--t-sm);
-  }
-  .inline {
-    display: inline-flex;
-    gap: 8px;
-    align-items: center;
-    font-size: var(--t-sm);
-    color: var(--ink-2);
   }
   .admin {
     flex-basis: 100%;
@@ -223,26 +174,17 @@
     font-size: var(--t-xs);
     color: var(--ink-2);
   }
-  .hint,
   .fine {
     color: var(--ink-3);
     font-size: var(--t-xs);
     line-height: 1.5;
     max-width: 76ch;
   }
-  .bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin: 14px 0 12px;
-  }
-  .empty {
-    padding: 28px 4px;
-  }
   .empty.panel {
     padding: 28px 24px;
   }
-  .empty p {
+  /* The text of both empty states: the unsupported one above and the empty record MonitorPanel draws. */
+  .wrap :global(.empty p) {
     margin: 0 0 6px;
     font-size: var(--t-sm);
   }

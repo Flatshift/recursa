@@ -91,20 +91,6 @@ def cleared(name, v, plan, fixed=None):
     return bool(m) and ver(m.group(1)) >= fixed
 
 
-def quick_xml(lock, plan):
-    fixed = (0, 41)
-    have = [v for v in lock.get("quick-xml", []) if ver(v) < fixed]
-    if not have:
-        return "resolved", "quick-xml is 0.41 or later: remove the two ignores in .cargo/audit.toml"
-    if all(cleared("quick-xml", v, plan, fixed) for v in have):
-        return "available", f"cargo update moves quick-xml {', '.join(have)} to 0.41 or later"
-    rout = lock.get("routinator", ["0"])[0]
-    latest = fetch_json("https://crates.io/api/v1/crates/routinator")["crate"]["max_stable_version"]
-    if ver(latest) > ver(rout):
-        return "available", f"routinator {latest} is out (we have {rout}): check whether it moves to quick-xml 0.41"
-    return "pending", f"quick-xml {', '.join(have)} through rpki and routinator {rout}, the newest release"
-
-
 def tauri_crates(lock, plan):
     names = ["paste", "proc-macro-error", "rustls-pemfile", "zvariant", "zvariant_derive", "zbus_names"]
     # RUSTSEC-2024-0429 is patched in glib 0.20.0: 0.19 is still unsound.
@@ -143,7 +129,6 @@ def prop(s):
 
 
 CHECKS = [
-    ("quick-xml advisories (RUSTSEC-2026-0194, -0195)", quick_xml),
     ("Unmaintained crates under Tauri", tauri_crates),
     ("TypeScript 7", typescript),
 ]
