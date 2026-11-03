@@ -2,7 +2,7 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.5.2 (2026-11-02)
 
 - Network map opens at a readable size and scrolls sideways when it is wider than the pane; Fit shows all of it.
 - Local route-origin validation updated, fixing two quick-xml denial-of-service advisories.
