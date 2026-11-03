@@ -10,7 +10,7 @@ case "$2" in /*) out="$2" ;; *) out="$PWD/$2" ;; esac
 identity="${APPLE_SIGNING_IDENTITY:--}"
 
 venv=target/dmgbuild
-[ -x "$venv/bin/dmgbuild" ] || { python3 -m venv "$venv" && "$venv/bin/pip" install -q dmgbuild; }
+[ -x "$venv/bin/dmgbuild" ] || { python3 -m venv "$venv" && "$venv/bin/pip" install -q dmgbuild==1.6.7; }
 mkdir -p "$(dirname "$out")"
 rm -f "$out"
 (cd crates/desktop/dmg && "$OLDPWD/$venv/bin/dmgbuild" -s settings.py -D app="$app" Recursa "$out")

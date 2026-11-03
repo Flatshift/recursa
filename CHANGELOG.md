@@ -2,6 +2,13 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.5.3 (2026-11-02)
+
+- Windows answers now carry the IP hop count, so the hops and interception signals work there.
+- Windows waits for each answer without reusing a timed-out socket and discards late answers to earlier queries.
+- Windows adapter detection falls back to the IPv6 route when there is no IPv4 one.
+- Release builds pin the disk-image tool and check every version file against the tag.
+
 ## 0.5.2 (2026-11-02)
 
 - Network map opens at a readable size and scrolls sideways when it is wider than the pane; Fit shows all of it.

@@ -11,12 +11,13 @@ permissions:
   contents: read
 
 jobs:
-  # The installers are named after the crate version, so the tag must match it.
+  # The installers are named after the crate version, so the tag must match it. The app bundles take their version
+  # from web/package.json (tauri.conf.json), so that has to agree too.
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Tag matches the crate version
+      - name: Tag matches the version everywhere
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -25,6 +26,13 @@ jobs:
             echo "Tag $TAG, but Cargo.toml says $version"
             exit 1
           fi
+          for f in web/package.json web/package-lock.json; do
+            v=$(node -p "require('./$f').version")
+            if [ "$v" != "$version" ]; then
+              echo "$f says $v, but Cargo.toml says $version"
+              exit 1
+            fi
+          done
 
   macos:
     needs: check

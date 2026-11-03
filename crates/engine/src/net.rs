@@ -286,7 +286,7 @@ pub(crate) fn recv_stamped(sock: &std::net::UdpSocket, buf: &mut [u8]) -> io::Re
     #[cfg(windows)]
     {
         use std::os::windows::io::AsRawSocket;
-        win::recv_stamped(sock.as_raw_socket() as win::SOCKET, buf)
+        win::recv_stamped(sock.as_raw_socket() as win::SOCKET, buf).map(|(n, stamp, _)| (n, stamp))
     }
 }
 
@@ -392,7 +392,8 @@ impl Exchanger for UdpX {
 }
 
 /// Kernel receive stamps on Windows: `SIO_TIMESTAMPING` (Windows 10 2004 and later) makes the stack attach an
-/// `SO_TIMESTAMP` control message, in performance-counter ticks, to each datagram read with `WSARecvMsg`.
+/// `SO_TIMESTAMP` control message, in performance-counter ticks, to each datagram read with `WSARecvMsg`. The same
+/// call reports the datagram's IP TTL (hop limit) once `enable_rx_ttl` has asked for it.
 #[cfg(windows)]
 mod win {
     use crate::clock;
@@ -402,8 +403,9 @@ mod win {
     use std::sync::OnceLock;
     pub use windows_sys::Win32::Networking::WinSock::SOCKET;
     use windows_sys::Win32::Networking::WinSock::{
-        CMSGHDR, LPFN_WSARECVMSG, SIO_GET_EXTENSION_FUNCTION_POINTER, SIO_TIMESTAMPING, SO_TIMESTAMP, SOCKET_ERROR, SOL_SOCKET,
-        TIMESTAMPING_CONFIG, TIMESTAMPING_FLAG_RX, WSABUF, WSAID_WSARECVMSG, WSAIoctl, WSAMSG, recv,
+        CMSGHDR, IP_RECVTTL, IP_TTL, IPPROTO_IP, IPPROTO_IPV6, IPV6_HOPLIMIT, LPFN_WSARECVMSG, POLLRDNORM,
+        SIO_GET_EXTENSION_FUNCTION_POINTER, SIO_TIMESTAMPING, SO_TIMESTAMP, SOCKET_ERROR, SOL_SOCKET, TIMESTAMPING_CONFIG,
+        TIMESTAMPING_FLAG_RX, WSABUF, WSAID_WSARECVMSG, WSAIoctl, WSAMSG, WSAPOLLFD, WSAPoll, recv, setsockopt,
     };
 
     /// `WSARecvMsg` is an extension function: Winsock hands out its address through an ioctl.
@@ -456,13 +458,33 @@ mod win {
         r == 0 && recv_msg(s).is_some()
     }
 
-    /// Receive one datagram with the stack's arrival stamp (ns, in the [`clock`] domain) when there is one. Honours
-    /// the socket's read timeout like `recv`.
-    pub(crate) fn recv_stamped(s: SOCKET, buf: &mut [u8]) -> io::Result<(usize, Option<u64>)> {
+    /// Ask the stack to report the TTL (hop limit) each datagram arrived with. Best effort: without it the TTL is
+    /// simply absent. On IPv6 the one constant both enables the option and labels the control message.
+    pub(crate) fn enable_rx_ttl(s: SOCKET, v6: bool) {
+        let one = 1i32;
+        let (level, opt) = if v6 { (IPPROTO_IPV6, IPV6_HOPLIMIT) } else { (IPPROTO_IP, IP_RECVTTL) };
+        unsafe {
+            setsockopt(s, level, opt, (&raw const one).cast::<u8>(), size_of_val(&one) as i32);
+        }
+    }
+
+    /// Wait up to `ms` for a datagram (or an error) on the socket; true when a receive would return at once. Unlike
+    /// a receive that times out on `SO_RCVTIMEO`, a poll leaves the socket in a defined state.
+    pub(crate) fn wait_readable(s: SOCKET, ms: i32) -> io::Result<bool> {
+        let mut fd = WSAPOLLFD { fd: s, events: POLLRDNORM as _, revents: 0 };
+        match unsafe { WSAPoll(&mut fd, 1, ms) } {
+            SOCKET_ERROR => Err(io::Error::last_os_error()),
+            n => Ok(n > 0),
+        }
+    }
+
+    /// Receive one datagram with the stack's arrival stamp (ns, in the [`clock`] domain) and the TTL it arrived with,
+    /// when there are such. Blocks like `recv`, so poll with `wait_readable` first to bound the wait.
+    pub(crate) fn recv_stamped(s: SOCKET, buf: &mut [u8]) -> io::Result<(usize, Option<u64>, Option<u8>)> {
         let len = buf.len().min(i32::MAX as usize);
         let Some(wsa_recv_msg) = recv_msg(s) else {
             let n = unsafe { recv(s, buf.as_mut_ptr(), len as i32, 0) };
-            return if n == SOCKET_ERROR { Err(io::Error::last_os_error()) } else { Ok((n as usize, None)) };
+            return if n == SOCKET_ERROR { Err(io::Error::last_os_error()) } else { Ok((n as usize, None, None)) };
         };
         let mut ctl = [0u64; 32];
         let mut data = WSABUF { len: len as u32, buf: buf.as_mut_ptr() };
@@ -478,7 +500,7 @@ mod win {
         if unsafe { wsa_recv_msg(s, &mut msg, &mut n, null_mut(), None) } == SOCKET_ERROR {
             return Err(io::Error::last_os_error());
         }
-        let mut stamp = None;
+        let (mut stamp, mut ttl) = (None, None);
         let base = ctl.as_ptr() as *const u8;
         let end = (msg.Control.len as usize).min(size_of_val(&ctl));
         let hdr = size_of::<CMSGHDR>();
@@ -498,10 +520,15 @@ mod win {
                 if ticks != 0 {
                     stamp = Some(clock::ticks_to_ns(ticks));
                 }
+            } else if h.cmsg_len >= data + 4
+                && ((h.cmsg_level == IPPROTO_IP && h.cmsg_type == IP_TTL) || (h.cmsg_level == IPPROTO_IPV6 && h.cmsg_type == IPV6_HOPLIMIT))
+            {
+                // The TTL arrives as an int, as on Linux.
+                ttl = Some(unsafe { std::ptr::read_unaligned(base.add(off + data) as *const i32) } as u8);
             }
             off += h.cmsg_len.next_multiple_of(size_of::<usize>());
         }
-        Ok((n as usize, stamp))
+        Ok((n as usize, stamp, ttl))
     }
 }
 
@@ -515,20 +542,32 @@ pub struct UdpX {
 #[cfg(windows)]
 impl UdpX {
     pub(crate) fn connect(addr: SocketAddr) -> io::Result<Self> {
+        use std::os::windows::io::AsRawSocket;
         let bind: SocketAddr = unspecified(&addr.ip()).parse().unwrap();
         let sock = std::net::UdpSocket::bind(bind)?;
         sock.connect(addr)?;
         let kernel_ts = stamp_arrivals(&sock);
+        win::enable_rx_ttl(sock.as_raw_socket() as win::SOCKET, addr.is_ipv6());
         Ok(UdpX { sock, kernel_ts, buf: vec![0u8; MAX_MSG].into_boxed_slice() })
     }
     pub(crate) fn kernel_timestamps(&self) -> bool {
         self.kernel_ts
+    }
+
+    /// Discard late answers to earlier, timed-out queries.
+    fn drain(&mut self) {
+        let _ = self.sock.set_nonblocking(true);
+        while self.sock.recv(&mut self.buf).is_ok() {}
+        let _ = self.sock.set_nonblocking(false);
     }
 }
 
 #[cfg(windows)]
 impl Exchanger for UdpX {
     fn exchange(&mut self, query: &[u8], timeout: Duration) -> Result<Reply, XErr> {
+        use std::os::windows::io::AsRawSocket;
+        self.drain();
+        let raw = self.sock.as_raw_socket() as win::SOCKET;
         let t0 = clock::now_ns();
         let deadline = t0 + timeout.as_nanos() as u64;
         self.sock.send(query).map_err(io_err)?;
@@ -537,9 +576,15 @@ impl Exchanger for UdpX {
             if now >= deadline {
                 return Err(XErr::Timeout);
             }
-            self.sock.set_read_timeout(Some(Duration::from_nanos(deadline - now))).map_err(io_err)?;
+            // Poll rather than set a read timeout: Winsock leaves a socket that timed out in a receive in an
+            // indeterminate state, and this one is reused for the next query. A socket that is readable or in error
+            // makes the receive return at once.
+            let ms = (deadline - now).div_ceil(1_000_000).clamp(1, i32::MAX as u64) as i32;
+            if !win::wait_readable(raw, ms).map_err(io_err)? {
+                continue;
+            }
             // Windows reports an ICMP port unreachable on a connected UDP socket as a reset (WSAECONNRESET).
-            let (len, kstamp) = recv_stamped(&self.sock, &mut self.buf[..]).map_err(|e| match e.kind() {
+            let (len, kstamp, ttl) = win::recv_stamped(raw, &mut self.buf[..]).map_err(|e| match e.kind() {
                 io::ErrorKind::ConnectionReset => XErr::Refused,
                 _ => io_err(e),
             })?;
@@ -554,7 +599,7 @@ impl Exchanger for UdpX {
                 rtt_ns: t_rx.saturating_sub(t0),
                 user_rtt_ns: t_user.saturating_sub(t0),
                 kernel_stamp: kstamp.is_some(),
-                ttl: None,
+                ttl,
             });
         }
     }
