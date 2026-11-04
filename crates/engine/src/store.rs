@@ -95,6 +95,15 @@ impl Store {
             make_dir(dir);
         }
         let conn = Connection::open(&path)?;
+        // Older builds kept the prefix tables unkeyed, with a separate index; drop those so the schema below makes
+        // the keyed ones. The next refresh fills them.
+        let keyed: bool =
+            conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'pfx2as' AND sql LIKE '%WITHOUT ROWID%')", [], |r| {
+                r.get(0)
+            })?;
+        if !keyed {
+            conn.execute_batch("DROP TABLE IF EXISTS pfx2as; DROP TABLE IF EXISTS pfx2as6")?;
+        }
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
@@ -133,11 +142,11 @@ impl Store {
                ts INTEGER NOT NULL, pair INTEGER NOT NULL, near_ms REAL, far_ms REAL);
              CREATE INDEX IF NOT EXISTS border_sample_ts ON border_sample(ts);
              CREATE TABLE IF NOT EXISTS pfx2as(
-               prefix INTEGER NOT NULL, len INTEGER NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL);
+               len INTEGER NOT NULL, prefix INTEGER NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL,
+               PRIMARY KEY (len, prefix)) WITHOUT ROWID;
              CREATE TABLE IF NOT EXISTS pfx2as6(
-               prefix BLOB NOT NULL, len INTEGER NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL);
-             CREATE INDEX IF NOT EXISTS pfx2as_len_prefix ON pfx2as(len, prefix);
-             CREATE INDEX IF NOT EXISTS pfx2as6_len_prefix ON pfx2as6(len, prefix);
+               len INTEGER NOT NULL, prefix BLOB NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL,
+               PRIMARY KEY (len, prefix)) WITHOUT ROWID;
              CREATE TABLE IF NOT EXISTS asrel(
                a INTEGER NOT NULL, b INTEGER NOT NULL, rel INTEGER NOT NULL, PRIMARY KEY (a, b));
              CREATE INDEX IF NOT EXISTS asrel_b ON asrel(b);
@@ -551,16 +560,10 @@ pub(crate) const HISTORY: [&str; 10] = [
 /// What the Data pane clears (see [`Store::clear`]).
 impl Store {
     /// Empty the cache and the downloaded reference tables, and delete the settings in `forget`; with `all`, every
-    /// other table and setting too, except `keep`. One transaction, then VACUUM (its failure is the error: the rows
-    /// are gone, the space not yet) and a WAL checkpoint, skipped if another process has the database busy. Returns
-    /// the bytes the database files shrank by.
-    pub fn clear(&self, all: bool, forget: &[&str], keep: &str) -> rusqlite::Result<u64> {
-        let size = || {
-            let wal = format!("{}-wal", self.path.display());
-            [self.path.as_path(), Path::new(&wal)].iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum::<u64>()
-        };
+    /// other table and setting too, except `keep`. One transaction: a failure leaves everything. The space the rows
+    /// held goes back with [`Store::compact`].
+    pub fn clear(&self, all: bool, forget: &[&str], keep: &str) -> rusqlite::Result<()> {
         let mut c = self.conn.lock().unwrap();
-        let before = size();
         let tx = c.transaction()?;
         for t in DOWNLOADED.iter().chain(if all { HISTORY.iter() } else { [].iter() }) {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
@@ -572,10 +575,22 @@ impl Store {
                 tx.execute("DELETE FROM settings WHERE key = ?1", params![k])?;
             }
         }
-        tx.commit()?;
+        tx.commit()
+    }
+
+    /// Give the space deleted rows held back to the file system: VACUUM, then a WAL checkpoint, skipped if another
+    /// process has the database busy.
+    pub fn compact(&self) -> rusqlite::Result<()> {
+        let c = self.conn.lock().unwrap();
         c.execute_batch("VACUUM")?;
         let _ = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
-        Ok(before.saturating_sub(size()))
+        Ok(())
+    }
+
+    /// The bytes the database and its WAL take on disk.
+    pub fn file_size(&self) -> u64 {
+        let wal = format!("{}-wal", self.path.display());
+        [self.path.as_path(), Path::new(&wal)].iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum()
     }
 }
 
@@ -725,39 +740,21 @@ impl Store {
     }
 
     /// Replace the whole prefix-to-network table with `rows` (prefix as a number, length, origin, whether several
-    /// networks announce it), in one transaction: a failure leaves the old table.
+    /// networks announce it), in one transaction: a failure leaves the old table. Of two rows for one prefix, the
+    /// first stays.
     pub fn pfx2as_replace(&self, rows: impl Iterator<Item = (u32, u8, u32, bool)>) -> rusqlite::Result<usize> {
         let mut c = self.conn.lock().unwrap();
         let tx = c.transaction()?;
         tx.execute("DELETE FROM pfx2as", [])?;
         let mut n = 0;
         {
-            let mut st = tx.prepare("INSERT INTO pfx2as(prefix, len, asn, moas) VALUES(?1,?2,?3,?4)")?;
+            let mut st = tx.prepare("INSERT OR IGNORE INTO pfx2as(len, prefix, asn, moas) VALUES(?1,?2,?3,?4)")?;
             for (prefix, len, asn, moas) in rows {
-                st.execute(params![prefix, len, asn, moas])?;
-                n += 1;
+                n += st.execute(params![len, prefix, asn, moas])?;
             }
         }
         tx.commit()?;
         Ok(n)
-    }
-
-    /// The first of `cands` (length, masked network) announced in the prefix table, as (length, network, origin, whether
-    /// several networks announce it), on the read-only connection.
-    pub fn pfx2as_find(&self, cands: impl Iterator<Item = (u8, u32)>) -> Option<(u8, u32, u32, bool)> {
-        let c = self.rd();
-        let mut st = c.prepare_cached("SELECT asn, moas FROM pfx2as WHERE len = ?1 AND prefix = ?2").ok()?;
-        for (len, prefix) in cands {
-            if let Ok(Some((asn, moas))) = st.query_row(params![len, prefix], |r| Ok((r.get(0)?, r.get(1)?))).optional() {
-                return Some((len, prefix, asn, moas));
-            }
-        }
-        None
-    }
-
-    pub fn pfx2as_count(&self) -> usize {
-        let c = self.rd();
-        c.query_row("SELECT COUNT(*) FROM pfx2as", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize
     }
 
     /// [`Store::pfx2as_replace`] for the IPv6 table: the prefix is the masked network as a number, stored as its 16
@@ -768,32 +765,19 @@ impl Store {
         tx.execute("DELETE FROM pfx2as6", [])?;
         let mut n = 0;
         {
-            let mut st = tx.prepare("INSERT INTO pfx2as6(prefix, len, asn, moas) VALUES(?1,?2,?3,?4)")?;
+            let mut st = tx.prepare("INSERT OR IGNORE INTO pfx2as6(len, prefix, asn, moas) VALUES(?1,?2,?3,?4)")?;
             for (prefix, len, asn, moas) in rows {
-                st.execute(params![&prefix.to_be_bytes()[..], len, asn, moas])?;
-                n += 1;
+                n += st.execute(params![len, &prefix.to_be_bytes()[..], asn, moas])?;
             }
         }
         tx.commit()?;
         Ok(n)
     }
 
-    /// [`Store::pfx2as_find`] for the IPv6 table.
-    pub fn pfx2as6_find(&self, cands: impl Iterator<Item = (u8, u128)>) -> Option<(u8, u128, u32, bool)> {
+    /// Either prefix table is empty: fetched before any run.
+    pub fn pfx2as_empty(&self) -> bool {
         let c = self.rd();
-        let mut st = c.prepare_cached("SELECT asn, moas FROM pfx2as6 WHERE len = ?1 AND prefix = ?2").ok()?;
-        for (len, prefix) in cands {
-            let row = st.query_row(params![len, &prefix.to_be_bytes()[..]], |r| Ok((r.get(0)?, r.get(1)?))).optional();
-            if let Ok(Some((asn, moas))) = row {
-                return Some((len, prefix, asn, moas));
-            }
-        }
-        None
-    }
-
-    pub fn pfx2as6_count(&self) -> usize {
-        let c = self.rd();
-        c.query_row("SELECT COUNT(*) FROM pfx2as6", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize
+        c.query_row("SELECT NOT EXISTS(SELECT 1 FROM pfx2as) OR NOT EXISTS(SELECT 1 FROM pfx2as6)", [], |r| r.get(0)).unwrap_or(true)
     }
 
     /// Replace the whole AS-relationship table with `rows` (a, b, rel: -1 = a provides for b, 0 = peers), in one
@@ -1140,17 +1124,25 @@ mod tests {
     fn netmap_tables_replace_wholesale_and_keep_one_run() {
         let path = temp_path();
         let store = Store::open(path.clone()).unwrap();
-        // The prefix table is swapped in one go: the second load leaves none of the first.
+        let rows = |t: &str| -> Vec<(u8, u32, bool)> {
+            store.with_conn(|c| {
+                let mut st = c.prepare(&format!("SELECT len, asn, moas FROM {t}")).unwrap();
+                st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect()
+            })
+        };
+        // The prefix table is swapped in one go: the second load leaves none of the first, and of two rows for one
+        // prefix the first stays. Either table empty counts as empty.
+        assert!(store.pfx2as_empty());
         assert_eq!(store.pfx2as_replace([(0x0800_0000, 8, 1, false), (0x0808_0800, 24, 15169, true)].into_iter()).unwrap(), 2);
-        assert_eq!(store.pfx2as_replace([(0x0102_0300, 24, 7, false)].into_iter()).unwrap(), 1);
-        let found = store.pfx2as_find([(8, 0x0800_0000), (24, 0x0102_0300)].into_iter());
-        assert_eq!((store.pfx2as_count(), found), (1, Some((24, 0x0102_0300, 7, false))));
+        assert_eq!(store.pfx2as_replace([(0x0102_0300, 24, 7, false), (0x0102_0300, 24, 8, false)].into_iter()).unwrap(), 1);
+        assert_eq!(rows("pfx2as"), [(24, 7, false)]);
+        assert!(store.pfx2as_empty());
         // The IPv6 table is the same, with 16-byte prefixes.
         let net6 = 0x2001_0db8_u128 << 96;
         assert_eq!(store.pfx2as6_replace([(net6, 32, 1, false), (net6 | (1 << 80), 48, 2, true)].into_iter()).unwrap(), 2);
         assert_eq!(store.pfx2as6_replace([(net6 | (1 << 80), 48, 7, true)].into_iter()).unwrap(), 1);
-        let found6 = store.pfx2as6_find([(32, net6), (48, net6 | (1 << 80))].into_iter());
-        assert_eq!((store.pfx2as6_count(), found6), (1, Some((48, net6 | (1 << 80), 7, true))));
+        assert_eq!(rows("pfx2as6"), [(48, 7, true)]);
+        assert!(!store.pfx2as_empty());
         // The relationship table is swapped whole too, and read by either side.
         store.asrel_replace(&[(9, 9, 0)]).unwrap();
         store.asrel_replace(&[(1299, 64500, -1), (2906, 64500, 0), (6461, 20055, -1)]).unwrap();
@@ -1168,6 +1160,33 @@ mod tests {
             let n: i64 = store.with_conn(|c| c.query_row(&format!("SELECT COUNT(*) FROM pdb_{t}"), [], |r| r.get(0)).unwrap());
             assert_eq!(n, 0, "{t}");
         }
+        drop(store);
+        remove(&path);
+    }
+
+    #[test]
+    fn opening_rekeys_the_prefix_tables_of_older_builds() {
+        let path = temp_path();
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE pfx2as(prefix INTEGER NOT NULL, len INTEGER NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL);
+                 INSERT INTO pfx2as VALUES(134217728, 8, 1, 0)",
+            )
+            .unwrap();
+        }
+        // The unkeyed table of an older build goes, rows and all; the keyed one takes its place.
+        let store = Store::open(path.clone()).unwrap();
+        let sql: String =
+            store.with_conn(|c| c.query_row("SELECT sql FROM sqlite_master WHERE name = 'pfx2as'", [], |r| r.get(0)).unwrap());
+        assert!(sql.ends_with("WITHOUT ROWID"), "{sql}");
+        assert!(store.pfx2as_empty());
+        // A keyed table survives reopening.
+        store.pfx2as_replace([(0x0800_0000, 8, 1, false)].into_iter()).unwrap();
+        store.pfx2as6_replace([(0x2001_0db8_u128 << 96, 32, 1, false)].into_iter()).unwrap();
+        drop(store);
+        let store = Store::open(path.clone()).unwrap();
+        assert!(!store.pfx2as_empty());
         drop(store);
         remove(&path);
     }

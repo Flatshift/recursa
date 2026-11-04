@@ -336,7 +336,7 @@ pub(crate) fn refresh_in_background(app: &Arc<AppState>) {
         }
         let now = bench::now_ms();
         let stale = |at: Option<i64>| at.is_none_or(|t| now - t > REFRESH_MS);
-        if app.store.pfx2as_count() == 0 || app.store.pfx2as6_count() == 0 || stale(app.store.get(attr::FETCHED_AT)) {
+        if app.store.pfx2as_empty() || stale(app.store.get(attr::FETCHED_AT)) {
             let _ = fetch_pfx2as(&app).await;
         }
         if app.store.asrel_count() == 0 || app.store.get::<i64>(asrel::FETCHED_AT).is_none_or(|t| now - t > asrel::REFRESH_MS) {
@@ -617,7 +617,7 @@ pub(crate) async fn run(app: &Arc<AppState>) -> Result<MapRun, String> {
     let (t0, ts) = (Instant::now(), bench::now_ms());
     app.netmap.cancel.store(false, Ordering::SeqCst);
     *app.netmap.progress.lock().unwrap() = None;
-    if app.store.pfx2as_count() == 0 || app.store.pfx2as6_count() == 0 {
+    if app.store.pfx2as_empty() {
         fetch_pfx2as(app).await.map_err(|e| format!("The prefix-to-AS table could not be fetched: {e}"))?;
     }
     let roll = app.run_roll_call().await;
@@ -631,21 +631,28 @@ pub(crate) async fn run(app: &Arc<AppState>) -> Result<MapRun, String> {
         let (targets, skipped) = resolve_targets(&Resolve::new(system.clone()), &system, &roll, ipv6);
         // PeeringDB tables already on disk stay unused while the user has it off.
         let pdb = if a.store.get::<bool>(pdb::ACCEPTED) == Some(true) { Pdb::load(&a.store) } else { Pdb::default() };
-        (targets, skipped, Arc::new(Pfx2as::new(a.store.clone())), Arc::new(pdb), ipv6)
+        let pfx = Pfx2as::open(&a.store).map_err(|e| format!("The prefix-to-AS table could not be opened: {e}"))?;
+        if pfx.is_empty() {
+            return Err("The prefix-to-AS table is empty.".into());
+        }
+        Ok::<_, String>((targets, skipped, Arc::new(pfx), Arc::new(pdb), ipv6))
     })
     .await
-    .map_err(|e| e.to_string())?;
-    if pfx.is_empty() {
-        return Err("The prefix-to-AS table is empty.".into());
-    }
+    .map_err(|e| e.to_string())??;
     // The measuring flag covers the trace phase only: the name lookups after it are not timed.
     let measuring = Held::set(&app.measuring);
     let (a, y, p, d) = (app.clone(), you.clone(), pfx.clone(), pdb.clone());
-    let (mut traces, skipped_by_trace) = tokio::task::spawn_blocking(move || {
+    let (mut traces, skipped_by_trace, unknown) = tokio::task::spawn_blocking(move || {
         let inp = Inputs { app: &a, pfx: &p, pdb: &d, you: &y, coords, ipv6 };
         let mut skipped = Vec::new();
         let traces = trace_all(&inp, ts, t0, &targets, &mut skipped);
-        (traces, skipped)
+        // Addresses past your ISP that no network announces.
+        let (names, blocks, holders) = (HashMap::new(), HashMap::new(), HashMap::new());
+        let cx = Ctx { pfx: &p, pdb: &d, home: y.asn, names: &names, you: coords, registry: &blocks, holders: &holders };
+        let mut unknown: Vec<IpAddr> = traces.iter().flat_map(|t| unknown_past_isp(&attr::group(&t.trace, &cx))).collect();
+        unknown.sort();
+        unknown.dedup();
+        (traces, skipped, unknown)
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -654,19 +661,12 @@ pub(crate) async fn run(app: &Arc<AppState>) -> Result<MapRun, String> {
     if app.netmap.cancel.load(Ordering::SeqCst) {
         return Err("Cancelled.".into());
     }
-    // Addresses past your ISP that no network announces: ask the registry who holds their block, if allowed.
-    let registry = {
-        let (names, blocks, holders) = (HashMap::new(), HashMap::new(), HashMap::new());
-        let cx = Ctx { pfx: &pfx, pdb: &pdb, home: you.asn, names: &names, you: coords, registry: &blocks, holders: &holders };
-        let mut addrs: Vec<IpAddr> = traces.iter().flat_map(|t| unknown_past_isp(&attr::group(&t.trace, &cx))).collect();
-        addrs.sort();
-        addrs.dedup();
-        rdap::lookup(&app.store, &addrs, &app.netmap.cancel, |url| {
-            let app = app.clone();
-            async move { get(&app, url, false).await }
-        })
-        .await
-    };
+    // Ask the registry who holds the unknown addresses' blocks, if allowed.
+    let registry = rdap::lookup(&app.store, &unknown, &app.netmap.cancel, |url| {
+        let app = app.clone();
+        async move { get(&app, url, false).await }
+    })
+    .await;
     // Who each network's number is registered to, if allowed: the request carries the number only.
     let owners = {
         let mut asns: Vec<u32> = traces.iter().flat_map(|t| t.trace.hops.iter().filter_map(|h| h.asn)).chain(you.asn).collect();

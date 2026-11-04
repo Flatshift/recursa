@@ -44,3 +44,9 @@ webpki-roots = "1.0.11"
 codegen-units = 1
 lto = "thin"
 strip = true
+
+# `cargo test --release` builds with this profile: the release optimisations without the slow whole-program steps.
+[profile.bench]
+lto = false
+codegen-units = 16
+strip = false

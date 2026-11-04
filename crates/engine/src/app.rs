@@ -807,9 +807,10 @@ impl AppState {
                 crate::netmap::asrel::SOURCE,
                 crate::netmap::asrel::FETCHED_AT,
             ];
+            let before = app.store.file_size();
             // The NTP politeness ledger (servers asked in the last ten minutes aren't asked again; servers that sent a
             // rate/deny kiss-of-death are left alone for an hour/a week): a promise to third parties, not user data.
-            freed += app.store.clear(all, &forget, "ntp_asked").map_err(|e| e.to_string())?;
+            app.store.clear(all, &forget, "ntp_asked").map_err(|e| format!("Couldn't clear the data: {e}"))?;
             if all {
                 // Written again after the clear, so another process on this database reads monitoring as off; the
                 // same paths the PUT endpoints take, so the monitor loops and the desktop menus hear it.
@@ -832,11 +833,14 @@ impl AppState {
                     freed += n;
                 }
             }
+            // Last: the rows are gone and forgotten above whatever this does; a failure keeps their space for now.
+            app.store.compact().map_err(|e| format!("The data is cleared, but the database could not be compacted: {e}"))?;
+            freed += before.saturating_sub(app.store.file_size());
             Ok::<u64, String>(freed)
         })
         .await
         .map_err(|e| ApiError::new(500, e.to_string()))?
-        .map_err(|e| ApiError::new(500, format!("Couldn't clear the data: {e}")))?;
+        .map_err(|e| ApiError::new(500, e))?;
         Ok(json!({ "freed": freed }).to_string())
     }
 
