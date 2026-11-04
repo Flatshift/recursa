@@ -138,6 +138,8 @@ pub fn run() {
             // The last window closed: keep running in the menu bar. Quit still quits.
             #[cfg(desktop)]
             RunEvent::ExitRequested { code: None, api, .. } => api.prevent_exit(),
+            // Quitting: fold the journal back into the database so nothing is left beside it.
+            RunEvent::Exit => app.state::<std::sync::Arc<AppState>>().store.close(),
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => shell::show_main(app, None),
             _ => {

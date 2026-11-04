@@ -183,6 +183,11 @@ fn stored_border_monitor(store: &Store) -> Option<BorderMonitorConfig> {
     store.get::<BorderMonitorConfig>("border_monitor").map(BorderMonitorConfig::clamped)
 }
 
+/// The settings a cache clear forgets: where the downloaded reference data came from and when.
+fn forgotten_settings() -> Vec<&'static str> {
+    [&crate::netmap::attr::SETTINGS[..], &[crate::netmap::asrel::SOURCE, crate::netmap::asrel::FETCHED_AT][..]].concat()
+}
+
 impl AppState {
     /// Open the database and build the state. `calibrate` measures the timing floor first;
     /// otherwise [`AppState::start_background`] does it. `caps` is the host's row of [`crate::caps::BUILDS`].
@@ -779,7 +784,8 @@ impl AppState {
     }
 
     /// Clear the cache and downloaded reference data, or with `all` everything back to a fresh install (see the Data
-    /// pane). Holds the run slot throughout, so nothing is measuring or recording meanwhile. Answers with the bytes freed.
+    /// pane). Holds the run slot throughout, so nothing is measuring or recording meanwhile. Answers with the bytes freed,
+    /// and a warning when the file could not be compacted afterwards.
     async fn clear_data(self: &Arc<Self>, all: bool) -> Result<String, ApiError> {
         let held = self.claim_run().await?;
         // Claimed, not read: a refresh starting after a read would fill the tables being emptied.
@@ -788,7 +794,7 @@ impl AppState {
             return Err(ApiError::new(409, "Wait for the download to finish."));
         }
         let app = self.clone();
-        let freed = tokio::task::spawn_blocking(move || {
+        let (freed, warning) = tokio::task::spawn_blocking(move || {
             let _held = (held, fetching);
             let dir = app.store.path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
             let mut freed = 0;
@@ -800,12 +806,10 @@ impl AppState {
                 app.intel.rpki.set_enabled(false);
                 freed += before.saturating_sub(store::dir_size(&rpki));
             }
-            let forget =
-                [&crate::netmap::attr::SETTINGS[..], &[crate::netmap::asrel::SOURCE, crate::netmap::asrel::FETCHED_AT][..]].concat();
             let before = app.store.file_size();
             // The NTP politeness ledger (servers asked in the last ten minutes aren't asked again; servers that sent a
             // rate/deny kiss-of-death are left alone for an hour/a week): a promise to third parties, not user data.
-            app.store.clear(all, &forget, "ntp_asked").map_err(|e| format!("Couldn't clear the data: {e}"))?;
+            app.store.clear(all, &forgotten_settings(), "ntp_asked").map_err(|e| format!("Couldn't clear the data: {e}"))?;
             if all {
                 // Written again after the clear, so another process on this database reads monitoring as off; the
                 // same paths the PUT endpoints take, so the monitor loops and the desktop menus hear it.
@@ -828,15 +832,16 @@ impl AppState {
                     freed += n;
                 }
             }
-            // Last: the rows are gone and forgotten above whatever this does; a failure keeps their space for now.
-            app.store.compact().map_err(|e| format!("The data is cleared, but the database could not be compacted: {e}"))?;
+            // Last: the rows are gone and forgotten above whatever this does, so a failure here is a warning on the
+            // answer, not an error; their space stays taken for now.
+            let warning = app.store.compact().err().map(|e| format!("The database could not be compacted: {e}"));
             freed += before.saturating_sub(app.store.file_size());
-            Ok::<u64, String>(freed)
+            Ok::<_, String>((freed, warning))
         })
         .await
         .map_err(|e| ApiError::new(500, e.to_string()))?
         .map_err(|e| ApiError::new(500, e))?;
-        Ok(json!({ "freed": freed }).to_string())
+        Ok(json!({ "freed": freed, "warning": warning }).to_string())
     }
 
     /// Claim this process's one run slot, then the machine-wide measure lock: a 409 if either is taken. Waits out a
@@ -1555,8 +1560,8 @@ mod tests {
              INSERT INTO ntp_clock VALUES(1, 0.5, 1.0, 3, 2);
              INSERT INTO border_pair(cdn, target, near, near_ttl, far, far_ttl, kind, found_at) VALUES('c', 't', 'n', 1, 'f', 2, 'k', 1);
              INSERT INTO border_sample(ts, pair) VALUES(1, 1);
-             INSERT INTO pfx2as VALUES(1, 24, 64500, 0);
-             INSERT INTO pfx2as6 VALUES(x'00', 32, 64500, 0);
+             INSERT INTO pfx2as VALUES(24, 1, 64500, 0);
+             INSERT INTO pfx2as6 VALUES(32, x'00', 64500, 0);
              INSERT INTO asrel VALUES(1, 2, 0);
              INSERT INTO netmap_run VALUES(1, 1, '{}');
              INSERT INTO pdb_sync VALUES('ix', 1, NULL);
@@ -1568,13 +1573,7 @@ mod tests {
              INSERT INTO rdap_block VALUES(x'00', x'01', '{}', 1);",
         )
         .unwrap();
-        for k in [
-            crate::netmap::attr::SOURCE,
-            crate::netmap::attr::SOURCE6,
-            crate::netmap::attr::FETCHED_AT,
-            crate::netmap::asrel::SOURCE,
-            crate::netmap::asrel::FETCHED_AT,
-        ] {
+        for k in forgotten_settings() {
             a.store.put(k, &"x");
         }
         for k in [crate::netmap::pdb::ACCEPTED, crate::netmap::rdap::ACCEPTED, crate::netmap::RDNS] {
@@ -1619,9 +1618,7 @@ mod tests {
             assert_eq!(count(&a, t), 1, "{t}");
         }
         let keys = setting_keys(&a);
-        for gone in
-            ["netmap.pfx2as_source", "netmap.pfx2as6_source", "netmap.pfx2as_fetched_at", "netmap.asrel_source", "netmap.asrel_fetched_at"]
-        {
+        for gone in forgotten_settings() {
             assert!(!keys.iter().any(|k| k == gone), "{gone}");
         }
         for kept in

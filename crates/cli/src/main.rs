@@ -600,13 +600,14 @@ async fn serve(cli: Cli) {
             c.floor_p50_us
         );
     }
-    let srv = Arc::new(server::Server { app, sessions: Mutex::new(sessions), port });
+    let srv = Arc::new(server::Server { app: app.clone(), sessions: Mutex::new(sessions), port });
     // Live event streams never end on their own, so Ctrl-C exits directly rather than
-    // waiting for them to drain. SQLite in WAL mode is safe to stop at any point.
+    // waiting for them to drain; the store is closed so no journal is left beside the database.
     tokio::select! {
         r = axum::serve(listener, server::router(srv)) => r.expect("server"),
         _ = tokio::signal::ctrl_c() => eprintln!("\nStopped."),
     }
+    app.store.close();
     if let Some(p) = page {
         let _ = std::fs::remove_file(p);
     }

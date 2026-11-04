@@ -120,9 +120,11 @@
     clearing = true;
     error = cleared = null;
     try {
-      const r = await api.del<{ freed: number }>('/api/cache');
+      const r = await api.del<{ freed: number; warning: string | null }>('/api/cache');
       const freed = r?.freed ?? 0;
       cleared = freed >= 1e6 ? `Cache cleared. Freed ${size(freed)}.` : 'Cache cleared.';
+      // Cleared but not compacted: the rows are gone, the file keeps its size.
+      if (r?.warning) error = r.warning;
       reloadOthers();
     } catch (e) {
       error = (e as Error).message;

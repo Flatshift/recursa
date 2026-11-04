@@ -607,6 +607,22 @@ impl Store {
         Ok(())
     }
 
+    /// Fold the WAL back into the file and close both connections, so quitting leaves no journal beside the
+    /// database and the next open has nothing to recover. For the way out only: calls after this fail.
+    pub fn close(&self) {
+        // The reader first, on its own: its snapshot would hold the checkpoint back.
+        if let Some(r) = &self.reader
+            && let Ok(dummy) = Connection::open_in_memory()
+        {
+            let _ = std::mem::replace(&mut *r.lock().unwrap(), dummy).close();
+        }
+        let mut c = self.conn.lock().unwrap();
+        let _ = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+        if let Ok(dummy) = Connection::open_in_memory() {
+            let _ = std::mem::replace(&mut *c, dummy).close();
+        }
+    }
+
     /// The bytes the database and its WAL take on disk.
     pub fn file_size(&self) -> u64 {
         let wal = format!("{}-wal", self.path.display());
@@ -1263,5 +1279,17 @@ pub(crate) mod tests {
         store.clear(true, &[], "keep").unwrap();
         assert_eq!(count("netmap_run"), 0);
         assert_eq!((store.get::<i64>("b"), store.get::<i64>("keep")), (None, Some(3)));
+    }
+
+    #[test]
+    fn close_leaves_no_journal_beside_the_database() {
+        let files = Scratch(temp_path());
+        let store = Store::open(files.0.clone()).unwrap();
+        store.put("k", &1);
+        let wal = PathBuf::from(format!("{}-wal", files.0.display()));
+        assert!(std::fs::metadata(&wal).is_ok_and(|m| m.len() > 0));
+        store.close();
+        assert!(!wal.exists());
+        assert_eq!(Store::open(files.0.clone()).unwrap().get::<i64>("k"), Some(1));
     }
 }
