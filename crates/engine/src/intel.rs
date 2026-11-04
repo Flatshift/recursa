@@ -37,6 +37,9 @@ pub struct Intel {
     pub rpki: Arc<crate::rpki::Rpki>,
     /// Bounds concurrent outbound requests so a run's intel phase stays polite.
     permits: Semaphore,
+    /// Held for reading by each download while it runs and stores its result, and for writing by Settings › Data's
+    /// clears: nothing downloaded lands after a clear or starts during one.
+    pub(crate) fetches: Arc<tokio::sync::RwLock<()>>,
 }
 
 /// One threat feed's usable hosts, and when it was downloaded (Unix ms; none if it never was).
@@ -109,11 +112,13 @@ fn feed_hosts(text: &str) -> impl Iterator<Item = String> + '_ {
 impl Intel {
     pub fn new(store: Arc<Store>, measuring: Arc<AtomicBool>, system: Arc<RwLock<Vec<IpAddr>>>) -> Self {
         let http = reqwest::Client::builder().user_agent(crate::USER_AGENT).timeout(Duration::from_secs(12)).build().expect("http client");
+        let fetches = Arc::new(tokio::sync::RwLock::new(()));
         #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
         let rpki = crate::rpki::Rpki::new(
             store.path.parent().map(|p| p.to_path_buf()).unwrap_or_default().join("rpki"),
             store.clone(),
             measuring.clone(),
+            fetches.clone(),
         );
         Intel {
             http,
@@ -124,6 +129,7 @@ impl Intel {
             #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
             rpki,
             permits: Semaphore::new(8),
+            fetches,
         }
     }
 
@@ -171,6 +177,7 @@ impl Intel {
         }
         if !self.measuring.load(Ordering::SeqCst)
             && !lock::busy()
+            && let Ok(_fetching) = self.fetches.try_read()
             && let Some(v) = fetch.await
         {
             self.store.cache_put(key, &v);
@@ -350,6 +357,7 @@ impl Intel {
         if force
             && !self.measuring.load(Ordering::SeqCst)
             && !lock::busy()
+            && let Ok(_fetching) = self.fetches.try_read()
             && let Some(v) = self.fetch_status().await
         {
             self.store.cache_put("status:all", &v);

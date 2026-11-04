@@ -295,13 +295,31 @@ async fn get(app: &AppState, url: String, gzip: bool) -> Result<Vec<u8>, String>
     if gzip && packed { gunzip(&body) } else { Ok(body.to_vec()) }
 }
 
-/// Fetch the prefix-to-AS table now.
-async fn fetch_pfx2as(app: &Arc<AppState>) -> Result<(), String> {
+/// Fetch the prefix-to-AS table now. For a `run`, each download ends within a moment of the run's Cancel; a table
+/// being written is finished first.
+async fn fetch_pfx2as(app: &Arc<AppState>, run: bool) -> Result<(), String> {
     attr::refresh(&app.store, |url| {
         let app = app.clone();
-        async move { get(&app, url, false).await }
+        async move {
+            if !run {
+                return get(&app, url, false).await;
+            }
+            // The cancel first: a download that follows one is never started.
+            tokio::select! {
+                biased;
+                () = cancelled(&app) => Err("Cancelled.".into()),
+                got = get(&app, url, false) => got,
+            }
+        }
     })
     .await
+}
+
+/// Resolves once the run is cancelled.
+async fn cancelled(app: &AppState) {
+    while !app.netmap.cancel.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
 }
 
 /// Fetch the AS relationships table now. The body is bzip2; `asrel::refresh` unpacks it.
@@ -321,7 +339,11 @@ async fn ensure_pfx2as(app: &Arc<AppState>) -> Result<(), String> {
             return Err("Cancelled.".into());
         }
         if let Some(_fetching) = FlagGuard::claim(&app.netmap.fetching_pfx2as) {
-            return fetch_pfx2as(app).await.map_err(|e| format!("The prefix-to-AS table could not be fetched: {e}"));
+            let fetched = fetch_pfx2as(app, true).await;
+            if app.netmap.cancel.load(Ordering::SeqCst) {
+                return Err("Cancelled.".into());
+            }
+            return fetched.map_err(|e| format!("The prefix-to-AS table could not be fetched: {e}"));
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
@@ -339,7 +361,7 @@ pub(crate) fn refresh_in_background(app: &Arc<AppState>) {
         if attr::due(&app.store).contains(&true) {
             // Held however the download ends: one that panics mustn't leave the flag set and refuse every clear.
             if let Some(_fetching) = FlagGuard::claim(&app.netmap.fetching_pfx2as) {
-                let _ = fetch_pfx2as(&app).await;
+                let _ = fetch_pfx2as(&app, false).await;
             }
         }
         if (app.store.asrel_count() == 0 || app.store.get::<i64>(asrel::FETCHED_AT).is_none_or(|t| now - t > asrel::REFRESH_MS))
@@ -740,6 +762,23 @@ mod tests {
         let t0 = Instant::now();
         assert_eq!(ensure_pfx2as(&app).await.unwrap_err(), "Cancelled.");
         assert!(t0.elapsed() < Duration::from_millis(400) && app.netmap.fetching_pfx2as.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn a_run_needing_the_prefix_table_stops_when_cancelled_during_its_own_download() {
+        let app = crate::app::tests::app();
+        // The download waits for the measured phase to end: the cancel ends it first, without a byte fetched.
+        app.measuring.store(true, Ordering::SeqCst);
+        let canceller = app.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            canceller.netmap.cancel.store(true, Ordering::SeqCst);
+        });
+        let t0 = Instant::now();
+        assert_eq!(ensure_pfx2as(&app).await.unwrap_err(), "Cancelled.");
+        assert!(t0.elapsed() < Duration::from_secs(2));
+        // Its own download: the flag went with it.
+        assert!(!app.netmap.fetching_pfx2as.load(Ordering::SeqCst) && attr::fetched_at(&app.store).is_none());
     }
 
     #[tokio::test]

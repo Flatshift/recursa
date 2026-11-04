@@ -1054,6 +1054,21 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn changed_since_sees_commits_by_other_connections() {
+        let path = temp_path();
+        let a = Store::open(path.clone()).unwrap();
+        let b = Store::open(path.clone()).unwrap();
+        let mut seen = None;
+        assert!(a.changed_since(&mut seen), "the first call");
+        assert!(!a.changed_since(&mut seen), "nothing committed since");
+        b.put("monitor", &true);
+        assert!(a.changed_since(&mut seen), "another connection's commit");
+        assert!(!a.changed_since(&mut seen));
+        drop((a, b));
+        remove(&path);
+    }
+
+    #[test]
     fn opening_drops_the_table_left_by_older_builds() {
         let path = temp_path();
         Connection::open(&path).unwrap().execute_batch("CREATE TABLE isp_checks(id INTEGER)").unwrap();

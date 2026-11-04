@@ -759,7 +759,8 @@ impl AppState {
             ("GET", ["network", "map"]) => ok(json!({
                 "last": crate::netmap::last(&self.store),
                 "running": self.netmap_running(),
-                "fetching": self.netmap.fetching_pfx2as.load(Ordering::SeqCst),
+                // A run's own download, or one it waits for; not the daily refresh of tables it already has.
+                "fetching": self.netmap.fetching_pfx2as.load(Ordering::SeqCst) && self.store.pfx2as_empty(),
                 "progress": *self.netmap.progress.lock().unwrap(),
                 "error": *self.netmap.error.lock().unwrap(),
                 "datasets": crate::netmap::datasets(&self.store),
@@ -841,9 +842,11 @@ impl AppState {
     /// database file gave back, and a warning when it could not be compacted afterwards.
     async fn clear_data(self: &Arc<Self>, all: bool) -> Result<String, ApiError> {
         let held = self.claim_run().await?;
-        // Claimed, not read: a refresh starting after a read would fill the tables being emptied.
-        let fetching = FlagGuard::claim(&self.netmap.fetching).zip(FlagGuard::claim(&self.netmap.fetching_pfx2as));
-        if fetching.is_none() || (all && self.intel.fetching()) {
+        // Claimed, not read: a download starting after a read would fill the tables being emptied.
+        let fetching = FlagGuard::claim(&self.netmap.fetching)
+            .zip(FlagGuard::claim(&self.netmap.fetching_pfx2as))
+            .zip(self.intel.fetches.clone().try_write_owned().ok());
+        if fetching.is_none() {
             return Err(ApiError::new(409, "Wait for the download to finish."));
         }
         let app = self.clone();
@@ -1744,9 +1747,15 @@ pub(crate) mod tests {
         assert_eq!(a.call("DELETE", "/api/cache", Value::Null).await.unwrap_err().status, 409);
         assert!(!a.netmap.fetching.load(Ordering::SeqCst), "the refused clear let the other flag go");
         a.netmap.fetching_pfx2as.store(false, Ordering::SeqCst);
+        // A feed or status fetch, or a route-origin sync, in flight: the same answer.
+        let fetch = a.intel.fetches.clone().try_read_owned().unwrap();
+        assert_eq!(a.call("DELETE", "/api/cache", Value::Null).await.unwrap_err().status, 409);
+        assert!(!a.netmap.fetching.load(Ordering::SeqCst) && !a.netmap.fetching_pfx2as.load(Ordering::SeqCst));
+        drop(fetch);
         a.call("DELETE", "/api/cache", Value::Null).await.unwrap();
         // Released with the clear: the next refresh may start.
         assert!(!a.netmap.fetching.load(Ordering::SeqCst) && !a.netmap.fetching_pfx2as.load(Ordering::SeqCst));
+        assert!(a.intel.fetches.try_write().is_ok());
         let _ = std::fs::remove_dir_all(dir);
     }
 

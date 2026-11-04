@@ -83,6 +83,8 @@ pub struct Rpki {
     /// Bumped when the setting goes off: a sync that began earlier is ended.
     epoch: AtomicU64,
     state: Mutex<State>,
+    /// Held for reading while a sync runs; Settings › Data's clears take it for writing (see [`crate::intel::Intel`]).
+    fetches: Arc<tokio::sync::RwLock<()>>,
 }
 
 #[derive(Default)]
@@ -103,8 +105,8 @@ struct State {
 
 impl Rpki {
     /// `dir` is `<data dir>/rpki`. Nothing is read or created until it is needed.
-    pub(crate) fn new(dir: PathBuf, store: Arc<Store>, measuring: Arc<AtomicBool>) -> Arc<Self> {
-        Arc::new(Rpki { dir, store, measuring, epoch: AtomicU64::new(0), state: Mutex::default() })
+    pub(crate) fn new(dir: PathBuf, store: Arc<Store>, measuring: Arc<AtomicBool>, fetches: Arc<tokio::sync::RwLock<()>>) -> Arc<Self> {
+        Arc::new(Rpki { dir, store, measuring, epoch: AtomicU64::new(0), state: Mutex::default(), fetches })
     }
 
     pub(crate) fn enabled(&self) -> bool {
@@ -194,6 +196,10 @@ impl Rpki {
         if !self.enabled() || self.measuring.load(Ordering::SeqCst) || crate::lock::busy() {
             return false;
         }
+        // A clear is emptying the data folder: nothing starts until it is done.
+        let Ok(fetching) = self.fetches.clone().try_read_owned() else {
+            return false;
+        };
         {
             let mut s = self.state.lock().unwrap();
             if s.syncing_since.is_some() {
@@ -202,7 +208,10 @@ impl Rpki {
             s.syncing_since = Some(now_ms());
         }
         let me = self.clone();
-        let spawned = std::thread::Builder::new().name("recursa-rpki".into()).spawn(move || me.sync_thread());
+        let spawned = std::thread::Builder::new().name("recursa-rpki".into()).spawn(move || {
+            let _fetching = fetching;
+            me.sync_thread()
+        });
         if spawned.is_err() {
             self.state.lock().unwrap().syncing_since = None;
             return false;
@@ -601,7 +610,7 @@ mod tests {
     fn rpki_in(dir: &Path, enabled: bool, measuring: bool) -> Arc<Rpki> {
         let store = Arc::new(Store::open(dir.join("test.db")).unwrap());
         store.put(SETTING, &enabled);
-        Rpki::new(dir.join("rpki"), store, Arc::new(AtomicBool::new(measuring)))
+        Rpki::new(dir.join("rpki"), store, Arc::new(AtomicBool::new(measuring)), Arc::default())
     }
 
     fn scratch() -> PathBuf {
