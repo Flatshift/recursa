@@ -323,12 +323,15 @@ async fn main() {
                 NtpFormat::Csv => print!("{}", recursa_engine::ntp_report::to_csv(&results)),
                 NtpFormat::Table => print_ntp(&results, consensus.as_ref()),
             }
+            app.close();
         }
         Some(Cmd::Trace { ref target }) => trace(&cli, target).await,
         Some(Cmd::List) => {
-            for r in open_state(&cli, false).resolvers() {
+            let app = open_state(&cli, false);
+            for r in app.resolvers() {
                 println!("{:<24} {:<18} {:<26} {}", r.id, r.provider, r.variant, r.ipv4.first().cloned().unwrap_or_default());
             }
+            app.close();
         }
         Some(Cmd::Run { ref resolvers, ref transports, samples, quick, latency_only, json, ref cached_names, ref cached_names_file }) => {
             // Bad arguments fail before anything touches the database or the network.
@@ -408,6 +411,7 @@ async fn main() {
             } else {
                 print_table(&s);
             }
+            app.close();
         }
     }
 }
