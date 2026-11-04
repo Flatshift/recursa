@@ -3,6 +3,7 @@
 
 use crate::border::{Kind, Pair, Sample as BorderSample};
 use crate::monitor::{HOUR_MS, HourRollup, Outage, OutageTracker, RollupBuilder, RollupRow};
+use crate::netmap::attr;
 use rusqlite::types::Type;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, Transaction, params};
 use serde::Serialize;
@@ -104,9 +105,11 @@ impl Store {
         if !keyed {
             conn.execute_batch("DROP TABLE IF EXISTS pfx2as; DROP TABLE IF EXISTS pfx2as6")?;
         }
+        // A reader's snapshot (a Peering run) keeps the WAL from resetting; the reset after it trims the file back.
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
+             PRAGMA journal_size_limit=4194304;
              CREATE TABLE IF NOT EXISTS runs(
                id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, finished_at INTEGER,
                status TEXT NOT NULL, summary TEXT NOT NULL, body TEXT NOT NULL);
@@ -186,8 +189,18 @@ impl Store {
                 return Err(e);
             }
         }
-        // Left over from older builds.
-        conn.execute_batch("DROP TABLE IF EXISTS isp_checks")?;
+        if !keyed {
+            // What the Data pane says about the dropped tables goes with them.
+            for k in attr::SETTINGS {
+                conn.execute("DELETE FROM settings WHERE key = ?1", params![k])?;
+            }
+        }
+        // Left over from older builds; one run on this database makes the indexes again.
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS isp_checks;
+             DROP INDEX IF EXISTS pfx2as_len_prefix;
+             DROP INDEX IF EXISTS pfx2as6_len_prefix",
+        )?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version < 1
             && let Err(e) = build_rollups(&mut conn)
@@ -195,9 +208,13 @@ impl Store {
             // History then fills in from new cycles; the next launch tries again.
             eprintln!("Couldn't build the monitoring rollups: {e}");
         }
-        let reader =
-            Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).ok().map(Mutex::new);
+        let reader = Store::open_reader(&path).ok().map(Mutex::new);
         Ok(Store { conn: Mutex::new(conn), reader, path })
+    }
+
+    /// A read-only connection to the database at `path`, for reads that must not wait on the writer.
+    pub(crate) fn open_reader(path: &Path) -> rusqlite::Result<Connection> {
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
     }
 
     pub fn cache_get(&self, key: &str, max_age_ms: i64) -> Option<(serde_json::Value, i64)> {
@@ -557,6 +574,9 @@ pub(crate) const HISTORY: [&str; 10] = [
     "custom",
 ];
 
+/// Whether either prefix table is empty, on any connection to the database.
+pub(crate) const PFX2AS_EMPTY: &str = "SELECT NOT EXISTS(SELECT 1 FROM pfx2as) OR NOT EXISTS(SELECT 1 FROM pfx2as6)";
+
 /// What the Data pane clears (see [`Store::clear`]).
 impl Store {
     /// Empty the cache and the downloaded reference tables, and delete the settings in `forget`; with `all`, every
@@ -776,8 +796,7 @@ impl Store {
 
     /// Either prefix table is empty: fetched before any run.
     pub fn pfx2as_empty(&self) -> bool {
-        let c = self.rd();
-        c.query_row("SELECT NOT EXISTS(SELECT 1 FROM pfx2as) OR NOT EXISTS(SELECT 1 FROM pfx2as6)", [], |r| r.get(0)).unwrap_or(true)
+        self.rd().query_row(PFX2AS_EMPTY, [], |r| r.get(0)).unwrap_or(true)
     }
 
     /// Replace the whole AS-relationship table with `rows` (a, b, rel: -1 = a provides for b, 0 = peers), in one
@@ -950,16 +969,25 @@ fn build_rollups(conn: &mut Connection) -> rusqlite::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn temp_path() -> PathBuf {
+    pub(crate) fn temp_path() -> PathBuf {
         std::env::temp_dir().join(format!("recursa-store-{:x}.db", fastrand::u64(..)))
     }
 
-    fn remove(path: &std::path::Path) {
+    pub(crate) fn remove(path: &std::path::Path) {
         for ext in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{ext}", path.display()));
+        }
+    }
+
+    /// A scratch database's path, removed with its WAL and index when dropped.
+    pub(crate) struct Scratch(pub(crate) PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            remove(&self.0);
         }
     }
 
@@ -1166,28 +1194,74 @@ mod tests {
 
     #[test]
     fn opening_rekeys_the_prefix_tables_of_older_builds() {
-        let path = temp_path();
+        let files = Scratch(temp_path());
+        const OLD_INDEXES: &str =
+            "CREATE INDEX pfx2as_len_prefix ON pfx2as(len, prefix); CREATE INDEX pfx2as6_len_prefix ON pfx2as6(len, prefix)";
         {
-            let c = Connection::open(&path).unwrap();
+            let c = Connection::open(&files.0).unwrap();
             c.execute_batch(
                 "CREATE TABLE pfx2as(prefix INTEGER NOT NULL, len INTEGER NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL);
-                 INSERT INTO pfx2as VALUES(134217728, 8, 1, 0)",
+                 CREATE TABLE pfx2as6(prefix BLOB NOT NULL, len INTEGER NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL);
+                 INSERT INTO pfx2as VALUES(134217728, 8, 1, 0);
+                 CREATE TABLE settings(key TEXT PRIMARY KEY, body TEXT NOT NULL);
+                 INSERT INTO settings VALUES('other', '2')",
             )
             .unwrap();
+            c.execute_batch(OLD_INDEXES).unwrap();
+            for k in attr::SETTINGS {
+                c.execute("INSERT INTO settings VALUES(?1, '1')", params![k]).unwrap();
+            }
         }
-        // The unkeyed table of an older build goes, rows and all; the keyed one takes its place.
-        let store = Store::open(path.clone()).unwrap();
-        let sql: String =
-            store.with_conn(|c| c.query_row("SELECT sql FROM sqlite_master WHERE name = 'pfx2as'", [], |r| r.get(0)).unwrap());
-        assert!(sql.ends_with("WITHOUT ROWID"), "{sql}");
+        // Every table and index on the prefix tables, with its SQL.
+        fn schema(store: &Store) -> Vec<(String, String)> {
+            store.with_conn(|c| {
+                let mut st = c.prepare("SELECT name, sql FROM sqlite_master WHERE tbl_name LIKE 'pfx2as%' ORDER BY name").unwrap();
+                st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+            })
+        }
+        let keyed = |store: &Store| {
+            let schema = schema(store);
+            assert_eq!(schema.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(), ["pfx2as", "pfx2as6"]);
+            assert!(schema.iter().all(|(_, sql)| sql.ends_with("WITHOUT ROWID")), "{schema:?}");
+        };
+        // The unkeyed tables of an older build go, rows, indexes and fetch record and all; keyed ones take their place.
+        let store = Store::open(files.0.clone()).unwrap();
+        keyed(&store);
         assert!(store.pfx2as_empty());
-        // A keyed table survives reopening.
+        assert!(attr::SETTINGS.into_iter().all(|k| store.get::<i64>(k).is_none()));
+        assert_eq!(store.get::<i64>("other"), Some(2));
+        // A keyed table survives reopening, and an older build's run on it only adds the indexes back.
         store.pfx2as_replace([(0x0800_0000, 8, 1, false)].into_iter()).unwrap();
         store.pfx2as6_replace([(0x2001_0db8_u128 << 96, 32, 1, false)].into_iter()).unwrap();
+        store.with_conn(|c| c.execute_batch(OLD_INDEXES).unwrap());
         drop(store);
-        let store = Store::open(path.clone()).unwrap();
+        let store = Store::open(files.0.clone()).unwrap();
+        keyed(&store);
         assert!(!store.pfx2as_empty());
-        drop(store);
-        remove(&path);
+    }
+
+    #[test]
+    fn clear_empties_the_tables_and_compact_gives_the_space_back() {
+        let files = Scratch(temp_path());
+        let store = Store::open(files.0.clone()).unwrap();
+        let count = |t: &str| -> i64 { store.with_conn(|c| c.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap()) };
+        store.pfx2as_replace((1..50_000u32).map(|i| (i << 12, 20, i, false))).unwrap();
+        store.netmap_put(10, "{}");
+        for (k, v) in [("a", 1), ("b", 2), ("keep", 3)] {
+            store.put(k, &v);
+        }
+        let before = store.file_size();
+        // Clear Cache empties the downloaded tables and forgets the settings named; history and the rest stay.
+        store.clear(false, &["a"], "keep").unwrap();
+        assert_eq!((count("pfx2as"), count("netmap_run")), (0, 1));
+        assert_eq!((store.get::<i64>("a"), store.get::<i64>("b"), store.get::<i64>("keep")), (None, Some(2), Some(3)));
+        // The rows' space comes back once compacted.
+        store.compact().unwrap();
+        let after = store.file_size();
+        assert!(after < before, "{after} >= {before}");
+        // Clear All empties the history too, and every setting but the one kept.
+        store.clear(true, &[], "keep").unwrap();
+        assert_eq!(count("netmap_run"), 0);
+        assert_eq!((store.get::<i64>("b"), store.get::<i64>("keep")), (None, Some(3)));
     }
 }

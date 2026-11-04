@@ -800,13 +800,8 @@ impl AppState {
                 app.intel.rpki.set_enabled(false);
                 freed += before.saturating_sub(store::dir_size(&rpki));
             }
-            let forget = [
-                crate::netmap::attr::SOURCE,
-                crate::netmap::attr::SOURCE6,
-                crate::netmap::attr::FETCHED_AT,
-                crate::netmap::asrel::SOURCE,
-                crate::netmap::asrel::FETCHED_AT,
-            ];
+            let forget =
+                [&crate::netmap::attr::SETTINGS[..], &[crate::netmap::asrel::SOURCE, crate::netmap::asrel::FETCHED_AT][..]].concat();
             let before = app.store.file_size();
             // The NTP politeness ledger (servers asked in the last ten minutes aren't asked again; servers that sent a
             // rate/deny kiss-of-death are left alone for an hour/a week): a promise to third parties, not user data.

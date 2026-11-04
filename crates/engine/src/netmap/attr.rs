@@ -12,7 +12,7 @@ use crate::stats::{median, round1};
 use crate::store::Store;
 use crate::trace::Trace;
 use flate2::read::GzDecoder;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
@@ -27,6 +27,8 @@ const DIR6_URL: &str = "https://publicdata.caida.org/datasets/routing/routeviews
 pub(crate) const FETCHED_AT: &str = "netmap.pfx2as_fetched_at";
 pub(crate) const SOURCE: &str = "netmap.pfx2as_source";
 pub(crate) const SOURCE6: &str = "netmap.pfx2as6_source";
+/// The settings that describe the prefix tables: cleared with them.
+pub(crate) const SETTINGS: [&str; 3] = [SOURCE, SOURCE6, FETCHED_AT];
 /// Shortest prefix tried, as announced to the Internet's default-free zone.
 const SHORTEST: u8 = 8;
 /// Shortest IPv6 prefix tried.
@@ -45,12 +47,15 @@ pub struct Match {
     pub prefix: String,
 }
 
-/// Prefixes to their origin: the store's keyed tables, probed by (length, masked address) from the longest down, one
-/// table per family, over a read-only connection of its own that holds one snapshot for the run (a refresh under
-/// WAL commits beside it). Nothing is loaded into memory.
+/// Prefixes to their origin: the store's keyed tables, probed by (length, masked address) at each length the table
+/// holds from the longest down, one table per family, over a read-only connection of its own that holds one snapshot
+/// for the run (a refresh under WAL commits beside it). Nothing but the lengths is loaded into memory.
 pub struct Pfx2as {
     conn: Mutex<Connection>,
     empty: bool,
+    /// The lengths each table holds, longest first.
+    lens: Vec<u8>,
+    lens6: Vec<u8>,
 }
 
 fn mask(len: u8) -> u32 {
@@ -62,22 +67,27 @@ fn mask6(len: u8) -> u128 {
 }
 
 impl Pfx2as {
-    /// Open the tables of `store` as they are now: the first read pins the snapshot until this is dropped.
+    /// Open the tables of `store` as they are now: the snapshot is taken here and held until this is dropped.
     pub fn open(store: &Store) -> rusqlite::Result<Pfx2as> {
-        let conn = Connection::open_with_flags(&store.path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+        let conn = Store::open_reader(&store.path)?;
         conn.execute_batch("BEGIN")?;
-        let empty = conn.query_row("SELECT NOT EXISTS(SELECT 1 FROM pfx2as)", [], |r| r.get(0))?;
-        Ok(Pfx2as { conn: Mutex::new(conn), empty })
+        let empty = conn.query_row(crate::store::PFX2AS_EMPTY, [], |r| r.get(0))?;
+        let lens = |table: &str, shortest: u8, longest: u8| -> rusqlite::Result<Vec<u8>> {
+            let mut st = conn.prepare(&format!("SELECT DISTINCT len FROM {table} WHERE len BETWEEN ?1 AND ?2 ORDER BY len DESC"))?;
+            st.query_map(params![shortest, longest], |r| r.get(0))?.collect()
+        };
+        let (lens, lens6) = (lens("pfx2as", SHORTEST, 32)?, lens("pfx2as6", SHORTEST6, 128)?);
+        Ok(Pfx2as { conn: Mutex::new(conn), empty, lens, lens6 })
     }
 
-    /// The IPv4 table was empty when opened. Databases from before the IPv6 table have none until the next refresh,
-    /// and an IPv6 hop is then unknown.
+    /// Either table had no rows in the snapshot. A run fetches before opening, so this is true only if that fetch
+    /// left a table empty.
     pub fn is_empty(&self) -> bool {
         self.empty
     }
 
     /// The longest announced prefix holding `addr`. Private, shared (carrier-grade NAT) and link-local space never
-    /// matches.
+    /// matches. A read error ends the probe: unknown is better than a shorter prefix's origin.
     pub fn lookup(&self, addr: IpAddr) -> Option<Match> {
         let addr = addr.to_canonical();
         if is_private(&addr) {
@@ -89,20 +99,24 @@ impl Pfx2as {
             IpAddr::V4(a) => {
                 let a = u32::from(a);
                 let mut st = c.prepare_cached("SELECT asn, moas FROM pfx2as WHERE len = ?1 AND prefix = ?2").ok()?;
-                (SHORTEST..=32).rev().find_map(|len| {
+                for &len in &self.lens {
                     let net = a & mask(len);
-                    let (asn, moas) = st.query_row(params![len, net], row).optional().ok().flatten()?;
-                    Some(Match { asn, moas, prefix: format!("{}/{len}", Ipv4Addr::from(net)) })
-                })
+                    if let Some((asn, moas)) = st.query_row(params![len, net], row).optional().ok()? {
+                        return Some(Match { asn, moas, prefix: format!("{}/{len}", Ipv4Addr::from(net)) });
+                    }
+                }
+                None
             }
             IpAddr::V6(a) => {
                 let a = u128::from(a);
                 let mut st = c.prepare_cached("SELECT asn, moas FROM pfx2as6 WHERE len = ?1 AND prefix = ?2").ok()?;
-                (SHORTEST6..=128).rev().find_map(|len| {
+                for &len in &self.lens6 {
                     let net = a & mask6(len);
-                    let (asn, moas) = st.query_row(params![len, &net.to_be_bytes()[..]], row).optional().ok().flatten()?;
-                    Some(Match { asn, moas, prefix: format!("{}/{len}", Ipv6Addr::from(net)) })
-                })
+                    if let Some((asn, moas)) = st.query_row(params![len, &net.to_be_bytes()[..]], row).optional().ok()? {
+                        return Some(Match { asn, moas, prefix: format!("{}/{len}", Ipv6Addr::from(net)) });
+                    }
+                }
+                None
             }
         }
     }
@@ -741,6 +755,7 @@ pub fn merge(paths: &[(&str, Vec<Seg>)], rels: &AsRel) -> (Vec<Group>, Vec<Link>
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::store::tests::{Scratch, temp_path};
     use crate::trace::Hop;
 
     pub fn ip(s: &str) -> IpAddr {
@@ -772,7 +787,7 @@ pub(crate) mod tests {
     /// A prefix table over a scratch store, removed with it.
     pub struct Table {
         pfx: Pfx2as,
-        _store: Store,
+        store: Store,
         _files: Scratch,
     }
 
@@ -783,23 +798,13 @@ pub(crate) mod tests {
         }
     }
 
-    struct Scratch(std::path::PathBuf);
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            for ext in ["", "-wal", "-shm"] {
-                let _ = std::fs::remove_file(format!("{}{ext}", self.0.display()));
-            }
-        }
-    }
-
     /// A prefix table in a scratch store, masked by length.
     pub fn table(rows: impl Iterator<Item = (u32, u8, u32, bool)>, rows6: impl Iterator<Item = (u128, u8, u32, bool)>) -> Table {
-        let path = std::env::temp_dir().join(format!("recursa-pfx-{:x}.db", fastrand::u64(..)));
-        let store = Store::open(path.clone()).unwrap();
+        let files = Scratch(temp_path());
+        let store = Store::open(files.0.clone()).unwrap();
         store.pfx2as_replace(rows.map(|(p, len, asn, moas)| (p & mask(len), len, asn, moas))).unwrap();
         store.pfx2as6_replace(rows6.map(|(p, len, asn, moas)| (p & mask6(len), len, asn, moas))).unwrap();
-        Table { pfx: Pfx2as::open(&store).unwrap(), _store: store, _files: Scratch(path) }
+        Table { pfx: Pfx2as::open(&store).unwrap(), store, _files: files }
     }
 
     /// 198.51.100.0/24 is the ISP (AS100), 203.0.113.0/24 a carrier (AS200), 192.0.2.0/24 the content network (AS300).
@@ -815,6 +820,24 @@ pub(crate) mod tests {
         static NO_REGISTRY: std::sync::LazyLock<HashMap<IpAddr, Block>> = std::sync::LazyLock::new(HashMap::new);
         static NO_HOLDERS: std::sync::LazyLock<HashMap<u32, String>> = std::sync::LazyLock::new(HashMap::new);
         Ctx { pfx, pdb, home: Some(100), names, you: None, registry: &NO_REGISTRY, holders: &NO_HOLDERS }
+    }
+
+    #[test]
+    fn a_table_keeps_its_snapshot_while_the_store_is_refreshed() {
+        let (v4, v6) = (ip("198.51.100.7"), ip("2001:db8::7"));
+        let t = table(
+            [(u32::from(Ipv4Addr::new(198, 51, 100, 0)), 24, 100, false)].into_iter(),
+            [(0x2001_0db8_u128 << 96, 32, 6, false)].into_iter(),
+        );
+        assert_eq!((t.asn_of(v4), t.asn_of(v6), t.is_empty()), (Some(100), Some(6), false));
+        // A refresh beside it changes one table and empties the other; the snapshot answers as before.
+        t.store.pfx2as_replace([(u32::from(Ipv4Addr::new(198, 51, 100, 0)), 24, 999, false)].into_iter()).unwrap();
+        t.store.pfx2as6_replace(std::iter::empty()).unwrap();
+        assert!(t.store.pfx2as_empty());
+        assert_eq!((t.asn_of(v4), t.asn_of(v6), t.is_empty()), (Some(100), Some(6), false));
+        // The next open sees the refresh.
+        let fresh = Pfx2as::open(&t.store).unwrap();
+        assert_eq!((fresh.asn_of(v4), fresh.asn_of(v6), fresh.is_empty()), (Some(999), None, true));
     }
 
     #[test]

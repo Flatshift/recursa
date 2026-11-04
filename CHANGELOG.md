@@ -6,7 +6,7 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 
 - Settings › Data: Clear Cache removes cached lookups and downloaded reference data; Clear All Data returns Recursa to a fresh install.
 - Peering: the map no longer makes the page shake at some window sizes.
-- Peering: runs start faster and use less memory.
+- Peering: runs start faster and use less memory; the prefix tables are downloaded once more after this update.
 - Settings › Data: a clear whose compaction fails is reported as an error instead of a success.
 - Release builds are smaller.
 

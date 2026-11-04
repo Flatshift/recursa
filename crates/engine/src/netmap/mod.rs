@@ -639,28 +639,28 @@ pub(crate) async fn run(app: &Arc<AppState>) -> Result<MapRun, String> {
     })
     .await
     .map_err(|e| e.to_string())??;
-    // The measuring flag covers the trace phase only: the name lookups after it are not timed.
-    let measuring = Held::set(&app.measuring);
     let (a, y, p, d) = (app.clone(), you.clone(), pfx.clone(), pdb.clone());
     let (mut traces, skipped_by_trace, unknown) = tokio::task::spawn_blocking(move || {
+        // The measuring flag covers the trace phase only: the grouping and name lookups after it are not timed.
+        let measuring = Held::set(&a.measuring);
         let inp = Inputs { app: &a, pfx: &p, pdb: &d, you: &y, coords, ipv6 };
         let mut skipped = Vec::new();
         let traces = trace_all(&inp, ts, t0, &targets, &mut skipped);
+        drop(measuring);
+        if a.netmap.cancel.load(Ordering::SeqCst) {
+            return Err("Cancelled.".to_string());
+        }
         // Addresses past your ISP that no network announces.
         let (names, blocks, holders) = (HashMap::new(), HashMap::new(), HashMap::new());
         let cx = Ctx { pfx: &p, pdb: &d, home: y.asn, names: &names, you: coords, registry: &blocks, holders: &holders };
         let mut unknown: Vec<IpAddr> = traces.iter().flat_map(|t| unknown_past_isp(&attr::group(&t.trace, &cx))).collect();
         unknown.sort();
         unknown.dedup();
-        (traces, skipped, unknown)
+        Ok((traces, skipped, unknown))
     })
     .await
-    .map_err(|e| e.to_string())?;
-    drop(measuring);
+    .map_err(|e| e.to_string())??;
     skipped.extend(skipped_by_trace);
-    if app.netmap.cancel.load(Ordering::SeqCst) {
-        return Err("Cancelled.".into());
-    }
     // Ask the registry who holds the unknown addresses' blocks, if allowed.
     let registry = rdap::lookup(&app.store, &unknown, &app.netmap.cancel, |url| {
         let app = app.clone();
