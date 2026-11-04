@@ -14,7 +14,12 @@
   import Provenance from './Provenance.svelte';
   import SetupDial from './SetupDial.svelte';
 
-  let { run, label, running = false }: { run: MapRun | null; label: string; running?: boolean } = $props();
+  let {
+    run,
+    label,
+    running = false,
+    fetching = false,
+  }: { run: MapRun | null; label: string; running?: boolean; fetching?: boolean } = $props();
 
   const groups = $derived(run?.groups ?? []);
   // Nothing can be drawn until the first trace is back, which takes the address tables, the roll call and a whole trace.
@@ -238,7 +243,11 @@
     {/if}
   </div>
   {#if starting}
-    <div class="starting" role="img" aria-label={label} aria-busy="true"><SetupDial /></div>
+    {@const phase = fetching ? 'Fetching the prefix tables' : 'Tracing the first routes'}
+    <div class="starting" role="img" aria-label="{label}. {phase}" aria-busy="true">
+      <SetupDial />
+      <p>{phase}</p>
+    </div>
   {/if}
   {#if groups.length}
     <div class="zoom" role="group" aria-label="Zoom">
@@ -326,7 +335,14 @@
     inset: 0;
     display: grid;
     place-items: center;
+    align-content: center;
+    gap: 10px;
     pointer-events: none;
+  }
+  .starting p {
+    margin: 0;
+    font-size: var(--t-sm);
+    color: var(--ink-3);
   }
   .map.more::after {
     content: '';

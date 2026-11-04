@@ -11,6 +11,7 @@
   import Toolbar from '../components/Toolbar.svelte';
   import Icon from '../components/Icon.svelte';
   import Mark from '../components/Mark.svelte';
+  import ResolverChips from '../components/ResolverChips.svelte';
 
   const mixes = Object.keys(MIX_LABEL) as Mix[];
   const themes = [
@@ -317,9 +318,11 @@
               {#each RETENTION_DAYS as d}<option value={d}>{d} days</option>{/each}
             </select>
           </div>
-          <p class="note">
-            {cfg.resolvers.length} resolvers are monitored. Choose them, and see the record, in Reliability.
-          </p>
+          <div class="row chips-row">
+            <span class="lbl">Resolvers</span>
+            <ResolverChips {cfg} resolvers={app.resolvers} disabled={monitor.saving} save={saveMonitor} />
+          </div>
+          <p class="note">{plural(cfg.resolvers.length, 'resolver')} {cfg.enabled ? 'monitored' : 'selected'}. Their record is in Reliability.</p>
         {:else if !error}
           <p class="note">Loading…</p>
         {/if}
@@ -583,6 +586,13 @@
   .lbl {
     min-width: 96px;
     color: var(--ink-2);
+  }
+  .chips-row {
+    align-items: flex-start;
+  }
+  .chips-row :global(.chips) {
+    flex: 1;
+    min-width: 0;
   }
   .check {
     gap: 9px;

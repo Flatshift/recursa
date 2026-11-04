@@ -11,6 +11,7 @@
   import Toolbar from '../components/Toolbar.svelte';
   import Info from '../components/Info.svelte';
   import Picks from '../components/Picks.svelte';
+  import ResolverChips from '../components/ResolverChips.svelte';
   import Record, { type Mark } from '../components/Record.svelte';
 
   const RANGES: [number, string, string][] = [
@@ -213,18 +214,7 @@
           </label>
           <details class="pickers">
             <summary><Icon name="chevron-right" size={12} />{plural(mon.cfg.resolvers.length, 'resolver')} {mon.cfg.enabled ? 'monitored' : 'selected'}</summary>
-            <div class="chips">
-              {#each resolvers.filter((r) => r.group !== 'legacy') as r (r.id)}
-                {@const on = mon.cfg.resolvers.includes(r.id)}
-                <button
-                  class="chip"
-                  class:on
-                  aria-pressed={on}
-                  onclick={() => mon.save({ ...mon.cfg!, resolvers: on ? mon.cfg!.resolvers.filter((x) => x !== r.id) : [...mon.cfg!.resolvers, r.id] })}
-                  >{#if on}<Icon name="check" size={11} />{/if}{r.provider} {r.variant}</button
-                >
-              {/each}
-            </div>
+            <ResolverChips cfg={mon.cfg} {resolvers} save={mon.save} />
           </details>
           {#if mon.data?.last}<span class="last">Last check {ago(mon.data.last)}</span>{/if}
         </div>
@@ -454,29 +444,9 @@
     font-size: var(--t-xs);
     color: var(--ink-3);
   }
-  .chips {
+  .pickers :global(.chips) {
     order: 10;
     flex-basis: 100%;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .chip {
-    display: inline-flex;
-    gap: 4px;
-    align-items: center;
-    border: 1px solid var(--rule);
-    background: transparent;
-    border-radius: 14px;
-    padding: 3px 10px;
-    font-size: var(--t-xs);
-    cursor: default;
-    color: var(--ink-2);
-  }
-  .chip.on {
-    background: var(--sel);
-    border-color: var(--rule-2);
-    color: var(--ink);
   }
 
   .sheet {
@@ -796,8 +766,5 @@
   }
   :global(html.mobile) .pickers summary {
     min-height: 44px;
-  }
-  :global(html.mobile) .chip {
-    min-height: 36px;
   }
 </style>
