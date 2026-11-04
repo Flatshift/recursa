@@ -7,7 +7,7 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 - Settings › Data: Clear Cache removes cached lookups and downloaded reference data; Clear All Data returns Recursa to a fresh install.
 - Peering: the map no longer makes the page shake at some window sizes.
 - Peering: runs start faster and use less memory; the prefix tables are downloaded once more after this update.
-- Peering: the toolbar says when a run is fetching the prefix table, and a download that failed halfway finishes with the missing half only.
+- Peering: the toolbar says when a run is fetching the prefix table, and the IPv4 and IPv6 tables are downloaded and refreshed each on its own.
 - Release builds are smaller.
 - Quitting, and the CLI's one-shot commands, fold the database journal back into the file instead of leaving it beside it.
 - Settings › Data: Clear All Data also forgets the detected vantage point, forwarders and interception result.

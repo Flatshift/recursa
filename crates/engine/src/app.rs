@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 use tokio::sync::watch;
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 
 pub struct AppState {
     /// What this build can do; sent to the UI in the bootstrap.
@@ -58,6 +58,8 @@ pub struct AppState {
     pub live_sample: Mutex<Option<crate::deepdive::LiveSample>>,
     /// The background tasks (detection, the monitoring loops), aborted by [`AppState::close`].
     tasks: Mutex<Vec<JoinHandle<()>>>,
+    /// The detection tasks in flight, stopped when [`AppState::detect_network`] starts over.
+    detection: Mutex<Vec<AbortHandle>>,
     closing: AtomicBool,
 }
 
@@ -245,6 +247,7 @@ impl AppState {
             ntp_epoch: AtomicU64::new(0),
             live_sample: Mutex::new(None),
             tasks: Mutex::new(Vec::new()),
+            detection: Mutex::new(Vec::new()),
             closing: AtomicBool::new(false),
         }))
     }
@@ -252,21 +255,30 @@ impl AppState {
     /// Keep `task` to abort on close; aborted at once if that has happened.
     fn track(&self, task: JoinHandle<()>) {
         let mut tasks = self.tasks.lock().unwrap();
+        tasks.retain(|t| !t.is_finished());
         if self.closing.load(Ordering::SeqCst) { task.abort() } else { tasks.push(task) }
     }
 
     /// Look at the network afresh: the vantage point, interception and the local forwarders, forgetting what was
-    /// found before. At start, and when Clear All Data takes everything back to a fresh install.
+    /// found before. At start, and when Clear All Data takes everything back to a fresh install. A detection still
+    /// going is stopped first, so it can't write what it found over the fresh one.
     fn detect_network(self: &Arc<Self>) {
+        let mut detection = self.detection.lock().unwrap();
+        for task in detection.drain(..) {
+            task.abort();
+        }
         *self.vantage.write().unwrap() = Value::Null;
         *self.interception.write().unwrap() = Value::Null;
         self.forwarders.write().unwrap().clear();
-        self.track(tokio::spawn(detect_vantage(self.clone())));
-        self.track(tokio::spawn(detect_interception(self.clone())));
-        self.track(tokio::spawn({
+        let forwarders = {
             let app = self.clone();
             async move { detect_forwarders(&app).await }
-        }));
+        };
+        for task in [tokio::spawn(detect_vantage(self.clone())), tokio::spawn(detect_interception(self.clone())), tokio::spawn(forwarders)]
+        {
+            detection.push(task.abort_handle());
+            self.track(task);
+        }
     }
 
     /// Start the background work a long-lived front end needs: calibration if it hasn't

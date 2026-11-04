@@ -336,7 +336,7 @@ pub(crate) fn refresh_in_background(app: &Arc<AppState>) {
     tokio::spawn(async move {
         let now = bench::now_ms();
         let stale = |at: Option<i64>| at.is_none_or(|t| now - t > REFRESH_MS);
-        if app.store.pfx2as_empty() || stale(attr::fetched_at(&app.store)) {
+        if attr::due(&app.store).contains(&true) {
             // Held however the download ends: one that panics mustn't leave the flag set and refuse every clear.
             if let Some(_fetching) = FlagGuard::claim(&app.netmap.fetching_pfx2as) {
                 let _ = fetch_pfx2as(&app).await;

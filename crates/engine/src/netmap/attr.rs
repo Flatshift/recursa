@@ -31,9 +31,17 @@ pub(crate) const SOURCE6: &str = "netmap.pfx2as6_source";
 /// The settings that describe the prefix tables: cleared with them.
 pub(crate) const SETTINGS: [&str; 4] = [SOURCE, SOURCE6, FETCHED_AT, FETCHED_AT6];
 
-/// When the older of the two tables was downloaded: `None` until both have been.
+/// When the older of the downloaded tables was fetched: `None` until one has been.
 pub(crate) fn fetched_at(store: &Store) -> Option<i64> {
-    Some(store.get::<i64>(FETCHED_AT)?.min(store.get::<i64>(FETCHED_AT6)?))
+    [FETCHED_AT, FETCHED_AT6].iter().filter_map(|k| store.get::<i64>(k)).min()
+}
+
+/// Which tables to download now, IPv4 then IPv6: each that is empty, or whose own download is a day old.
+pub(crate) fn due(store: &Store) -> [bool; 2] {
+    let (have4, have6) = store.pfx2as_filled();
+    let now = crate::bench::now_ms();
+    let stale = |key: &str| store.get::<i64>(key).is_none_or(|t| now - t > super::REFRESH_MS);
+    [!have4 || stale(FETCHED_AT), !have6 || stale(FETCHED_AT6)]
 }
 /// Shortest prefix tried, as announced to the Internet's default-free zone.
 const SHORTEST: u8 = 8;
@@ -168,29 +176,29 @@ fn newest(log: &str) -> Option<&str> {
     log.lines().rev().find(|l| !l.starts_with('#') && !l.trim().is_empty())?.split('\t').nth(2).map(str::trim)
 }
 
-/// Fetch the newest IPv4 and IPv6 tables and replace the stored ones. `fetch` gets a URL and returns the body (it is
-/// where the caller refuses to fetch while a measurement runs). Each table is replaced as soon as its own download
-/// parses, so a failed IPv6 fetch leaves the fresh IPv4 table; an old table stays if its own fetch fails. A pair
-/// left half filled that way is finished, not fetched again: only the empty table is downloaded. Each table is
-/// stamped with its own download time, so finishing a pair doesn't pass the older half off as fresh.
+/// Fetch the newest file of each table that is [`due`] and replace the stored one. `fetch` gets a URL and returns
+/// the body (it is where the caller refuses to fetch while a measurement runs). The tables are fetched on their own:
+/// one is replaced and stamped as soon as its download parses, and one whose download fails keeps its rows and stamp
+/// while the other is still tried, so a half-filled pair is finished with the missing table only and a fresh table
+/// isn't downloaded again. The error names every table that failed.
 pub async fn refresh<F, Fut>(store: &Arc<Store>, fetch: F) -> Result<(), String>
 where
     F: Fn(String) -> Fut,
     Fut: Future<Output = Result<Vec<u8>, String>>,
 {
-    let (have4, have6) = store.pfx2as_filled();
-    let half = have4 != have6;
-    if !(half && have4) {
-        let path = fetch_table(store, &fetch, LOG_URL, DIR_URL, false).await?;
-        store.put(SOURCE, &path);
-        store.put(FETCHED_AT, &crate::bench::now_ms());
+    const TABLES: [(&str, &str, bool, &str, &str); 2] =
+        [(LOG_URL, DIR_URL, false, SOURCE, FETCHED_AT), (LOG6_URL, DIR6_URL, true, SOURCE6, FETCHED_AT6)];
+    let mut failed = Vec::new();
+    for ((log_url, dir_url, v6, source, fetched_at), _) in TABLES.into_iter().zip(due(store)).filter(|(_, due)| *due) {
+        match fetch_table(store, &fetch, log_url, dir_url, v6).await {
+            Ok(path) => {
+                store.put(source, &path);
+                store.put(fetched_at, &crate::bench::now_ms());
+            }
+            Err(e) => failed.push(e),
+        }
     }
-    if !(half && have6) {
-        let path6 = fetch_table(store, &fetch, LOG6_URL, DIR6_URL, true).await?;
-        store.put(SOURCE6, &path6);
-        store.put(FETCHED_AT6, &crate::bench::now_ms());
-    }
-    Ok(())
+    if failed.is_empty() { Ok(()) } else { Err(failed.join(" ")) }
 }
 
 /// Fetch the newest file of one table's log and store its rows; returns the file's name.
@@ -1202,10 +1210,11 @@ pub(crate) mod tests {
         assert!(!distinct_owner(None, " "));
     }
 
-    /// An IPv6 download that fails after the IPv4 table was stored leaves half a pair; the next refresh fetches only
-    /// the IPv6 side, and a refresh of a full pair fetches both again.
+    /// Each table is downloaded on its own: an IPv6 download that fails leaves the stored IPv4 table, the next
+    /// refresh fetches the IPv6 side only, a fresh pair is left alone, and a day on a failed IPv4 download neither
+    /// stops the IPv6 one nor loses the old IPv4 table.
     #[tokio::test]
-    async fn a_half_fetched_pair_is_finished_without_fetching_the_filled_table_again() {
+    async fn each_table_is_fetched_on_its_own_when_empty_or_stale() {
         use std::sync::atomic::{AtomicBool, Ordering};
         fn gz(rows: &str) -> Vec<u8> {
             use std::io::Write;
@@ -1216,15 +1225,19 @@ pub(crate) mod tests {
         let files = Scratch(temp_path());
         let store = Arc::new(Store::open(files.0.clone()).unwrap());
         let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+        let v4_down = Arc::new(AtomicBool::new(false));
         let v6_down = Arc::new(AtomicBool::new(true));
         let fetch = |url: String| {
-            let (asked, v6_down) = (asked.clone(), v6_down.clone());
+            let (asked, v4_down, v6_down) = (asked.clone(), v4_down.clone(), v6_down.clone());
             async move {
                 asked.lock().unwrap().push(url.clone());
+                let v6 = url.starts_with(DIR6_URL);
                 if url.ends_with("pfx2as-creation.log") {
                     Ok(b"# header\n1\t1\t2026/11/table.pfx2as.gz\n".to_vec())
-                } else if url.starts_with(DIR6_URL) {
-                    if v6_down.load(Ordering::SeqCst) { Err("timed out".to_string()) } else { Ok(gz("2001:db8::\t32\t64500\n")) }
+                } else if (if v6 { &v6_down } else { &v4_down }).load(Ordering::SeqCst) {
+                    Err("timed out".to_string())
+                } else if v6 {
+                    Ok(gz("2001:db8::\t32\t64500\n"))
                 } else {
                     Ok(gz("198.51.100.0\t24\t64496\n"))
                 }
@@ -1233,9 +1246,9 @@ pub(crate) mod tests {
         let err = refresh(&store, &fetch).await.unwrap_err();
         assert!(err.contains("timed out"), "{err}");
         assert_eq!(store.pfx2as_filled(), (true, false));
-        // The IPv4 half is stamped; the pair isn't fetched until both are.
+        // The IPv4 half is stamped and counts as downloaded; only the IPv6 half is due.
         let at4 = store.get::<i64>(FETCHED_AT).unwrap();
-        assert!(fetched_at(&store).is_none());
+        assert_eq!((fetched_at(&store), due(&store)), (Some(at4), [false, true]));
 
         v6_down.store(false, Ordering::SeqCst);
         asked.lock().unwrap().clear();
@@ -1244,11 +1257,22 @@ pub(crate) mod tests {
         assert!(urls.len() == 2 && urls.iter().all(|u| u.starts_with(DIR6_URL)), "{urls:?}");
         assert_eq!(store.pfx2as_filled(), (true, true));
         // Finishing the pair keeps the older half's stamp: the pair is as old as that half.
-        assert_eq!(store.get::<i64>(FETCHED_AT), Some(at4));
-        assert_eq!(fetched_at(&store), Some(at4));
+        assert_eq!((store.get::<i64>(FETCHED_AT), fetched_at(&store)), (Some(at4), Some(at4)));
 
         asked.lock().unwrap().clear();
         refresh(&store, &fetch).await.unwrap();
-        assert_eq!(asked.lock().unwrap().len(), 4);
+        assert!(asked.lock().unwrap().is_empty());
+
+        let old = crate::bench::now_ms() - super::super::REFRESH_MS - 1;
+        store.put(FETCHED_AT, &old);
+        store.put(FETCHED_AT6, &old);
+        v4_down.store(true, Ordering::SeqCst);
+        asked.lock().unwrap().clear();
+        let err = refresh(&store, &fetch).await.unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+        assert_eq!((asked.lock().unwrap().len(), store.pfx2as_filled()), (4, (true, true)));
+        assert_eq!(store.get::<i64>(FETCHED_AT), Some(old));
+        assert!(store.get::<i64>(FETCHED_AT6).unwrap() > old);
+        assert_eq!(due(&store), [true, false]);
     }
 }
