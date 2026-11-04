@@ -141,10 +141,21 @@ async fn trace(cli: &Cli, target: &str) {
     }
     let ip: std::net::IpAddr = match target.parse() {
         Ok(ip) => ip,
-        Err(_) => match open_state(cli, false).find_resolver(target) {
-            Err(_) => fail(&format!("No resolver or address called {target}.")),
-            Ok(r) => r.primary(false).unwrap_or_else(|| fail("This resolver has no IPv4 address.")),
-        },
+        Err(_) => {
+            let app = open_state(cli, false);
+            let ip = match app.find_resolver(target) {
+                Err(_) => {
+                    eprintln!("No resolver or address called {target}.");
+                    exit(&app, 1)
+                }
+                Ok(r) => r.primary(false).unwrap_or_else(|| {
+                    eprintln!("This resolver has no IPv4 address.");
+                    exit(&app, 1)
+                }),
+            };
+            app.close();
+            ip
+        }
     };
     let t = tokio::task::spawn_blocking(move || {
         trace::run_enriched(

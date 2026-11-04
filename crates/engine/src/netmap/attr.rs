@@ -25,10 +25,16 @@ const DIR_URL: &str = "https://publicdata.caida.org/datasets/routing/routeviews-
 const LOG6_URL: &str = "https://publicdata.caida.org/datasets/routing/routeviews6-prefix2as/pfx2as-creation.log";
 const DIR6_URL: &str = "https://publicdata.caida.org/datasets/routing/routeviews6-prefix2as/";
 pub(crate) const FETCHED_AT: &str = "netmap.pfx2as_fetched_at";
+pub(crate) const FETCHED_AT6: &str = "netmap.pfx2as6_fetched_at";
 pub(crate) const SOURCE: &str = "netmap.pfx2as_source";
 pub(crate) const SOURCE6: &str = "netmap.pfx2as6_source";
 /// The settings that describe the prefix tables: cleared with them.
-pub(crate) const SETTINGS: [&str; 3] = [SOURCE, SOURCE6, FETCHED_AT];
+pub(crate) const SETTINGS: [&str; 4] = [SOURCE, SOURCE6, FETCHED_AT, FETCHED_AT6];
+
+/// When the older of the two tables was downloaded: `None` until both have been.
+pub(crate) fn fetched_at(store: &Store) -> Option<i64> {
+    Some(store.get::<i64>(FETCHED_AT)?.min(store.get::<i64>(FETCHED_AT6)?))
+}
 /// Shortest prefix tried, as announced to the Internet's default-free zone.
 const SHORTEST: u8 = 8;
 /// Shortest IPv6 prefix tried.
@@ -165,8 +171,8 @@ fn newest(log: &str) -> Option<&str> {
 /// Fetch the newest IPv4 and IPv6 tables and replace the stored ones. `fetch` gets a URL and returns the body (it is
 /// where the caller refuses to fetch while a measurement runs). Each table is replaced as soon as its own download
 /// parses, so a failed IPv6 fetch leaves the fresh IPv4 table; an old table stays if its own fetch fails. A pair
-/// left half filled that way is finished, not fetched again: only the empty table is downloaded. `FETCHED_AT` is
-/// written only after both.
+/// left half filled that way is finished, not fetched again: only the empty table is downloaded. Each table is
+/// stamped with its own download time, so finishing a pair doesn't pass the older half off as fresh.
 pub async fn refresh<F, Fut>(store: &Arc<Store>, fetch: F) -> Result<(), String>
 where
     F: Fn(String) -> Fut,
@@ -177,12 +183,13 @@ where
     if !(half && have4) {
         let path = fetch_table(store, &fetch, LOG_URL, DIR_URL, false).await?;
         store.put(SOURCE, &path);
+        store.put(FETCHED_AT, &crate::bench::now_ms());
     }
     if !(half && have6) {
         let path6 = fetch_table(store, &fetch, LOG6_URL, DIR6_URL, true).await?;
         store.put(SOURCE6, &path6);
+        store.put(FETCHED_AT6, &crate::bench::now_ms());
     }
-    store.put(FETCHED_AT, &crate::bench::now_ms());
     Ok(())
 }
 
@@ -1226,7 +1233,9 @@ pub(crate) mod tests {
         let err = refresh(&store, &fetch).await.unwrap_err();
         assert!(err.contains("timed out"), "{err}");
         assert_eq!(store.pfx2as_filled(), (true, false));
-        assert!(store.get::<i64>(FETCHED_AT).is_none());
+        // The IPv4 half is stamped; the pair isn't fetched until both are.
+        let at4 = store.get::<i64>(FETCHED_AT).unwrap();
+        assert!(fetched_at(&store).is_none());
 
         v6_down.store(false, Ordering::SeqCst);
         asked.lock().unwrap().clear();
@@ -1234,7 +1243,9 @@ pub(crate) mod tests {
         let urls = asked.lock().unwrap().clone();
         assert!(urls.len() == 2 && urls.iter().all(|u| u.starts_with(DIR6_URL)), "{urls:?}");
         assert_eq!(store.pfx2as_filled(), (true, true));
-        assert!(store.get::<i64>(FETCHED_AT).is_some());
+        // Finishing the pair keeps the older half's stamp: the pair is as old as that half.
+        assert_eq!(store.get::<i64>(FETCHED_AT), Some(at4));
+        assert_eq!(fetched_at(&store), Some(at4));
 
         asked.lock().unwrap().clear();
         refresh(&store, &fetch).await.unwrap();

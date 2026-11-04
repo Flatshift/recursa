@@ -214,13 +214,16 @@ pub struct State {
     pub error: Mutex<Option<String>>,
     /// A run is going, from the request to the end of its post-processing.
     pub running: AtomicBool,
-    /// A dataset download is going; clearing the data claims it too.
+    /// An AS-relationship or PeeringDB download is going; clearing the data claims it too.
     pub(crate) fetching: Arc<AtomicBool>,
+    /// The prefix table is downloading. A run that needs the table waits on this alone, so it never waits out the
+    /// other downloads; clearing the data claims it too.
+    pub(crate) fetching_pfx2as: Arc<AtomicBool>,
 }
 
 pub fn datasets(store: &crate::store::Store) -> Datasets {
     Datasets {
-        pfx2as: Pfx2asInfo { fetched_at: store.get(attr::FETCHED_AT), source: store.get(attr::SOURCE), source6: store.get(attr::SOURCE6) },
+        pfx2as: Pfx2asInfo { fetched_at: attr::fetched_at(store), source: store.get(attr::SOURCE), source6: store.get(attr::SOURCE6) },
         asrel: AsrelInfo { source: store.get(asrel::SOURCE) },
         peeringdb: PdbInfo { accepted: store.get(pdb::ACCEPTED) == Some(true), synced_at: Pdb::last_sync(store) },
         rdns: store.get(RDNS) == Some(true),
@@ -317,7 +320,7 @@ async fn ensure_pfx2as(app: &Arc<AppState>) -> Result<(), String> {
         if app.netmap.cancel.load(Ordering::SeqCst) {
             return Err("Cancelled.".into());
         }
-        if let Some(_fetching) = FlagGuard::claim(&app.netmap.fetching) {
+        if let Some(_fetching) = FlagGuard::claim(&app.netmap.fetching_pfx2as) {
             return fetch_pfx2as(app).await.map_err(|e| format!("The prefix-to-AS table could not be fetched: {e}"));
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -326,20 +329,22 @@ async fn ensure_pfx2as(app: &Arc<AppState>) -> Result<(), String> {
 }
 
 /// Fetch whatever is stale, on its own time: the prefix table daily, the AS relationships monthly, and PeeringDB's changes once the user allowed it.
-/// Each download claims the fetching flag for itself, so a run that needs the prefix table waits for that download
-/// alone; one that can't claim it (a run or a clear got there first) ends the refresh, which the next trigger resumes.
+/// Each download claims its flag for itself; one that can't (a run or a clear got there first) is skipped, and the
+/// next trigger retries it.
 pub(crate) fn refresh_in_background(app: &Arc<AppState>) {
     let app = app.clone();
     tokio::spawn(async move {
         let now = bench::now_ms();
         let stale = |at: Option<i64>| at.is_none_or(|t| now - t > REFRESH_MS);
-        if app.store.pfx2as_empty() || stale(app.store.get(attr::FETCHED_AT)) {
+        if app.store.pfx2as_empty() || stale(attr::fetched_at(&app.store)) {
             // Held however the download ends: one that panics mustn't leave the flag set and refuse every clear.
-            let Some(_fetching) = FlagGuard::claim(&app.netmap.fetching) else { return };
-            let _ = fetch_pfx2as(&app).await;
+            if let Some(_fetching) = FlagGuard::claim(&app.netmap.fetching_pfx2as) {
+                let _ = fetch_pfx2as(&app).await;
+            }
         }
-        if app.store.asrel_count() == 0 || app.store.get::<i64>(asrel::FETCHED_AT).is_none_or(|t| now - t > asrel::REFRESH_MS) {
-            let Some(_fetching) = FlagGuard::claim(&app.netmap.fetching) else { return };
+        if (app.store.asrel_count() == 0 || app.store.get::<i64>(asrel::FETCHED_AT).is_none_or(|t| now - t > asrel::REFRESH_MS))
+            && let Some(_fetching) = FlagGuard::claim(&app.netmap.fetching)
+        {
             let _ = fetch_asrel(&app).await;
         }
         if app.store.get::<bool>(pdb::ACCEPTED) == Some(true) && stale(Pdb::last_sync(&app.store)) {
@@ -729,28 +734,28 @@ mod tests {
         app.netmap.cancel.store(true, Ordering::SeqCst);
         // Nothing holds the flag: the cancel still comes before any download.
         assert_eq!(ensure_pfx2as(&app).await.unwrap_err(), "Cancelled.");
-        assert!(app.store.get::<i64>(attr::FETCHED_AT).is_none() && !app.netmap.fetching.load(Ordering::SeqCst));
+        assert!(attr::fetched_at(&app.store).is_none() && !app.netmap.fetching_pfx2as.load(Ordering::SeqCst));
         // Another download holds it: the cancel is seen at once, and the flag stays that download's to release.
-        app.netmap.fetching.store(true, Ordering::SeqCst);
+        app.netmap.fetching_pfx2as.store(true, Ordering::SeqCst);
         let t0 = Instant::now();
         assert_eq!(ensure_pfx2as(&app).await.unwrap_err(), "Cancelled.");
-        assert!(t0.elapsed() < Duration::from_millis(400) && app.netmap.fetching.load(Ordering::SeqCst));
+        assert!(t0.elapsed() < Duration::from_millis(400) && app.netmap.fetching_pfx2as.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
     async fn a_run_needing_the_prefix_table_waits_for_the_download_filling_it() {
         let app = crate::app::tests::app();
-        app.netmap.fetching.store(true, Ordering::SeqCst);
+        app.netmap.fetching_pfx2as.store(true, Ordering::SeqCst);
         let filler = app.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(100)).await;
             filler.store.pfx2as_replace([(0xc633_6400, 24, 100, false)].into_iter()).unwrap();
             filler.store.pfx2as6_replace([(0x2001_0db8_u128 << 96, 32, 6, false)].into_iter()).unwrap();
-            filler.netmap.fetching.store(false, Ordering::SeqCst);
+            filler.netmap.fetching_pfx2as.store(false, Ordering::SeqCst);
         });
         ensure_pfx2as(&app).await.unwrap();
         // Filled by the other download, not fetched again.
-        assert!(app.store.get::<i64>(attr::FETCHED_AT).is_none());
+        assert!(attr::fetched_at(&app.store).is_none());
     }
 
     #[test]

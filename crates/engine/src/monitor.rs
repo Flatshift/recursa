@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use tokio::task::JoinHandle;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MonitorConfig {
@@ -46,7 +47,7 @@ impl MonitorConfig {
     }
 }
 
-pub fn spawn(app: Arc<AppState>) {
+pub fn spawn(app: Arc<AppState>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut last_cycle = 0i64;
         // Held while this process records monitoring for its database.
@@ -92,7 +93,7 @@ pub fn spawn(app: Arc<AppState>) {
             let (raw, summaries) = prune_before(now, cfg.retention_days);
             app.store.monitor_prune(raw, summaries);
         }
-    });
+    })
 }
 
 /// One cached, one uncached and one TLD query per resolver address: the primary and the

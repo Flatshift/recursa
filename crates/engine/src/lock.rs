@@ -83,9 +83,9 @@ pub async fn wait(path: &Path, patience: Duration) -> Option<Guard> {
 
 /// Held while measuring, by runs and by each monitoring cycle.
 pub fn measure_path() -> PathBuf {
-    // Tests keep off the lock a running Recursa holds.
+    // Tests keep off the lock a running Recursa holds, and each other's: one file per test thread.
     if cfg!(test) {
-        return std::env::temp_dir().join("recursa-measure-test.lock");
+        return std::env::temp_dir().join(format!("recursa-measure-test-{:?}.lock", std::thread::current().id()));
     }
     crate::store::default_path().with_file_name("measure.lock")
 }

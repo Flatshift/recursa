@@ -342,10 +342,11 @@ impl Store {
         c.execute("DELETE FROM custom WHERE id=?1", params![id]).map(|n| n > 0).unwrap_or(false)
     }
 
-    fn setting(&self, key: &str) -> Option<serde_json::Value> {
+    /// The setting at `key`: `Ok(None)` when there is no row or it isn't JSON, `Err` when the database couldn't be read.
+    fn setting(&self, key: &str) -> rusqlite::Result<Option<serde_json::Value>> {
         let c = self.conn.lock().unwrap();
-        let s: Option<String> = c.query_row("SELECT body FROM settings WHERE key=?1", params![key], |r| r.get(0)).optional().ok().flatten();
-        s.and_then(|s| serde_json::from_str(&s).ok())
+        let s: Option<String> = c.query_row("SELECT body FROM settings WHERE key=?1", params![key], |r| r.get(0)).optional()?;
+        Ok(s.and_then(|s| serde_json::from_str(&s).ok()))
     }
 
     fn set_setting(&self, key: &str, v: &serde_json::Value) {
@@ -353,9 +354,15 @@ impl Store {
         let _ = c.execute("INSERT OR REPLACE INTO settings(key, body) VALUES(?1, ?2)", params![key, v.to_string()]);
     }
 
-    /// The setting at `key` as a `T`; `None` when there is none or it doesn't parse.
+    /// The setting at `key` as a `T`; `None` when there is none, it doesn't parse or the database couldn't be read.
     pub fn get<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
-        self.setting(key).and_then(|v| serde_json::from_value(v).ok())
+        self.read(key).ok().flatten()
+    }
+
+    /// [`Store::get`] for callers that must tell a missing row from a database they couldn't read (busy, closed):
+    /// `Err` is the latter, and the row may well still be there.
+    pub fn read<T: serde::de::DeserializeOwned>(&self, key: &str) -> rusqlite::Result<Option<T>> {
+        Ok(self.setting(key)?.and_then(|v| serde_json::from_value(v).ok()))
     }
 
     /// Save `v` as the setting at `key`.
@@ -1173,7 +1180,7 @@ pub(crate) mod tests {
         assert!(!rows[0].saved);
         assert!(store.set_run_saved("old", true));
         // Its runs predate saving, so cleanup starts switched off.
-        assert_eq!(store.setting("housekeeping"), Some(serde_json::json!({ "keep_runs": null, "keep_days": null })));
+        assert_eq!(store.setting("housekeeping").unwrap(), Some(serde_json::json!({ "keep_runs": null, "keep_days": null })));
         drop(store);
         // Opening again leaves the column and the mark alone.
         let store = Store::open(path.clone()).unwrap();
@@ -1192,10 +1199,10 @@ pub(crate) mod tests {
             )
             .unwrap();
         }
-        assert_eq!(Store::open(path.clone()).unwrap().setting("housekeeping"), None);
+        assert_eq!(Store::open(path.clone()).unwrap().setting("housekeeping").unwrap(), None);
         remove(&path);
         let path = temp_path();
-        assert_eq!(Store::open(path.clone()).unwrap().setting("housekeeping"), None);
+        assert_eq!(Store::open(path.clone()).unwrap().setting("housekeeping").unwrap(), None);
         remove(&path);
     }
 

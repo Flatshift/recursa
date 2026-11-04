@@ -19,6 +19,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use tokio::task::JoinHandle;
 
 /// The shortest time between cycles.
 pub(crate) const MIN_INTERVAL_MIN: u32 = 2;
@@ -234,7 +235,7 @@ async fn rediscover(app: &AppState, roll: &RollCall, now: i64) -> Vec<Pair> {
     app.store.border_pairs(now)
 }
 
-pub fn spawn(app: Arc<AppState>) {
+pub fn spawn(app: Arc<AppState>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut last_cycle = 0i64;
         let mut last_discovery = 0i64;
@@ -300,7 +301,7 @@ pub fn spawn(app: Arc<AppState>) {
             app.store.border_record(&samples);
             app.store.border_prune(now - cfg.retention_days as i64 * DAY_MS);
         }
-    });
+    })
 }
 
 // ---------------------------------------------------------------------------------------------

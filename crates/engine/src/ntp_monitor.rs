@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::task::JoinHandle;
 
 /// The shortest time between cycles.
 pub(crate) const MIN_INTERVAL_MIN: u32 = 15;
@@ -81,7 +82,7 @@ impl NtpMonitorConfig {
     }
 }
 
-pub fn spawn(app: Arc<AppState>) {
+pub fn spawn(app: Arc<AppState>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut last_cycle = 0i64;
         let mut owner: Option<lock::Guard> = None;
@@ -148,7 +149,7 @@ pub fn spawn(app: Arc<AppState>) {
             }
             app.store.ntp_prune(now - cfg.retention_days as i64 * 86_400_000);
         }
-    });
+    })
 }
 
 /// One cycle: one query per address, no NTS handshake.

@@ -144,22 +144,27 @@ impl Rpki {
         if on {
             self.start_sync();
         } else {
-            self.epoch.fetch_add(1, Ordering::SeqCst);
-            let idle = {
-                let mut s = self.state.lock().unwrap();
-                s.loaded = true;
-                s.table = None;
-                s.error = None;
-                s.stats = None;
-                s.disk_bytes = 0;
-                s.syncing_since.is_none()
-            };
-            // A sync in progress is ended within a moment and deletes the cache as it ends.
-            if idle {
-                self.delete_cache();
-            }
+            self.turn_off();
         }
         self.status()
+    }
+
+    /// Forget the table and delete the cache, leaving the setting as it is: Clear All Data has already dropped it.
+    pub(crate) fn turn_off(&self) {
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+        let idle = {
+            let mut s = self.state.lock().unwrap();
+            s.loaded = true;
+            s.table = None;
+            s.error = None;
+            s.stats = None;
+            s.disk_bytes = 0;
+            s.syncing_since.is_none()
+        };
+        // A sync in progress is ended within a moment and deletes the cache as it ends.
+        if idle {
+            self.delete_cache();
+        }
     }
 
     /// Removes what this module wrote, and the folder if nothing else is in it.

@@ -10,6 +10,8 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 - Peering: the toolbar says when a run is fetching the prefix table, and a download that failed halfway finishes with the missing half only.
 - Release builds are smaller.
 - Quitting, and the CLI's one-shot commands, fold the database journal back into the file instead of leaving it beside it.
+- Settings › Data: Clear All Data also forgets the detected vantage point, forwarders and interception result.
+- Peering: a run waits only for the prefix-table download, not for the AS-relationship or PeeringDB refreshes.
 
 ## 0.5.3 (2026-11-02)
 
