@@ -243,7 +243,7 @@
     {/if}
   </div>
   {#if starting}
-    {@const phase = fetching ? 'Fetching the prefix tables' : 'Tracing the first routes'}
+    {@const phase = fetching ? 'Fetching the prefix tables' : 'Finding the first routes'}
     <div class="starting" role="img" aria-label="{label}. {phase}" aria-busy="true">
       <SetupDial />
       <p>{phase}</p>

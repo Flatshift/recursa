@@ -214,7 +214,7 @@
           </label>
           <details class="pickers">
             <summary><Icon name="chevron-right" size={12} />{plural(mon.cfg.resolvers.length, 'resolver')} {mon.cfg.enabled ? 'monitored' : 'selected'}</summary>
-            <ResolverChips cfg={mon.cfg} {resolvers} save={mon.save} />
+            <ResolverChips cfg={mon.cfg} {resolvers} disabled={mon.saving} save={mon.save} />
           </details>
           {#if mon.data?.last}<span class="last">Last check {ago(mon.data.last)}</span>{/if}
         </div>

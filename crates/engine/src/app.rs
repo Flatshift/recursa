@@ -301,12 +301,18 @@ impl AppState {
             app.track(ntp_monitor::spawn(app.clone()));
             app.track(border::spawn(app.clone()));
             app.track(monitor::spawn(app.clone()));
-            // The map's tables, empty after an update or a day old, are fetched now rather than by the next map, which
-            // would wait for them. Only once a map has been run: the first one asks before anything is downloaded.
-            if app.store.netmap_last().is_some() {
+            // The map's tables, empty after an update, are fetched now rather than by the next map, which would wait for
+            // them. Only once a map has been run: the first one asks before anything is downloaded.
+            if crate::netmap::tables_missing(&app.store) {
                 crate::netmap::refresh_in_background(&app);
             }
         }));
+    }
+
+    /// A download of ours is going: a route-origin sync or one of the map's tables. The probes wait it out, since it
+    /// would skew them.
+    pub fn downloading(&self) -> bool {
+        self.intel.fetching() || self.netmap.fetching.load(Ordering::SeqCst) || self.netmap.fetching_pfx2as.load(Ordering::SeqCst)
     }
 
     pub fn resolvers(&self) -> Vec<Resolver> {

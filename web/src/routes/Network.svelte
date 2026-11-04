@@ -33,7 +33,7 @@
       {#if view === 'map'}
         {#if nm.running}
           <span class="progress" role="status"
-            >{prog ? `Mapping, ${prog.done} of ${prog.total}` : nm.data?.fetching ? 'Fetching the prefix table' : 'Mapping'}</span
+            >{prog ? `Mapping, ${prog.done} of ${prog.total}` : nm.data?.fetching ? 'Fetching the prefix tables' : 'Mapping'}</span
           >
           <button class="btn" onclick={nm.cancel}>Cancel</button>
         {:else}

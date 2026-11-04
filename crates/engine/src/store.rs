@@ -797,6 +797,11 @@ impl Store {
         let _ = c.execute("INSERT OR REPLACE INTO netmap_run(id, ts, body) VALUES(1, ?1, ?2)", params![ts, body]);
     }
 
+    /// Whether a network map has been run.
+    pub fn netmap_exists(&self) -> bool {
+        self.rd().query_row("SELECT 1 FROM netmap_run WHERE id = 1", [], |_| Ok(())).optional().ok().flatten().is_some()
+    }
+
     /// The stored network map run: when it was made, and its JSON.
     pub fn netmap_last(&self) -> Option<(i64, String)> {
         let c = self.rd();

@@ -70,7 +70,7 @@ pub fn spawn(app: Arc<AppState>) -> JoinHandle<()> {
             // Due time is derived from the current interval, so shortening it applies at once.
             let due = last_cycle + cfg.interval_min.clamp(1, 1440) as i64 * 60_000;
             // A database download or route-origin sync of ours would skew the probes: wait it out.
-            if app.run_active.load(Ordering::SeqCst) || app.intel.fetching() || now < due {
+            if app.run_active.load(Ordering::SeqCst) || app.downloading() || now < due {
                 continue;
             }
             if owner.is_none() {

@@ -351,6 +351,12 @@ async fn ensure_pfx2as(app: &Arc<AppState>) -> Result<(), String> {
 }
 
 /// Fetch whatever is stale, on its own time: the prefix table daily, the AS relationships monthly, and PeeringDB's changes once the user allowed it.
+/// Whether startup should fetch the prefix tables: a map has been run, so the download was agreed to, and the
+/// tables are empty, as after an update or a clear.
+pub(crate) fn tables_missing(store: &crate::store::Store) -> bool {
+    store.netmap_exists() && store.pfx2as_empty()
+}
+
 /// Each download claims its flag for itself; one that can't (a run or a clear got there first) is skipped, and the
 /// next trigger retries it.
 pub(crate) fn refresh_in_background(app: &Arc<AppState>) {
@@ -747,6 +753,17 @@ mod tests {
 
     fn edge(cdn: &'static str, ip: &str) -> crate::edge::EdgeSite {
         crate::edge::EdgeSite { cdn, site: Some("IAD".into()), site_city: None, ip: ip.parse().ok(), asn: None, error: None }
+    }
+
+    #[test]
+    fn the_startup_fetch_needs_a_first_map_and_empty_tables() {
+        let app = crate::app::tests::app();
+        assert!(!tables_missing(&app.store), "no map yet: the first one asks before anything is downloaded");
+        app.store.netmap_put(1, "{}");
+        assert!(tables_missing(&app.store), "a map was run and the tables are empty");
+        app.store.pfx2as_replace([(0u32, 8u8, 1u32, false)].into_iter()).unwrap();
+        app.store.pfx2as6_replace([(0u128, 16u8, 1u32, false)].into_iter()).unwrap();
+        assert!(!tables_missing(&app.store), "the tables are filled");
     }
 
     #[tokio::test]

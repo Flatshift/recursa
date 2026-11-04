@@ -139,7 +139,7 @@
         </span>
       </label>
       {#if sets && sets.pfx2as.fetched_at == null}
-        <span class="chip">Network names need the CAIDA table, fetching</span>
+        <span class="chip">Network names need the prefix tables, fetching</span>
       {/if}
     </div>
   </div>

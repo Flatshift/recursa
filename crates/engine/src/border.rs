@@ -263,7 +263,7 @@ pub fn spawn(app: Arc<AppState>) -> JoinHandle<()> {
                 last_cycle = app.store.border_latest().unwrap_or(0);
             }
             let due = last_cycle + cfg.interval_min.clamp(MIN_INTERVAL_MIN, 60) as i64 * 60_000;
-            if app.run_active.load(Ordering::SeqCst) || app.intel.fetching() || now < due {
+            if app.run_active.load(Ordering::SeqCst) || app.downloading() || now < due {
                 continue;
             }
             if owner.is_none() {
