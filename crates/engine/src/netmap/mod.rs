@@ -218,6 +218,13 @@ pub struct State {
     fetching: AtomicBool,
 }
 
+impl State {
+    /// Whether a dataset download is going.
+    pub(crate) fn fetching(&self) -> bool {
+        self.fetching.load(Ordering::SeqCst)
+    }
+}
+
 pub fn datasets(store: &crate::store::Store) -> Datasets {
     Datasets {
         pfx2as: Pfx2asInfo { fetched_at: store.get(attr::FETCHED_AT), source: store.get(attr::SOURCE), source6: store.get(attr::SOURCE6) },

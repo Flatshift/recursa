@@ -1,7 +1,7 @@
 <script lang="ts">
   // App settings. In the desktop app this is its own window (⌘, or Ctrl+,); in the browser, a page.
-  import { app } from '../lib/store.svelte';
-  import { api, mobile, loginItem, shell } from '../lib/api';
+  import { app, reloadOthers, resetLocal } from '../lib/store.svelte';
+  import { api, confirmAction, mobile, loginItem, shell } from '../lib/api';
   import type { ComponentProps } from 'svelte';
   import { MediaQuery } from 'svelte/reactivity';
   import type { Housekeeping, MonitorConfig, RpkiStatus } from '../lib/types';
@@ -111,6 +111,43 @@
   });
   const size = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`);
 
+  // The Data pane: both clears refuse (409) while something is measuring or downloading.
+  let clearing = $state(false);
+  let cleared = $state<string | null>(null);
+  async function clearCache() {
+    const ask = 'Clear the cache? Cached lookups and downloaded reference data are removed and download again when next needed.';
+    if (!(await confirmAction(ask, 'Clear Cache'))) return;
+    clearing = true;
+    error = cleared = null;
+    try {
+      const r = await api.del<{ freed: number }>('/api/cache');
+      const freed = r?.freed ?? 0;
+      cleared = freed >= 1e6 ? `Cache cleared. Freed ${size(freed)}.` : 'Cache cleared.';
+      reloadOthers();
+    } catch (e) {
+      error = (e as Error).message;
+    } finally {
+      clearing = false;
+    }
+  }
+  async function clearAll() {
+    const ask =
+      'Clear all data? Every run, saved ones too, all monitoring history, peering maps, custom resolvers, downloaded data and settings are deleted. This can’t be undone.';
+    if (!(await confirmAction(ask, 'Clear All Data'))) return;
+    clearing = true;
+    error = cleared = null;
+    try {
+      await api.del('/api/data');
+      // A fresh install doesn't open at login.
+      if (canLogin) await loginItem.set(false).catch(() => {});
+      resetLocal();
+      location.reload();
+    } catch (e) {
+      error = (e as Error).message;
+      clearing = false;
+    }
+  }
+
   // One pane at a time, picked from the list on the left; the URL hash names the pane, so
   // other parts of the app can open Settings on one (the sidebar's run history menu, say).
   type Pane = { id: string; label: string; icon: ComponentProps<typeof Icon>['name'] };
@@ -120,6 +157,7 @@
     { id: 'monitoring', label: 'Monitoring', icon: 'pulse' },
     { id: 'history', label: 'Run history', icon: 'clock' },
     ...(app.env?.rpki_local ? [{ id: 'routes', label: 'Route origins', icon: 'lock' as const }] : []),
+    { id: 'data', label: 'Data', icon: 'trash' },
     { id: 'about', label: 'About', icon: 'info' },
   ]);
   let pane = $state(location.hash.slice(1));
@@ -128,7 +166,7 @@
     void app.route; // In-app navigation pushes the hash with the path, which fires no hashchange.
     const onHash = () => {
       pane = location.hash.slice(1);
-      error = null;
+      error = cleared = null;
     };
     onHash();
     addEventListener('hashchange', onHash);
@@ -138,7 +176,7 @@
   const showRoot = $derived(mobile && !panes.some((p) => p.id === pane));
   function pick(id: string) {
     pane = id;
-    error = null;
+    error = cleared = null;
     if (mobile) history.pushState(null, '', `#${id}`);
     else history.replaceState(null, '', `#${id}`);
   }
@@ -340,6 +378,23 @@
           </div>
           {#if rpki.state === 'ready' && rpki.error}<p class="note">The last refresh failed: {rpki.error}</p>{/if}
         {/if}
+      {:else if current === 'data'}
+        <h2>Data</h2>
+        <div class="row">
+          <p class="note">
+            Removes cached lookups and downloaded reference data (prefix tables, AS relationships, PeeringDB, registry records), which
+            download again when next needed. Runs, history, settings and custom resolvers stay.
+          </p>
+          <button class="btn sm" disabled={clearing} onclick={clearCache}>Clear Cache…</button>
+        </div>
+        {#if cleared}<p class="note" role="status">{cleared}</p>{/if}
+        <div class="row">
+          <p class="note">
+            Deletes every run, saved ones too, all monitoring history, peering maps, custom resolvers, downloaded data and settings, so
+            Recursa starts as if just installed.{rpki?.enabled ? ' Route-origin validation is turned off and its data deleted.' : ''}
+          </p>
+          <button class="btn sm danger" disabled={clearing} onclick={clearAll}>Clear All Data…</button>
+        </div>
       {:else}
         <h2>About</h2>
         <p class="about">
@@ -556,6 +611,9 @@
   .row .btn.sm {
     text-decoration: none;
     color: var(--ink);
+  }
+  .row .btn.sm.danger {
+    color: var(--critical);
   }
   .notices {
     width: min(680px, calc(100vw - 32px));

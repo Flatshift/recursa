@@ -770,10 +770,73 @@ impl AppState {
                 self.store.ntp_clear();
                 ok(json!({ "cleared": true }))
             }
+            ("DELETE", ["cache"]) => self.clear_data(false).await,
+            ("DELETE", ["data"]) => self.clear_data(true).await,
             #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
             (_, ["rpki", rest @ ..]) => crate::rpki::call(self, method, rest, body).await,
             _ => Err(ApiError::new(404, "No such endpoint.")),
         }
+    }
+
+    /// Clear the cache and downloaded reference data, or with `all` everything back to a fresh install (see the Data
+    /// pane). Holds the run slot throughout, so nothing is measuring or recording meanwhile. Answers with the bytes freed.
+    async fn clear_data(self: &Arc<Self>, all: bool) -> Result<String, ApiError> {
+        let held = self.claim_run().await?;
+        if self.netmap.fetching() || (all && self.intel.fetching()) {
+            return Err(ApiError::new(409, "Wait for the download to finish."));
+        }
+        let app = self.clone();
+        let freed = tokio::task::spawn_blocking(move || {
+            let _held = held;
+            let dir = app.store.path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+            let mut freed = 0;
+            // Turned off first, which deletes its files; the clear then drops the setting.
+            #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
+            if all {
+                let rpki = dir.join("rpki");
+                let before = store::dir_size(&rpki);
+                app.intel.rpki.set_enabled(false);
+                freed += before.saturating_sub(store::dir_size(&rpki));
+            }
+            let forget = [
+                crate::netmap::attr::SOURCE,
+                crate::netmap::attr::SOURCE6,
+                crate::netmap::attr::FETCHED_AT,
+                crate::netmap::asrel::SOURCE,
+                crate::netmap::asrel::FETCHED_AT,
+            ];
+            // The NTP politeness ledger (servers asked in the last ten minutes aren't asked again; servers that sent a
+            // rate/deny kiss-of-death are left alone for an hour/a week): a promise to third parties, not user data.
+            freed += app.store.clear(all, &forget, "ntp_asked").map_err(|e| e.to_string())?;
+            if all {
+                // Written again after the clear, so another process on this database reads monitoring as off; the
+                // same paths the PUT endpoints take, so the monitor loops and the desktop menus hear it.
+                app.set_monitor(MonitorConfig::default());
+                let _ = app.set_ntp_monitor(NtpMonitorConfig::default());
+                app.set_border_monitor(BorderMonitorConfig::default());
+                app.runs.lock().unwrap().clear();
+                *app.ntp.lock().unwrap() = None;
+                *app.edges.lock().unwrap() = None;
+                *app.netmap.error.lock().unwrap() = None;
+                *app.netmap.progress.lock().unwrap() = None;
+                app.ntp_epoch.fetch_add(1, Ordering::SeqCst);
+            }
+            *app.live_sample.lock().unwrap() = None;
+            // Left over from older builds. Only in the default data folder: beside a database opened elsewhere, a
+            // folder of that name may be someone else's.
+            let isp = dir.join("isp");
+            if app.store.path.parent() == store::default_path().parent() && isp.is_dir() {
+                let n = store::dir_size(&isp);
+                if std::fs::remove_dir_all(&isp).is_ok() {
+                    freed += n;
+                }
+            }
+            Ok::<u64, String>(freed)
+        })
+        .await
+        .map_err(|e| ApiError::new(500, e.to_string()))?
+        .map_err(|e| ApiError::new(500, format!("Couldn't clear the data: {e}")))?;
+        Ok(json!({ "freed": freed }).to_string())
     }
 
     /// Claim this process's one run slot, then the machine-wide measure lock: a 409 if either is taken. Waits out a
@@ -1470,5 +1533,157 @@ mod tests {
         for ext in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{ext}", a.store.path.display()));
         }
+    }
+
+    use crate::store::{DOWNLOADED, HISTORY};
+
+    /// An app on a database in its own directory, with one row in every table, the settings the Data pane touches, an
+    /// `isp` folder (not Recursa's, outside the default data folder) and (where built) fake route-origin files.
+    fn seeded() -> (Arc<AppState>, PathBuf) {
+        crate::install_crypto_provider();
+        let dir = std::env::temp_dir().join(format!("recursa-data-test-{:x}", fastrand::u64(..)));
+        let a = AppState::open(Some(dir.join("recursa.db")), false, crate::caps::Caps::BROWSER).unwrap();
+        let c = rusqlite::Connection::open(&a.store.path).unwrap();
+        c.execute_batch(
+            "INSERT INTO runs(id, started_at, status, summary, body, saved) VALUES('r1', 1, 'done', '{}', '{}', 1);
+             INSERT INTO monitor VALUES(1, 'x', 't', 5, 1);
+             INSERT INTO cache VALUES('k', 1, '{}');
+             INSERT INTO custom VALUES('c', '{}');
+             INSERT INTO monitor_hour VALUES(1, 'x', 1, 1, 1, 1, 1, 1, x'00');
+             INSERT INTO monitor_outage VALUES('x', 1, 2, 1, NULL);
+             INSERT INTO ntp_sample(ts, server, ok) VALUES(1, 's', 1);
+             INSERT INTO ntp_clock VALUES(1, 0.5, 1.0, 3, 2);
+             INSERT INTO border_pair(cdn, target, near, near_ttl, far, far_ttl, kind, found_at) VALUES('c', 't', 'n', 1, 'f', 2, 'k', 1);
+             INSERT INTO border_sample(ts, pair) VALUES(1, 1);
+             INSERT INTO pfx2as VALUES(1, 24, 64500, 0);
+             INSERT INTO pfx2as6 VALUES(x'00', 32, 64500, 0);
+             INSERT INTO asrel VALUES(1, 2, 0);
+             INSERT INTO netmap_run VALUES(1, 1, '{}');
+             INSERT INTO pdb_sync VALUES('ix', 1, NULL);
+             INSERT INTO pdb_ix(id) VALUES(1);
+             INSERT INTO pdb_ixpfx(id) VALUES(1);
+             INSERT INTO pdb_netixlan(id) VALUES(1);
+             INSERT INTO pdb_fac(id) VALUES(1);
+             INSERT INTO pdb_netfac(id) VALUES(1);
+             INSERT INTO rdap_block VALUES(x'00', x'01', '{}', 1);
+             CREATE TABLE isp_checks(id INTEGER);",
+        )
+        .unwrap();
+        for k in [
+            crate::netmap::attr::SOURCE,
+            crate::netmap::attr::SOURCE6,
+            crate::netmap::attr::FETCHED_AT,
+            crate::netmap::asrel::SOURCE,
+            crate::netmap::asrel::FETCHED_AT,
+        ] {
+            a.store.put(k, &"x");
+        }
+        for k in [crate::netmap::pdb::ACCEPTED, crate::netmap::rdap::ACCEPTED, crate::netmap::RDNS] {
+            a.store.put(k, &true);
+        }
+        let on = MonitorConfig { enabled: true, interval_min: 15, ..Default::default() };
+        a.set_monitor(on);
+        a.store.put("cached_lists", &json!([{ "name": "Home", "names": ["a.com"] }]));
+        a.store.put("housekeeping", &json!({ "keep_runs": 5, "keep_days": null }));
+        a.store.put("ntp_asked", &json!({ "s": 1 }));
+        std::fs::create_dir_all(dir.join("isp")).unwrap();
+        std::fs::write(dir.join("isp").join("x.json"), "{}").unwrap();
+        #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
+        {
+            std::fs::create_dir_all(dir.join("rpki")).unwrap();
+            std::fs::write(dir.join("rpki").join("vrps.bin"), "x").unwrap();
+            a.store.put("rpki_local", &true);
+        }
+        (a, dir)
+    }
+
+    fn count(a: &AppState, table: &str) -> i64 {
+        let c = rusqlite::Connection::open(&a.store.path).unwrap();
+        c.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap()
+    }
+
+    fn setting_keys(a: &AppState) -> Vec<String> {
+        let c = rusqlite::Connection::open(&a.store.path).unwrap();
+        let mut q = c.prepare("SELECT key FROM settings ORDER BY key").unwrap();
+        q.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+    }
+
+    fn has_table(a: &AppState, name: &str) -> bool {
+        let c = rusqlite::Connection::open(&a.store.path).unwrap();
+        c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name=?1", [name], |r| r.get::<_, i64>(0)).unwrap() > 0
+    }
+
+    #[tokio::test]
+    async fn clear_cache_removes_downloaded_data_and_keeps_the_rest() {
+        let (a, dir) = seeded();
+        let r: Value = serde_json::from_str(&a.call("DELETE", "/api/cache", Value::Null).await.unwrap()).unwrap();
+        assert!(r["freed"].is_u64());
+        for t in DOWNLOADED {
+            assert_eq!(count(&a, t), 0, "{t}");
+        }
+        for t in HISTORY {
+            assert_eq!(count(&a, t), 1, "{t}");
+        }
+        let keys = setting_keys(&a);
+        for gone in
+            ["netmap.pfx2as_source", "netmap.pfx2as6_source", "netmap.pfx2as_fetched_at", "netmap.asrel_source", "netmap.asrel_fetched_at"]
+        {
+            assert!(!keys.iter().any(|k| k == gone), "{gone}");
+        }
+        for kept in
+            ["netmap.peeringdb_accepted", "netmap.rdap_accepted", "netmap.rdns", "monitor", "cached_lists", "housekeeping", "ntp_asked"]
+        {
+            assert!(keys.iter().any(|k| k == kept), "{kept}");
+        }
+        assert!(a.monitor.borrow().enabled);
+        assert!(!has_table(&a, "isp_checks"));
+        assert!(dir.join("isp").exists());
+        #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
+        assert!(dir.join("rpki").join("vrps.bin").exists() && keys.iter().any(|k| k == "rpki_local"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn clear_all_data_returns_to_a_fresh_install() {
+        let (a, dir) = seeded();
+        a.ntp_monitor.send_replace(NtpMonitorConfig { enabled: true, ..Default::default() });
+        a.border_monitor.send_replace(BorderMonitorConfig { enabled: true, ..Default::default() });
+        *a.edges.lock().unwrap() = Some(Default::default());
+        let epoch = a.ntp_epoch.load(Ordering::SeqCst);
+        let watching = a.monitor.subscribe();
+        let r: Value = serde_json::from_str(&a.call("DELETE", "/api/data", Value::Null).await.unwrap()).unwrap();
+        assert!(r["freed"].is_u64());
+        for t in DOWNLOADED.iter().chain(HISTORY.iter()) {
+            assert_eq!(count(&a, t), 0, "{t}");
+        }
+        // Monitoring is written back as off, for any other process on this database.
+        assert_eq!(setting_keys(&a), ["border_monitor", "monitor", "ntp_asked", "ntp_monitor"]);
+        assert!(!has_table(&a, "isp_checks"));
+        assert!(watching.has_changed().unwrap());
+        assert_eq!(*a.monitor.borrow(), MonitorConfig::default());
+        assert_eq!(*a.ntp_monitor.borrow(), NtpMonitorConfig::default());
+        assert_eq!(*a.border_monitor.borrow(), BorderMonitorConfig::default());
+        assert!(a.edges.lock().unwrap().is_none() && a.ntp_epoch.load(Ordering::SeqCst) > epoch);
+        assert!(dir.join("isp").exists());
+        #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
+        assert!(!dir.join("rpki").exists() && !a.intel.rpki.enabled());
+        // Every table is in one of the lists, so a new one can't be missed.
+        let c = rusqlite::Connection::open(&a.store.path).unwrap();
+        let mut q = c.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").unwrap();
+        for t in q.query_map([], |r| r.get::<_, String>(0)).unwrap().map(Result::unwrap) {
+            assert!(t == "settings" || DOWNLOADED.contains(&t.as_str()) || HISTORY.contains(&t.as_str()), "{t}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn clearing_is_refused_while_a_run_is_active() {
+        let (a, dir) = seeded();
+        a.run_active.store(true, Ordering::SeqCst);
+        for path in ["/api/cache", "/api/data"] {
+            assert_eq!(a.call("DELETE", path, Value::Null).await.unwrap_err().status, 409, "{path}");
+        }
+        assert_eq!(count(&a, "runs"), 1);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -92,6 +92,8 @@ pub fn spawn(app: Arc<AppState>) {
             let cfg = app.ntp_monitor.borrow().clone();
             if !cfg.enabled {
                 owner = None;
+                // Switched on again, seed afresh from what is recorded (nothing, once the data is cleared).
+                last_cycle = 0;
                 continue;
             }
             let now = bench::now_ms();

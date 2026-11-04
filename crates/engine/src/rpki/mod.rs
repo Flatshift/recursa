@@ -51,7 +51,7 @@ mod table;
 
 use crate::app::{ApiError, AppState};
 use crate::bench::now_ms;
-use crate::store::Store;
+use crate::store::{Store, dir_size};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
 use std::net::IpAddr;
@@ -460,17 +460,6 @@ fn verdict(table: &Table, time: i64, asn: u64, prefix: &str) -> Value {
         .map(|(vrp, m)| json!({ "origin": vrp.asn.to_string(), "prefix": format!("{}/{}", vrp.addr, vrp.len), "max_length": vrp.max_len, "validity": m.as_str() }))
         .collect();
     json!({ "status": v.status, "state": "ready", "roas": roas, "validator": Rpki::validator(), "vrp_time": time })
-}
-
-fn dir_size(dir: &Path) -> u64 {
-    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
-    rd.flatten()
-        .map(|e| match e.metadata() {
-            Ok(m) if m.is_dir() => dir_size(&e.path()),
-            Ok(m) => m.len(),
-            Err(_) => 0,
-        })
-        .sum()
 }
 
 /// `GET /api/rpki` (status), `PUT /api/rpki` (`{ "enabled": bool }`), `POST /api/rpki/sync`.

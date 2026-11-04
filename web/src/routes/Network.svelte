@@ -72,4 +72,9 @@
     font-size: var(--t-xs);
     color: var(--ink-3);
   }
+  /* The map's size follows the pane's width. Reserving the scrollbar's gutter stops a scrollbar that comes and goes
+     from resizing the map, which brought it back again and made the page shake. */
+  .content {
+    scrollbar-gutter: stable;
+  }
 </style>

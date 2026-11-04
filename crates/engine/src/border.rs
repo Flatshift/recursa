@@ -247,6 +247,10 @@ pub fn spawn(app: Arc<AppState>) {
             let cfg = app.border_monitor.borrow().clone();
             if !cfg.enabled || trace::available() != TraceCap::Ok {
                 owner = None;
+                // Switched on again, start afresh: seed from what is recorded and discover at once.
+                last_cycle = 0;
+                last_discovery = 0;
+                misses.clear();
                 continue;
             }
             let now = bench::now_ms();

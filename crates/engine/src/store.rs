@@ -518,6 +518,67 @@ impl Store {
     }
 }
 
+/// The tables Clear Cache empties: the lookup cache and downloaded reference data.
+pub(crate) const DOWNLOADED: [&str; 11] =
+    ["cache", "pfx2as", "pfx2as6", "asrel", "pdb_sync", "pdb_ix", "pdb_ixpfx", "pdb_netixlan", "pdb_fac", "pdb_netfac", "rdap_block"];
+/// The tables Clear All empties as well. Every table but `settings` is in one list or the other.
+pub(crate) const HISTORY: [&str; 10] = [
+    "runs",
+    "monitor",
+    "monitor_hour",
+    "monitor_outage",
+    "ntp_sample",
+    "ntp_clock",
+    "border_pair",
+    "border_sample",
+    "netmap_run",
+    "custom",
+];
+
+/// What the Data pane clears (see [`Store::clear`]).
+impl Store {
+    /// Empty the cache and the downloaded reference tables, and delete the settings in `forget`; with `all`, every
+    /// other table and setting too, except `keep`. One transaction, then VACUUM and a WAL checkpoint (skipped if
+    /// another process has the database busy). Returns the bytes the database files shrank by.
+    pub fn clear(&self, all: bool, forget: &[&str], keep: &str) -> rusqlite::Result<u64> {
+        let size = || {
+            let wal = format!("{}-wal", self.path.display());
+            [self.path.as_path(), Path::new(&wal)].iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum::<u64>()
+        };
+        let mut c = self.conn.lock().unwrap();
+        let before = size();
+        let tx = c.transaction()?;
+        for t in DOWNLOADED.iter().chain(if all { HISTORY.iter() } else { [].iter() }) {
+            tx.execute(&format!("DELETE FROM {t}"), [])?;
+        }
+        // Left over from older builds.
+        tx.execute("DROP TABLE IF EXISTS isp_checks", [])?;
+        if all {
+            tx.execute("DELETE FROM settings WHERE key != ?1", params![keep])?;
+        } else {
+            for k in forget {
+                tx.execute("DELETE FROM settings WHERE key = ?1", params![k])?;
+            }
+        }
+        tx.commit()?;
+        let _ = c.execute_batch("VACUUM");
+        let _ = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+        Ok(before.saturating_sub(size()))
+    }
+}
+
+/// The size of everything under `dir`, in bytes; 0 if it isn't there.
+pub(crate) fn dir_size(dir: &Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+    rd.flatten()
+        .map(|e| match e.metadata() {
+            Ok(m) if m.is_dir() => dir_size(&e.path()),
+            Ok(m) => m.len(),
+            Err(_) => 0,
+        })
+        .sum()
+}
+
 impl Store {
     /// Store a new pair, returning its id.
     pub fn border_insert_pair(&self, p: &Pair) -> i64 {

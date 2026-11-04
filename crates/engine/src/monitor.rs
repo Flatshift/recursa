@@ -57,8 +57,9 @@ pub fn spawn(app: Arc<AppState>) {
             app.reload_monitors();
             let cfg = app.monitor.borrow().clone();
             if !cfg.enabled {
-                // Let another Recursa process monitor this database instead.
+                // Let another Recursa process monitor this database instead; switched on again, start afresh.
                 owner = None;
+                last_cycle = 0;
                 continue;
             }
             let now = bench::now_ms();

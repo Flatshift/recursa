@@ -2,6 +2,11 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Settings › Data: Clear Cache removes cached lookups and downloaded reference data; Clear All Data returns Recursa to a fresh install.
+- Peering: the map no longer makes the page shake at some window sizes.
+
 ## 0.5.3 (2026-11-02)
 
 - Windows answers now carry the IP hop count, so the hops and interception signals work there.
