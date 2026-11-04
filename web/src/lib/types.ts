@@ -1105,6 +1105,8 @@ interface MapProgress {
 export interface MapResp {
   last: MapRun | null;
   running: boolean;
+  /** The prefix table is being downloaded: by this run, or by a refresh the run waits for. */
+  fetching: boolean;
   progress: MapProgress | null;
   error: string | null;
   datasets: NetDatasets;

@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
@@ -59,15 +59,15 @@ pub struct AppState {
 
 /// A flag set for as long as this lives. Dropping it clears the flag, so a handler dropped mid-await (a closed
 /// connection) can't leave `run_active` or `measuring` set for every later run.
-struct FlagGuard(Option<Arc<AtomicBool>>);
+pub(crate) struct FlagGuard(Option<Arc<AtomicBool>>);
 
 impl FlagGuard {
     /// Claims `flag` if nobody holds it.
-    fn claim(flag: &Arc<AtomicBool>) -> Option<Self> {
+    pub(crate) fn claim(flag: &Arc<AtomicBool>) -> Option<Self> {
         flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok().then(|| FlagGuard(Some(flag.clone())))
     }
 
-    fn set(flag: &Arc<AtomicBool>) -> Self {
+    pub(crate) fn set(flag: &Arc<AtomicBool>) -> Self {
         flag.store(true, Ordering::SeqCst);
         FlagGuard(Some(flag.clone()))
     }
@@ -130,11 +130,17 @@ fn stored_monitor(store: &Store) -> Option<MonitorConfig> {
     store.get::<MonitorConfig>("monitor").map(MonitorConfig::clamped)
 }
 
-/// Apply a setting another process saved, when it was readable and differs from what subscribers have.
-fn reload<T: Clone + PartialEq>(tx: &watch::Sender<T>, saved: Option<T>) {
-    if let Some(new) = saved {
-        tx.send_if_modified(|c| std::mem::replace(c, new.clone()) != new);
-    }
+/// Apply a setting as saved, or the default once its row is gone (Clear All Data) or unreadable, when it differs from
+/// what subscribers have.
+fn reload<T: Clone + PartialEq + Default>(tx: &watch::Sender<T>, saved: Option<T>) {
+    let new = saved.unwrap_or_default();
+    tx.send_if_modified(|c| {
+        if *c == new {
+            return false;
+        }
+        *c = new;
+        true
+    });
 }
 
 /// What GET `/monitor` and GET `/ntp/monitor` answer.
@@ -186,6 +192,17 @@ fn stored_border_monitor(store: &Store) -> Option<BorderMonitorConfig> {
 /// The settings a cache clear forgets: where the downloaded reference data came from and when.
 fn forgotten_settings() -> Vec<&'static str> {
     [&crate::netmap::attr::SETTINGS[..], &[crate::netmap::asrel::SOURCE, crate::netmap::asrel::FETCHED_AT][..]].concat()
+}
+
+/// Remove the `isp` folder older builds left in the data folder, and say how many bytes it took. Only beside the
+/// shared database (`shared`): beside one opened elsewhere, a folder of that name may be someone else's.
+fn remove_leftovers(dir: &Path, shared: bool) -> u64 {
+    let isp = dir.join("isp");
+    if !shared || !isp.is_dir() {
+        return 0;
+    }
+    let n = store::dir_size(&isp);
+    if std::fs::remove_dir_all(&isp).is_ok() { n } else { 0 }
 }
 
 impl AppState {
@@ -707,6 +724,7 @@ impl AppState {
             ("GET", ["network", "map"]) => ok(json!({
                 "last": crate::netmap::last(&self.store),
                 "running": self.netmap_running(),
+                "fetching": self.netmap.fetching.load(Ordering::SeqCst),
                 "progress": *self.netmap.progress.lock().unwrap(),
                 "error": *self.netmap.error.lock().unwrap(),
                 "datasets": crate::netmap::datasets(&self.store),
@@ -784,8 +802,8 @@ impl AppState {
     }
 
     /// Clear the cache and downloaded reference data, or with `all` everything back to a fresh install (see the Data
-    /// pane). Holds the run slot throughout, so nothing is measuring or recording meanwhile. Answers with the bytes freed,
-    /// and a warning when the file could not be compacted afterwards.
+    /// pane). Holds the run slot throughout, so nothing is measuring or recording meanwhile. Answers with the bytes the
+    /// database file gave back, and a warning when it could not be compacted afterwards.
     async fn clear_data(self: &Arc<Self>, all: bool) -> Result<String, ApiError> {
         let held = self.claim_run().await?;
         // Claimed, not read: a refresh starting after a read would fill the tables being emptied.
@@ -798,24 +816,21 @@ impl AppState {
             let _held = (held, fetching);
             let dir = app.store.path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
             let mut freed = 0;
-            // Turned off first, which deletes its files; the clear then drops the setting.
+            // Turned off first, which deletes its files; the clear then drops the setting. Its bytes aren't counted:
+            // nothing shows the answer to Clear All Data, and sizing the folder is a walk of thousands of files.
             #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
             if all {
-                let rpki = dir.join("rpki");
-                let before = store::dir_size(&rpki);
                 app.intel.rpki.set_enabled(false);
-                freed += before.saturating_sub(store::dir_size(&rpki));
             }
             let before = app.store.file_size();
             // The NTP politeness ledger (servers asked in the last ten minutes aren't asked again; servers that sent a
             // rate/deny kiss-of-death are left alone for an hour/a week): a promise to third parties, not user data.
             app.store.clear(all, &forgotten_settings(), "ntp_asked").map_err(|e| format!("Couldn't clear the data: {e}"))?;
             if all {
-                // Written again after the clear, so another process on this database reads monitoring as off; the
-                // same paths the PUT endpoints take, so the monitor loops and the desktop menus hear it.
-                app.set_monitor(MonitorConfig::default());
-                let _ = app.set_ntp_monitor(NtpMonitorConfig::default());
-                app.set_border_monitor(BorderMonitorConfig::default());
+                // The monitor rows are gone: the loops and the desktop menus hear the defaults, as another process does.
+                app.reload_monitors();
+                app.reload_ntp_monitor();
+                app.reload_border_monitor();
                 app.runs.lock().unwrap().clear();
                 *app.ntp.lock().unwrap() = None;
                 *app.edges.lock().unwrap() = None;
@@ -823,15 +838,7 @@ impl AppState {
                 *app.netmap.progress.lock().unwrap() = None;
             }
             *app.live_sample.lock().unwrap() = None;
-            // Left over from older builds. Only in the default data folder: beside a database opened elsewhere, a
-            // folder of that name may be someone else's.
-            let isp = dir.join("isp");
-            if app.store.path.parent() == store::default_path().parent() && isp.is_dir() {
-                let n = store::dir_size(&isp);
-                if std::fs::remove_dir_all(&isp).is_ok() {
-                    freed += n;
-                }
-            }
+            freed += remove_leftovers(&dir, app.store.path.parent() == store::default_path().parent());
             // Last: the rows are gone and forgotten above whatever this does, so a failure here is a warning on the
             // answer, not an error; their space stays taken for now.
             let warning = app.store.compact().err().map(|e| format!("The database could not be compacted: {e}"));
@@ -1019,7 +1026,15 @@ impl AppState {
         Ok(serde_json::to_value(&row).unwrap())
     }
 
-    /// Picks up monitoring settings another process saved to this database. Unreadable ones are ignored.
+    /// For the way out: stop a map run, whose table snapshot would hold the journal open, then fold the journal back
+    /// into the database (see [`Store::close`]). Bounded: a run that won't stop or a long write leaves the journal for
+    /// the next open to recover.
+    pub fn close(&self) {
+        self.netmap.cancel.store(true, Ordering::SeqCst);
+        self.store.close();
+    }
+
+    /// Picks up the monitoring setting as saved to this database, by another process or a clear (see [`reload`]).
     pub(crate) fn reload_monitors(&self) {
         reload(&self.monitor, stored_monitor(&self.store));
     }
@@ -1281,10 +1296,10 @@ pub async fn detect_interception(app: Arc<AppState>) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn app() -> Arc<AppState> {
+    pub(crate) fn app() -> Arc<AppState> {
         crate::install_crypto_provider();
         let db = std::env::temp_dir().join(format!("recursa-test-{:x}.db", fastrand::u64(..)));
         AppState::open(Some(db), false, crate::caps::Caps::BROWSER).unwrap()
@@ -1639,20 +1654,19 @@ mod tests {
         a.ntp_monitor.send_replace(NtpMonitorConfig { enabled: true, ..Default::default() });
         a.border_monitor.send_replace(BorderMonitorConfig { enabled: true, ..Default::default() });
         *a.edges.lock().unwrap() = Some(Default::default());
-        let epoch = a.ntp_epoch.load(Ordering::SeqCst);
         let watching = a.monitor.subscribe();
         let r: Value = serde_json::from_str(&a.call("DELETE", "/api/data", Value::Null).await.unwrap()).unwrap();
         assert!(r["freed"].is_u64());
         for t in DOWNLOADED.iter().chain(HISTORY.iter()) {
             assert_eq!(count(&a, t), 0, "{t}");
         }
-        // Monitoring is written back as off, for any other process on this database.
-        assert_eq!(setting_keys(&a), ["border_monitor", "monitor", "ntp_asked", "ntp_monitor"]);
+        // Only the NTP politeness ledger stays; the monitors are at their defaults, here and for any other process.
+        assert_eq!(setting_keys(&a), ["ntp_asked"]);
         assert!(watching.has_changed().unwrap());
         assert_eq!(*a.monitor.borrow(), MonitorConfig::default());
         assert_eq!(*a.ntp_monitor.borrow(), NtpMonitorConfig::default());
         assert_eq!(*a.border_monitor.borrow(), BorderMonitorConfig::default());
-        assert!(a.edges.lock().unwrap().is_none() && a.ntp_epoch.load(Ordering::SeqCst) > epoch);
+        assert!(a.edges.lock().unwrap().is_none());
         assert!(dir.join("isp").exists());
         #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
         assert!(!dir.join("rpki").exists() && !a.intel.rpki.enabled());
@@ -1686,6 +1700,38 @@ mod tests {
         a.call("DELETE", "/api/cache", Value::Null).await.unwrap();
         // Released with the clear: the next refresh may start.
         assert!(!a.netmap.fetching.load(Ordering::SeqCst));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn closing_waits_for_a_run_s_snapshot_and_leaves_no_journal() {
+        let (a, dir) = seeded();
+        let wal = PathBuf::from(format!("{}-wal", a.store.path.display()));
+        assert!(std::fs::metadata(&wal).is_ok_and(|m| m.len() > 0));
+        // A run holds its prefix snapshot until it sees the cancel that closing sets.
+        let snapshot = crate::netmap::attr::Pfx2as::open(&a.store).unwrap();
+        let run = a.clone();
+        let t = std::thread::spawn(move || {
+            while !run.netmap.cancel.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            drop(snapshot);
+        });
+        a.close();
+        t.join().unwrap();
+        assert!(!wal.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn leftover_isp_folder_goes_only_beside_the_shared_database() {
+        let dir = std::env::temp_dir().join(format!("recursa-isp-test-{:x}", fastrand::u64(..)));
+        std::fs::create_dir_all(dir.join("isp")).unwrap();
+        std::fs::write(dir.join("isp").join("x.json"), "{}").unwrap();
+        assert_eq!(remove_leftovers(&dir, false), 0);
+        assert!(dir.join("isp").is_dir());
+        assert_eq!(remove_leftovers(&dir, true), 2);
+        assert!(!dir.join("isp").exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

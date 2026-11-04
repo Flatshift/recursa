@@ -10,7 +10,8 @@ use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::time::{Duration, Instant};
 
 const PUT_HOUR: &str = "INSERT OR REPLACE INTO monitor_hour(hour, resolver_id, n, ok, cycles, up, first_ts, last_ts, lat)
      VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)";
@@ -98,11 +99,12 @@ impl Store {
         let conn = Connection::open(&path)?;
         // Older builds kept the prefix tables unkeyed, with a separate index; drop those so the schema below makes
         // the keyed ones. The next refresh fills them.
-        let keyed: bool =
-            conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'pfx2as' AND sql LIKE '%WITHOUT ROWID%')", [], |r| {
-                r.get(0)
-            })?;
-        if !keyed {
+        let unkeyed: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'pfx2as' AND sql NOT LIKE '%WITHOUT ROWID%')",
+            [],
+            |r| r.get(0),
+        )?;
+        if unkeyed {
             conn.execute_batch("DROP TABLE IF EXISTS pfx2as; DROP TABLE IF EXISTS pfx2as6")?;
         }
         // A reader's snapshot (a Peering run) keeps the WAL from resetting; the reset after it trims the file back.
@@ -189,7 +191,7 @@ impl Store {
                 return Err(e);
             }
         }
-        if !keyed {
+        if unkeyed {
             // What the Data pane says about the dropped tables goes with them.
             for k in attr::SETTINGS {
                 conn.execute("DELETE FROM settings WHERE key = ?1", params![k])?;
@@ -608,19 +610,38 @@ impl Store {
     }
 
     /// Fold the WAL back into the file and close both connections, so quitting leaves no journal beside the
-    /// database and the next open has nothing to recover. For the way out only: calls after this fail.
+    /// database and the next open has nothing to recover. For the way out only: calls after this fail. Waits a few
+    /// seconds at most, for a write in progress (a VACUUM, a table replace) and for a snapshot a map run still holds;
+    /// past that the journal stays, and the next open recovers it, rolling the write back.
     pub fn close(&self) {
+        const WAIT: Duration = Duration::from_secs(3);
+        // The connection behind `m`, waiting until `deadline` for whoever holds it; a poisoned lock is taken as it is.
+        fn take(m: &Mutex<Connection>, deadline: Instant) -> Option<MutexGuard<'_, Connection>> {
+            loop {
+                match m.try_lock() {
+                    Ok(c) => return Some(c),
+                    Err(TryLockError::Poisoned(p)) => return Some(p.into_inner()),
+                    Err(TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+                    Err(TryLockError::WouldBlock) => return None,
+                }
+            }
+        }
+        // Swap `c` for a throwaway in-memory connection and close it.
+        fn shut(c: &mut Connection) {
+            if let Ok(dummy) = Connection::open_in_memory() {
+                let _ = std::mem::replace(c, dummy).close();
+            }
+        }
+        let deadline = Instant::now() + WAIT;
         // The reader first, on its own: its snapshot would hold the checkpoint back.
-        if let Some(r) = &self.reader
-            && let Ok(dummy) = Connection::open_in_memory()
-        {
-            let _ = std::mem::replace(&mut *r.lock().unwrap(), dummy).close();
+        if let Some(mut r) = self.reader.as_ref().and_then(|m| take(m, deadline)) {
+            shut(&mut r);
         }
-        let mut c = self.conn.lock().unwrap();
+        let Some(mut c) = take(&self.conn, deadline) else { return };
+        // The checkpoint waits for other connections' snapshots through the busy handler: the rest of the budget.
+        let _ = c.busy_timeout(deadline.saturating_duration_since(Instant::now()));
         let _ = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
-        if let Ok(dummy) = Connection::open_in_memory() {
-            let _ = std::mem::replace(&mut *c, dummy).close();
-        }
+        shut(&mut c);
     }
 
     /// The bytes the database and its WAL take on disk.
@@ -776,8 +797,9 @@ impl Store {
     }
 
     /// Replace the whole prefix-to-network table with `rows` (prefix as a number, length, origin, whether several
-    /// networks announce it), in one transaction: a failure leaves the old table. Of two rows for one prefix, the
-    /// first stays.
+    /// networks announce it), in one transaction: a failure leaves the old table, and so does no rows at all
+    /// (`QueryReturnedNoRows`), since a download that parsed to nothing mustn't wipe it. Of two rows for one prefix,
+    /// the first stays.
     pub fn pfx2as_replace(&self, rows: impl Iterator<Item = (u32, u8, u32, bool)>) -> rusqlite::Result<usize> {
         let mut c = self.conn.lock().unwrap();
         let tx = c.transaction()?;
@@ -788,6 +810,9 @@ impl Store {
             for (prefix, len, asn, moas) in rows {
                 n += st.execute(params![len, prefix, asn, moas])?;
             }
+        }
+        if n == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
         }
         tx.commit()?;
         Ok(n)
@@ -806,6 +831,9 @@ impl Store {
                 n += st.execute(params![len, &prefix.to_be_bytes()[..], asn, moas])?;
             }
         }
+        if n == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         tx.commit()?;
         Ok(n)
     }
@@ -813,6 +841,13 @@ impl Store {
     /// Either prefix table is empty: fetched before any run.
     pub fn pfx2as_empty(&self) -> bool {
         self.rd().query_row(PFX2AS_EMPTY, [], |r| r.get(0)).unwrap_or(true)
+    }
+
+    /// Whether the IPv4 and the IPv6 prefix table each hold rows.
+    pub fn pfx2as_filled(&self) -> (bool, bool) {
+        self.rd()
+            .query_row("SELECT EXISTS(SELECT 1 FROM pfx2as), EXISTS(SELECT 1 FROM pfx2as6)", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap_or((false, false))
     }
 
     /// Replace the whole AS-relationship table with `rows` (a, b, rel: -1 = a provides for b, 0 = peers), in one

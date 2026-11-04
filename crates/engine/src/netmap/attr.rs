@@ -72,8 +72,16 @@ impl Pfx2as {
         let conn = Store::open_reader(&store.path)?;
         conn.execute_batch("BEGIN")?;
         let empty = conn.query_row(crate::store::PFX2AS_EMPTY, [], |r| r.get(0))?;
+        // The lengths present, one key probe each: `DISTINCT len` would walk every row of the table.
         let lens = |table: &str, shortest: u8, longest: u8| -> rusqlite::Result<Vec<u8>> {
-            let mut st = conn.prepare(&format!("SELECT DISTINCT len FROM {table} WHERE len BETWEEN ?1 AND ?2 ORDER BY len DESC"))?;
+            let mut st = conn.prepare(&format!(
+                "WITH RECURSIVE l(len) AS (
+                    SELECT min(len) FROM {table} WHERE len >= ?1
+                    UNION ALL
+                    SELECT (SELECT min(len) FROM {table} WHERE len > l.len) FROM l WHERE l.len < ?2
+                 )
+                 SELECT len FROM l WHERE len BETWEEN ?1 AND ?2 ORDER BY len DESC"
+            ))?;
             st.query_map(params![shortest, longest], |r| r.get(0))?.collect()
         };
         let (lens, lens6) = (lens("pfx2as", SHORTEST, 32)?, lens("pfx2as6", SHORTEST6, 128)?);
@@ -156,17 +164,24 @@ fn newest(log: &str) -> Option<&str> {
 
 /// Fetch the newest IPv4 and IPv6 tables and replace the stored ones. `fetch` gets a URL and returns the body (it is
 /// where the caller refuses to fetch while a measurement runs). Each table is replaced as soon as its own download
-/// parses, so a failed IPv6 fetch leaves the fresh IPv4 table; an old table stays if its own fetch fails.
-/// `FETCHED_AT` is written only after both.
+/// parses, so a failed IPv6 fetch leaves the fresh IPv4 table; an old table stays if its own fetch fails. A pair
+/// left half filled that way is finished, not fetched again: only the empty table is downloaded. `FETCHED_AT` is
+/// written only after both.
 pub async fn refresh<F, Fut>(store: &Arc<Store>, fetch: F) -> Result<(), String>
 where
     F: Fn(String) -> Fut,
     Fut: Future<Output = Result<Vec<u8>, String>>,
 {
-    let path = fetch_table(store, &fetch, LOG_URL, DIR_URL, false).await?;
-    store.put(SOURCE, &path);
-    let path6 = fetch_table(store, &fetch, LOG6_URL, DIR6_URL, true).await?;
-    store.put(SOURCE6, &path6);
+    let (have4, have6) = store.pfx2as_filled();
+    let half = have4 != have6;
+    if !(half && have4) {
+        let path = fetch_table(store, &fetch, LOG_URL, DIR_URL, false).await?;
+        store.put(SOURCE, &path);
+    }
+    if !(half && have6) {
+        let path6 = fetch_table(store, &fetch, LOG6_URL, DIR6_URL, true).await?;
+        store.put(SOURCE6, &path6);
+    }
     store.put(FETCHED_AT, &crate::bench::now_ms());
     Ok(())
 }
@@ -181,7 +196,7 @@ where
     let path = newest(&log).ok_or("CAIDA's file list has no entries.")?.to_string();
     let gz = fetch(format!("{dir_url}{path}")).await?;
     let s = store.clone();
-    let rows = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let lines = BufReader::new(GzDecoder::new(&gz[..]).take(super::BODY_MAX as u64)).lines();
         let rows = lines.map_while(Result::ok).filter_map(|l| parse_line(&l));
         if v6 {
@@ -189,13 +204,13 @@ where
         } else {
             s.pfx2as_replace(rows.filter_map(|r| if let Row::V4(p, l, a, m) = r { Some((p, l, a, m)) } else { None }))
         }
-        .map_err(|e| e.to_string())
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => "CAIDA's table had no rows.".to_string(),
+            e => e.to_string(),
+        })
     })
     .await
     .map_err(|e| e.to_string())??;
-    if rows == 0 {
-        return Err("CAIDA's table had no rows.".into());
-    }
     Ok(path.rsplit('/').next().unwrap_or(&path).to_string())
 }
 
@@ -803,7 +818,11 @@ pub(crate) mod tests {
         let files = Scratch(temp_path());
         let store = Store::open(files.0.clone()).unwrap();
         store.pfx2as_replace(rows.map(|(p, len, asn, moas)| (p & mask(len), len, asn, moas))).unwrap();
-        store.pfx2as6_replace(rows6.map(|(p, len, asn, moas)| (p & mask6(len), len, asn, moas))).unwrap();
+        // A fresh store's IPv6 table is already empty, and a replace with no rows is refused.
+        let mut rows6 = rows6.map(|(p, len, asn, moas)| (p & mask6(len), len, asn, moas)).peekable();
+        if rows6.peek().is_some() {
+            store.pfx2as6_replace(rows6).unwrap();
+        }
         Table { pfx: Pfx2as::open(&store).unwrap(), store, _files: files }
     }
 
@@ -830,14 +849,15 @@ pub(crate) mod tests {
             [(0x2001_0db8_u128 << 96, 32, 6, false)].into_iter(),
         );
         assert_eq!((t.asn_of(v4), t.asn_of(v6), t.is_empty()), (Some(100), Some(6), false));
-        // A refresh beside it changes one table and empties the other; the snapshot answers as before.
+        // A refresh beside it changes one table; the snapshot answers as before.
         t.store.pfx2as_replace([(u32::from(Ipv4Addr::new(198, 51, 100, 0)), 24, 999, false)].into_iter()).unwrap();
-        t.store.pfx2as6_replace(std::iter::empty()).unwrap();
-        assert!(t.store.pfx2as_empty());
         assert_eq!((t.asn_of(v4), t.asn_of(v6), t.is_empty()), (Some(100), Some(6), false));
+        // A download that parsed to nothing is refused and leaves the other table as it was.
+        assert!(matches!(t.store.pfx2as6_replace(std::iter::empty()), Err(rusqlite::Error::QueryReturnedNoRows)));
+        assert!(!t.store.pfx2as_empty());
         // The next open sees the refresh.
         let fresh = Pfx2as::open(&t.store).unwrap();
-        assert_eq!((fresh.asn_of(v4), fresh.asn_of(v6), fresh.is_empty()), (Some(999), None, true));
+        assert_eq!((fresh.asn_of(v4), fresh.asn_of(v6), fresh.is_empty()), (Some(999), Some(6), false));
     }
 
     #[test]
@@ -1173,5 +1193,51 @@ pub(crate) mod tests {
         assert!(!distinct_owner(Some("Cloudflare, Inc."), "CLOUDFLARE INC"));
         assert!(distinct_owner(None, "Example, Inc."));
         assert!(!distinct_owner(None, " "));
+    }
+
+    /// An IPv6 download that fails after the IPv4 table was stored leaves half a pair; the next refresh fetches only
+    /// the IPv6 side, and a refresh of a full pair fetches both again.
+    #[tokio::test]
+    async fn a_half_fetched_pair_is_finished_without_fetching_the_filled_table_again() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        fn gz(rows: &str) -> Vec<u8> {
+            use std::io::Write;
+            let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            e.write_all(rows.as_bytes()).unwrap();
+            e.finish().unwrap()
+        }
+        let files = Scratch(temp_path());
+        let store = Arc::new(Store::open(files.0.clone()).unwrap());
+        let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+        let v6_down = Arc::new(AtomicBool::new(true));
+        let fetch = |url: String| {
+            let (asked, v6_down) = (asked.clone(), v6_down.clone());
+            async move {
+                asked.lock().unwrap().push(url.clone());
+                if url.ends_with("pfx2as-creation.log") {
+                    Ok(b"# header\n1\t1\t2026/11/table.pfx2as.gz\n".to_vec())
+                } else if url.starts_with(DIR6_URL) {
+                    if v6_down.load(Ordering::SeqCst) { Err("timed out".to_string()) } else { Ok(gz("2001:db8::\t32\t64500\n")) }
+                } else {
+                    Ok(gz("198.51.100.0\t24\t64496\n"))
+                }
+            }
+        };
+        let err = refresh(&store, &fetch).await.unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+        assert_eq!(store.pfx2as_filled(), (true, false));
+        assert!(store.get::<i64>(FETCHED_AT).is_none());
+
+        v6_down.store(false, Ordering::SeqCst);
+        asked.lock().unwrap().clear();
+        refresh(&store, &fetch).await.unwrap();
+        let urls = asked.lock().unwrap().clone();
+        assert!(urls.len() == 2 && urls.iter().all(|u| u.starts_with(DIR6_URL)), "{urls:?}");
+        assert_eq!(store.pfx2as_filled(), (true, true));
+        assert!(store.get::<i64>(FETCHED_AT).is_some());
+
+        asked.lock().unwrap().clear();
+        refresh(&store, &fetch).await.unwrap();
+        assert_eq!(asked.lock().unwrap().len(), 4);
     }
 }

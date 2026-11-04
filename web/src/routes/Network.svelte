@@ -32,7 +32,9 @@
     {#snippet actions()}
       {#if view === 'map'}
         {#if nm.running}
-          <span class="progress" role="status">Mapping{prog ? `, ${prog.done} of ${prog.total}` : ''}</span>
+          <span class="progress" role="status"
+            >{prog ? `Mapping, ${prog.done} of ${prog.total}` : nm.data?.fetching ? 'Fetching the prefix table' : 'Mapping'}</span
+          >
           <button class="btn" onclick={nm.cancel}>Cancel</button>
         {:else}
           <button class="btn primary" disabled={!nm.loaded || blocked} title="Trace the way to each destination and draw where your ISP hands it off" onclick={nm.start}>

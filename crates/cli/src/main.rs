@@ -121,6 +121,13 @@ fn open_state(cli: &Cli, calibrate: bool) -> Arc<AppState> {
     })
 }
 
+/// Leave with `code` once the database is folded away: `process::exit` runs no destructors, so without this a one-shot
+/// command leaves the journal for the next open to recover.
+fn exit(app: &AppState, code: i32) -> ! {
+    app.close();
+    std::process::exit(code)
+}
+
 async fn trace(cli: &Cli, target: &str) {
     use recursa_engine::trace::{self, TraceCap};
     let fail = |msg: &str| -> ! {
@@ -269,10 +276,10 @@ async fn main() {
                 if plugin {
                     let c = recursa_engine::ntp_report::check(&[], &skipped, warning, critical);
                     println!("{}", c.line);
-                    std::process::exit(c.state.into());
+                    exit(&app, c.state.into());
                 }
                 eprintln!("Nothing to ask: to be gentle, every server picked is being left alone for now.");
-                std::process::exit(1);
+                exit(&app, 1);
             }
             if !plugin {
                 let custom = recursa_engine::ntp::CUSTOM_SPACING.as_secs();
@@ -298,7 +305,7 @@ async fn main() {
             if plugin {
                 let c = recursa_engine::ntp_report::check(&results, &skipped, warning, critical);
                 println!("{}", c.line);
-                std::process::exit(c.state.into());
+                exit(&app, c.state.into());
             }
             match format.unwrap_or(NtpFormat::Table) {
                 NtpFormat::Json => println!("{}", recursa_engine::ntp_report::to_json(&results, consensus.as_ref())),
@@ -365,7 +372,7 @@ async fn main() {
                 Ok(h) => h,
                 Err(e) => {
                     eprintln!("{}", e.error);
-                    std::process::exit(2);
+                    exit(&app, 2);
                 }
             };
             let (mut rx, _) = h.subscribe();
@@ -607,7 +614,7 @@ async fn serve(cli: Cli) {
         r = axum::serve(listener, server::router(srv)) => r.expect("server"),
         _ = tokio::signal::ctrl_c() => eprintln!("\nStopped."),
     }
-    app.store.close();
+    app.close();
     if let Some(p) = page {
         let _ = std::fs::remove_file(p);
     }

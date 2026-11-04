@@ -15,7 +15,7 @@ pub mod rdap;
 pub mod rdns;
 pub mod say;
 
-use crate::app::AppState;
+use crate::app::{AppState, FlagGuard};
 use crate::bench;
 use crate::catalog::is_private;
 use crate::cymru;
@@ -251,22 +251,6 @@ pub(crate) fn latest_traces(store: &crate::store::Store, now: i64) -> Option<Vec
 // Downloads
 // ---------------------------------------------------------------------------------------------
 
-/// A flag held for as long as this lives; the `measuring` flag is set for the trace phase only.
-struct Held(Arc<AtomicBool>);
-
-impl Held {
-    fn set(flag: &Arc<AtomicBool>) -> Held {
-        flag.store(true, Ordering::SeqCst);
-        Held(flag.clone())
-    }
-}
-
-impl Drop for Held {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
-    }
-}
-
 fn gunzip(body: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let mut out = Vec::new();
@@ -326,23 +310,40 @@ async fn fetch_asrel(app: &Arc<AppState>) -> Result<(), String> {
     .await
 }
 
+/// The prefix-to-AS table when it is empty: fetched here, or waited for while a background refresh is filling it
+/// (likely just after an update that dropped the tables), rather than downloaded a second time.
+async fn ensure_pfx2as(app: &Arc<AppState>) -> Result<(), String> {
+    while app.store.pfx2as_empty() {
+        if app.netmap.cancel.load(Ordering::SeqCst) {
+            return Err("Cancelled.".into());
+        }
+        if let Some(_fetching) = FlagGuard::claim(&app.netmap.fetching) {
+            return fetch_pfx2as(app).await.map_err(|e| format!("The prefix-to-AS table could not be fetched: {e}"));
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    Ok(())
+}
+
 /// Fetch whatever is stale, on its own time: the prefix table daily, the AS relationships monthly, and PeeringDB's changes once the user allowed it.
-/// Waits for a running measurement, and is skipped while another download is going.
+/// Each download claims the fetching flag for itself, so a run that needs the prefix table waits for that download
+/// alone; one that can't claim it (a run or a clear got there first) ends the refresh, which the next trigger resumes.
 pub(crate) fn refresh_in_background(app: &Arc<AppState>) {
     let app = app.clone();
     tokio::spawn(async move {
-        if app.netmap.fetching.swap(true, Ordering::SeqCst) {
-            return;
-        }
         let now = bench::now_ms();
         let stale = |at: Option<i64>| at.is_none_or(|t| now - t > REFRESH_MS);
         if app.store.pfx2as_empty() || stale(app.store.get(attr::FETCHED_AT)) {
+            // Held however the download ends: one that panics mustn't leave the flag set and refuse every clear.
+            let Some(_fetching) = FlagGuard::claim(&app.netmap.fetching) else { return };
             let _ = fetch_pfx2as(&app).await;
         }
         if app.store.asrel_count() == 0 || app.store.get::<i64>(asrel::FETCHED_AT).is_none_or(|t| now - t > asrel::REFRESH_MS) {
+            let Some(_fetching) = FlagGuard::claim(&app.netmap.fetching) else { return };
             let _ = fetch_asrel(&app).await;
         }
         if app.store.get::<bool>(pdb::ACCEPTED) == Some(true) && stale(Pdb::last_sync(&app.store)) {
+            let Some(_fetching) = FlagGuard::claim(&app.netmap.fetching) else { return };
             let fetch = |url: String| {
                 let app = app.clone();
                 async move { get(&app, url, true).await }
@@ -351,7 +352,6 @@ pub(crate) fn refresh_in_background(app: &Arc<AppState>) {
                 eprintln!("PeeringDB sync stopped: {e}");
             }
         }
-        app.netmap.fetching.store(false, Ordering::SeqCst);
     });
 }
 
@@ -617,9 +617,7 @@ pub(crate) async fn run(app: &Arc<AppState>) -> Result<MapRun, String> {
     let (t0, ts) = (Instant::now(), bench::now_ms());
     app.netmap.cancel.store(false, Ordering::SeqCst);
     *app.netmap.progress.lock().unwrap() = None;
-    if app.store.pfx2as_empty() {
-        fetch_pfx2as(app).await.map_err(|e| format!("The prefix-to-AS table could not be fetched: {e}"))?;
-    }
+    ensure_pfx2as(app).await?;
     let roll = app.run_roll_call().await;
     let you = You { asn: roll.you.asn, holder: roll.you.holder.clone(), owner: None, city: roll.you.city.clone() };
     let coords = roll.you.lat.zip(roll.you.lon);
@@ -642,7 +640,7 @@ pub(crate) async fn run(app: &Arc<AppState>) -> Result<MapRun, String> {
     let (a, y, p, d) = (app.clone(), you.clone(), pfx.clone(), pdb.clone());
     let (mut traces, skipped_by_trace, unknown) = tokio::task::spawn_blocking(move || {
         // The measuring flag covers the trace phase only: the grouping and name lookups after it are not timed.
-        let measuring = Held::set(&a.measuring);
+        let measuring = FlagGuard::set(&a.measuring);
         let inp = Inputs { app: &a, pfx: &p, pdb: &d, you: &y, coords, ipv6 };
         let mut skipped = Vec::new();
         let traces = trace_all(&inp, ts, t0, &targets, &mut skipped);
@@ -722,6 +720,37 @@ mod tests {
 
     fn edge(cdn: &'static str, ip: &str) -> crate::edge::EdgeSite {
         crate::edge::EdgeSite { cdn, site: Some("IAD".into()), site_city: None, ip: ip.parse().ok(), asn: None, error: None }
+    }
+
+    #[tokio::test]
+    async fn a_run_needing_the_prefix_table_stops_when_cancelled_before_fetching_or_waiting() {
+        let app = crate::app::tests::app();
+        assert!(app.store.pfx2as_empty());
+        app.netmap.cancel.store(true, Ordering::SeqCst);
+        // Nothing holds the flag: the cancel still comes before any download.
+        assert_eq!(ensure_pfx2as(&app).await.unwrap_err(), "Cancelled.");
+        assert!(app.store.get::<i64>(attr::FETCHED_AT).is_none() && !app.netmap.fetching.load(Ordering::SeqCst));
+        // Another download holds it: the cancel is seen at once, and the flag stays that download's to release.
+        app.netmap.fetching.store(true, Ordering::SeqCst);
+        let t0 = Instant::now();
+        assert_eq!(ensure_pfx2as(&app).await.unwrap_err(), "Cancelled.");
+        assert!(t0.elapsed() < Duration::from_millis(400) && app.netmap.fetching.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn a_run_needing_the_prefix_table_waits_for_the_download_filling_it() {
+        let app = crate::app::tests::app();
+        app.netmap.fetching.store(true, Ordering::SeqCst);
+        let filler = app.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            filler.store.pfx2as_replace([(0xc633_6400, 24, 100, false)].into_iter()).unwrap();
+            filler.store.pfx2as6_replace([(0x2001_0db8_u128 << 96, 32, 6, false)].into_iter()).unwrap();
+            filler.netmap.fetching.store(false, Ordering::SeqCst);
+        });
+        ensure_pfx2as(&app).await.unwrap();
+        // Filled by the other download, not fetched again.
+        assert!(app.store.get::<i64>(attr::FETCHED_AT).is_none());
     }
 
     #[test]
