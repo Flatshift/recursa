@@ -777,7 +777,7 @@ impl Exchanger for TcpX {
     }
 }
 
-pub(crate) fn root_store() -> rustls::RootCertStore {
+fn root_store() -> rustls::RootCertStore {
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     roots
@@ -794,6 +794,20 @@ fn tls_config(alpn_h2: bool) -> Arc<rustls::ClientConfig> {
         Arc::new(c)
     })
     .clone()
+}
+
+/// The configuration for NTS key establishment (RFC 8915): TLS 1.3 only, ALPN `ntske/1`. Built once.
+pub(crate) fn ntske_tls_config() -> Arc<rustls::ClientConfig> {
+    static NTSKE: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    NTSKE
+        .get_or_init(|| {
+            let mut c = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_root_certificates(root_store())
+                .with_no_client_auth();
+            c.alpn_protocols = vec![b"ntske/1".to_vec()];
+            Arc::new(c)
+        })
+        .clone()
 }
 
 pub(crate) struct DotX {

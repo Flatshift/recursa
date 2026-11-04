@@ -537,12 +537,8 @@ fn ke_session(host: &str, port: u16, timeout: Duration) -> (NtsKe, Option<NtsKey
         let tcp = TcpStream::connect_timeout(&addr, deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(1)))
             .map_err(|e| (ke_failure(&e), e.to_string()))?;
         let tcp = net::Bounded::until(tcp, deadline);
-        let mut config = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_root_certificates(crate::net::root_store())
-            .with_no_client_auth();
-        config.alpn_protocols = vec![b"ntske/1".to_vec()];
         let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|e| ("ke_handshake_failed", e.to_string()))?;
-        let conn = rustls::ClientConnection::new(std::sync::Arc::new(config), name).map_err(|e| ("ke_handshake_failed", e.to_string()))?;
+        let conn = rustls::ClientConnection::new(net::ntske_tls_config(), name).map_err(|e| ("ke_handshake_failed", e.to_string()))?;
         let mut tls = rustls::StreamOwned::new(conn, tcp);
         tls.write_all(&nts_request()).map_err(|e| (ke_failure(&e), e.to_string()))?;
         tls.flush().map_err(|e| (ke_failure(&e), e.to_string()))?;

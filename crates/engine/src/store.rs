@@ -136,6 +136,8 @@ impl Store {
                prefix INTEGER NOT NULL, len INTEGER NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS pfx2as6(
                prefix BLOB NOT NULL, len INTEGER NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL);
+             CREATE INDEX IF NOT EXISTS pfx2as_len_prefix ON pfx2as(len, prefix);
+             CREATE INDEX IF NOT EXISTS pfx2as6_len_prefix ON pfx2as6(len, prefix);
              CREATE TABLE IF NOT EXISTS asrel(
                a INTEGER NOT NULL, b INTEGER NOT NULL, rel INTEGER NOT NULL, PRIMARY KEY (a, b));
              CREATE INDEX IF NOT EXISTS asrel_b ON asrel(b);
@@ -175,6 +177,8 @@ impl Store {
                 return Err(e);
             }
         }
+        // Left over from older builds.
+        conn.execute_batch("DROP TABLE IF EXISTS isp_checks")?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version < 1
             && let Err(e) = build_rollups(&mut conn)
@@ -350,6 +354,15 @@ impl Store {
     /// The connection for a long read: the read-only one, else `conn`.
     fn rd(&self) -> MutexGuard<'_, Connection> {
         self.reader.as_ref().unwrap_or(&self.conn).lock().unwrap()
+    }
+
+    /// Whether any connection, in any process, has committed since the last call with this `seen` (updated here);
+    /// true the first time.
+    pub fn changed_since(&self, seen: &mut Option<i64>) -> bool {
+        match self.rd().query_row("PRAGMA data_version", [], |r| r.get(0)) {
+            Ok(v) => seen.replace(v) != Some(v),
+            Err(_) => true,
+        }
     }
 
     /// Hand the hourly rollups from `since` on to `f`, in hour order, on the read-only
@@ -538,8 +551,9 @@ pub(crate) const HISTORY: [&str; 10] = [
 /// What the Data pane clears (see [`Store::clear`]).
 impl Store {
     /// Empty the cache and the downloaded reference tables, and delete the settings in `forget`; with `all`, every
-    /// other table and setting too, except `keep`. One transaction, then VACUUM and a WAL checkpoint (skipped if
-    /// another process has the database busy). Returns the bytes the database files shrank by.
+    /// other table and setting too, except `keep`. One transaction, then VACUUM (its failure is the error: the rows
+    /// are gone, the space not yet) and a WAL checkpoint, skipped if another process has the database busy. Returns
+    /// the bytes the database files shrank by.
     pub fn clear(&self, all: bool, forget: &[&str], keep: &str) -> rusqlite::Result<u64> {
         let size = || {
             let wal = format!("{}-wal", self.path.display());
@@ -551,8 +565,6 @@ impl Store {
         for t in DOWNLOADED.iter().chain(if all { HISTORY.iter() } else { [].iter() }) {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
         }
-        // Left over from older builds.
-        tx.execute("DROP TABLE IF EXISTS isp_checks", [])?;
         if all {
             tx.execute("DELETE FROM settings WHERE key != ?1", params![keep])?;
         } else {
@@ -561,7 +573,7 @@ impl Store {
             }
         }
         tx.commit()?;
-        let _ = c.execute_batch("VACUUM");
+        c.execute_batch("VACUUM")?;
         let _ = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
         Ok(before.saturating_sub(size()))
     }
@@ -730,14 +742,17 @@ impl Store {
         Ok(n)
     }
 
-    /// Hand every prefix-to-network row to `f`, on the read-only connection.
-    pub fn pfx2as_each(&self, mut f: impl FnMut(u32, u8, u32, bool)) {
+    /// The first of `cands` (length, masked network) announced in the prefix table, as (length, network, origin, whether
+    /// several networks announce it), on the read-only connection.
+    pub fn pfx2as_find(&self, cands: impl Iterator<Item = (u8, u32)>) -> Option<(u8, u32, u32, bool)> {
         let c = self.rd();
-        let Ok(mut st) = c.prepare("SELECT prefix, len, asn, moas FROM pfx2as") else { return };
-        let Ok(rows) = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))) else { return };
-        for (p, l, a, m) in rows.flatten() {
-            f(p, l, a, m);
+        let mut st = c.prepare_cached("SELECT asn, moas FROM pfx2as WHERE len = ?1 AND prefix = ?2").ok()?;
+        for (len, prefix) in cands {
+            if let Ok(Some((asn, moas))) = st.query_row(params![len, prefix], |r| Ok((r.get(0)?, r.get(1)?))).optional() {
+                return Some((len, prefix, asn, moas));
+            }
         }
+        None
     }
 
     pub fn pfx2as_count(&self) -> usize {
@@ -763,16 +778,17 @@ impl Store {
         Ok(n)
     }
 
-    /// Hand every IPv6 prefix-to-network row to `f`, on the read-only connection.
-    pub fn pfx2as6_each(&self, mut f: impl FnMut(u128, u8, u32, bool)) {
+    /// [`Store::pfx2as_find`] for the IPv6 table.
+    pub fn pfx2as6_find(&self, cands: impl Iterator<Item = (u8, u128)>) -> Option<(u8, u128, u32, bool)> {
         let c = self.rd();
-        let Ok(mut st) = c.prepare("SELECT prefix, len, asn, moas FROM pfx2as6") else { return };
-        let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get(1)?, r.get(2)?, r.get(3)?))) else { return };
-        for (p, l, a, m) in rows.flatten() {
-            if let Ok(b) = <[u8; 16]>::try_from(p.as_slice()) {
-                f(u128::from_be_bytes(b), l, a, m);
+        let mut st = c.prepare_cached("SELECT asn, moas FROM pfx2as6 WHERE len = ?1 AND prefix = ?2").ok()?;
+        for (len, prefix) in cands {
+            let row = st.query_row(params![len, &prefix.to_be_bytes()[..]], |r| Ok((r.get(0)?, r.get(1)?))).optional();
+            if let Ok(Some((asn, moas))) = row {
+                return Some((len, prefix, asn, moas));
             }
         }
+        None
     }
 
     pub fn pfx2as6_count(&self) -> usize {
@@ -968,6 +984,18 @@ mod tests {
     }
 
     #[test]
+    fn opening_drops_the_table_left_by_older_builds() {
+        let path = temp_path();
+        Connection::open(&path).unwrap().execute_batch("CREATE TABLE isp_checks(id INTEGER)").unwrap();
+        let store = Store::open(path.clone()).unwrap();
+        let n: i64 =
+            store.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = 'isp_checks'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+        drop(store);
+        remove(&path);
+    }
+
+    #[test]
     fn border_pairs_retire_and_samples_prune() {
         let path = temp_path();
         let store = Store::open(path.clone()).unwrap();
@@ -1115,16 +1143,14 @@ mod tests {
         // The prefix table is swapped in one go: the second load leaves none of the first.
         assert_eq!(store.pfx2as_replace([(0x0800_0000, 8, 1, false), (0x0808_0800, 24, 15169, true)].into_iter()).unwrap(), 2);
         assert_eq!(store.pfx2as_replace([(0x0102_0300, 24, 7, false)].into_iter()).unwrap(), 1);
-        let mut rows = Vec::new();
-        store.pfx2as_each(|p, l, a, m| rows.push((p, l, a, m)));
-        assert_eq!((store.pfx2as_count(), rows), (1, vec![(0x0102_0300, 24, 7, false)]));
+        let found = store.pfx2as_find([(8, 0x0800_0000), (24, 0x0102_0300)].into_iter());
+        assert_eq!((store.pfx2as_count(), found), (1, Some((24, 0x0102_0300, 7, false))));
         // The IPv6 table is the same, with 16-byte prefixes.
         let net6 = 0x2001_0db8_u128 << 96;
         assert_eq!(store.pfx2as6_replace([(net6, 32, 1, false), (net6 | (1 << 80), 48, 2, true)].into_iter()).unwrap(), 2);
         assert_eq!(store.pfx2as6_replace([(net6 | (1 << 80), 48, 7, true)].into_iter()).unwrap(), 1);
-        let mut rows6 = Vec::new();
-        store.pfx2as6_each(|p, l, a, m| rows6.push((p, l, a, m)));
-        assert_eq!((store.pfx2as6_count(), rows6), (1, vec![(net6 | (1 << 80), 48, 7, true)]));
+        let found6 = store.pfx2as6_find([(32, net6), (48, net6 | (1 << 80))].into_iter());
+        assert_eq!((store.pfx2as6_count(), found6), (1, Some((48, net6 | (1 << 80), 7, true))));
         // The relationship table is swapped whole too, and read by either side.
         store.asrel_replace(&[(9, 9, 0)]).unwrap();
         store.asrel_replace(&[(1299, 64500, -1), (2906, 64500, 0), (6461, 20055, -1)]).unwrap();

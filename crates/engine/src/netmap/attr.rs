@@ -44,11 +44,10 @@ pub struct Match {
     pub prefix: String,
 }
 
-/// Prefixes to their origin, probed by (length, masked address) from the longest down; one map per family.
-#[derive(Default)]
+/// Prefixes to their origin: a handle on the store's indexed tables, probed by (length, masked address) from the longest
+/// down, one table per family. Nothing is loaded into memory.
 pub struct Pfx2as {
-    map: HashMap<(u8, u32), (u32, bool)>,
-    map6: HashMap<(u8, u128), (u32, bool)>,
+    store: Arc<Store>,
 }
 
 fn mask(len: u8) -> u32 {
@@ -60,29 +59,14 @@ fn mask6(len: u8) -> u128 {
 }
 
 impl Pfx2as {
-    pub fn from_rows(rows: impl Iterator<Item = (u32, u8, u32, bool)>, rows6: impl Iterator<Item = (u128, u8, u32, bool)>) -> Pfx2as {
-        Pfx2as {
-            map: rows.map(|(prefix, len, asn, moas)| ((len, prefix & mask(len)), (asn, moas))).collect(),
-            map6: rows6.map(|(prefix, len, asn, moas)| ((len, prefix & mask6(len)), (asn, moas))).collect(),
-        }
-    }
-
-    pub fn load(store: &Store) -> Pfx2as {
-        let mut map = HashMap::new();
-        store.pfx2as_each(|prefix, len, asn, moas| {
-            map.insert((len, prefix), (asn, moas));
-        });
-        let mut map6 = HashMap::new();
-        store.pfx2as6_each(|prefix, len, asn, moas| {
-            map6.insert((len, prefix), (asn, moas));
-        });
-        Pfx2as { map, map6 }
+    pub fn new(store: Arc<Store>) -> Pfx2as {
+        Pfx2as { store }
     }
 
     /// The IPv4 table is empty. Databases from before the IPv6 table have none until the next refresh, and an IPv6
     /// hop is then unknown.
     pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        self.store.pfx2as_count() == 0
     }
 
     /// The longest announced prefix holding `addr`. Private, shared (carrier-grade NAT) and link-local space never
@@ -95,19 +79,13 @@ impl Pfx2as {
         match addr {
             IpAddr::V4(a) => {
                 let a = u32::from(a);
-                (SHORTEST..=32).rev().find_map(|len| {
-                    let net = a & mask(len);
-                    let &(asn, moas) = self.map.get(&(len, net))?;
-                    Some(Match { asn, moas, prefix: format!("{}/{len}", Ipv4Addr::from(net)) })
-                })
+                let (len, net, asn, moas) = self.store.pfx2as_find((SHORTEST..=32).rev().map(|len| (len, a & mask(len))))?;
+                Some(Match { asn, moas, prefix: format!("{}/{len}", Ipv4Addr::from(net)) })
             }
             IpAddr::V6(a) => {
                 let a = u128::from(a);
-                (SHORTEST6..=128).rev().find_map(|len| {
-                    let net = a & mask6(len);
-                    let &(asn, moas) = self.map6.get(&(len, net))?;
-                    Some(Match { asn, moas, prefix: format!("{}/{len}", Ipv6Addr::from(net)) })
-                })
+                let (len, net, asn, moas) = self.store.pfx2as6_find((SHORTEST6..=128).rev().map(|len| (len, a & mask6(len))))?;
+                Some(Match { asn, moas, prefix: format!("{}/{len}", Ipv6Addr::from(net)) })
             }
         }
     }
@@ -774,10 +752,18 @@ pub(crate) mod tests {
         Trace { target: ip(target), protocol: "icmp", rounds: 4, reached: true, elapsed_ms: 0.0, hops }
     }
 
+    /// A prefix table in a scratch store, masked by length.
+    pub fn table(rows: impl Iterator<Item = (u32, u8, u32, bool)>, rows6: impl Iterator<Item = (u128, u8, u32, bool)>) -> Pfx2as {
+        let store = Store::open(std::env::temp_dir().join(format!("recursa-pfx-{:x}.db", fastrand::u64(..)))).unwrap();
+        store.pfx2as_replace(rows.map(|(p, len, asn, moas)| (p & mask(len), len, asn, moas))).unwrap();
+        store.pfx2as6_replace(rows6.map(|(p, len, asn, moas)| (p & mask6(len), len, asn, moas))).unwrap();
+        Pfx2as::new(Arc::new(store))
+    }
+
     /// 198.51.100.0/24 is the ISP (AS100), 203.0.113.0/24 a carrier (AS200), 192.0.2.0/24 the content network (AS300).
     pub fn pfx() -> Pfx2as {
         let net = |s: &str| u32::from(s.parse::<Ipv4Addr>().unwrap());
-        Pfx2as::from_rows(
+        table(
             [(net("198.51.100.0"), 24, 100, false), (net("203.0.113.0"), 24, 200, false), (net("192.0.2.0"), 24, 300, false)].into_iter(),
             std::iter::empty(),
         )
@@ -1028,7 +1014,7 @@ pub(crate) mod tests {
     #[test]
     fn the_longest_prefix_wins_and_private_space_never_matches() {
         let net = |s: &str| u32::from(s.parse::<Ipv4Addr>().unwrap());
-        let t = Pfx2as::from_rows(
+        let t = table(
             [
                 (net("8.0.0.0"), 8, 1, false),
                 (net("8.8.0.0"), 16, 2, false),
@@ -1085,7 +1071,7 @@ pub(crate) mod tests {
         pdb.add_ix(31, "Equinix Ashburn");
         pdb.add_lan(31, "206.126.236.0/22");
         let net = |s: &str| u32::from(s.parse::<Ipv4Addr>().unwrap());
-        let pfx = Pfx2as::from_rows(
+        let pfx = table(
             [
                 (net("198.51.100.0"), 24, 100, false),
                 (net("203.0.113.0"), 24, 200, false),

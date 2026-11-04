@@ -782,12 +782,14 @@ impl AppState {
     /// pane). Holds the run slot throughout, so nothing is measuring or recording meanwhile. Answers with the bytes freed.
     async fn clear_data(self: &Arc<Self>, all: bool) -> Result<String, ApiError> {
         let held = self.claim_run().await?;
-        if self.netmap.fetching() || (all && self.intel.fetching()) {
+        // Claimed, not read: a refresh starting after a read would fill the tables being emptied.
+        let fetching = FlagGuard::claim(&self.netmap.fetching);
+        if fetching.is_none() || (all && self.intel.fetching()) {
             return Err(ApiError::new(409, "Wait for the download to finish."));
         }
         let app = self.clone();
         let freed = tokio::task::spawn_blocking(move || {
-            let _held = held;
+            let _held = (held, fetching);
             let dir = app.store.path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
             let mut freed = 0;
             // Turned off first, which deletes its files; the clear then drops the setting.
@@ -819,7 +821,6 @@ impl AppState {
                 *app.edges.lock().unwrap() = None;
                 *app.netmap.error.lock().unwrap() = None;
                 *app.netmap.progress.lock().unwrap() = None;
-                app.ntp_epoch.fetch_add(1, Ordering::SeqCst);
             }
             *app.live_sample.lock().unwrap() = None;
             // Left over from older builds. Only in the default data folder: beside a database opened elsewhere, a
@@ -1565,8 +1566,7 @@ mod tests {
              INSERT INTO pdb_netixlan(id) VALUES(1);
              INSERT INTO pdb_fac(id) VALUES(1);
              INSERT INTO pdb_netfac(id) VALUES(1);
-             INSERT INTO rdap_block VALUES(x'00', x'01', '{}', 1);
-             CREATE TABLE isp_checks(id INTEGER);",
+             INSERT INTO rdap_block VALUES(x'00', x'01', '{}', 1);",
         )
         .unwrap();
         for k in [
@@ -1608,11 +1608,6 @@ mod tests {
         q.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
     }
 
-    fn has_table(a: &AppState, name: &str) -> bool {
-        let c = rusqlite::Connection::open(&a.store.path).unwrap();
-        c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name=?1", [name], |r| r.get::<_, i64>(0)).unwrap() > 0
-    }
-
     #[tokio::test]
     async fn clear_cache_removes_downloaded_data_and_keeps_the_rest() {
         let (a, dir) = seeded();
@@ -1636,7 +1631,6 @@ mod tests {
             assert!(keys.iter().any(|k| k == kept), "{kept}");
         }
         assert!(a.monitor.borrow().enabled);
-        assert!(!has_table(&a, "isp_checks"));
         assert!(dir.join("isp").exists());
         #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
         assert!(dir.join("rpki").join("vrps.bin").exists() && keys.iter().any(|k| k == "rpki_local"));
@@ -1658,7 +1652,6 @@ mod tests {
         }
         // Monitoring is written back as off, for any other process on this database.
         assert_eq!(setting_keys(&a), ["border_monitor", "monitor", "ntp_asked", "ntp_monitor"]);
-        assert!(!has_table(&a, "isp_checks"));
         assert!(watching.has_changed().unwrap());
         assert_eq!(*a.monitor.borrow(), MonitorConfig::default());
         assert_eq!(*a.ntp_monitor.borrow(), NtpMonitorConfig::default());
@@ -1684,6 +1677,19 @@ mod tests {
             assert_eq!(a.call("DELETE", path, Value::Null).await.unwrap_err().status, 409, "{path}");
         }
         assert_eq!(count(&a, "runs"), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn clearing_is_refused_while_a_download_is_going_and_claims_the_slot() {
+        let (a, dir) = seeded();
+        a.netmap.fetching.store(true, Ordering::SeqCst);
+        assert_eq!(a.call("DELETE", "/api/cache", Value::Null).await.unwrap_err().status, 409);
+        assert_eq!(count(&a, "asrel"), 1);
+        a.netmap.fetching.store(false, Ordering::SeqCst);
+        a.call("DELETE", "/api/cache", Value::Null).await.unwrap();
+        // Released with the clear: the next refresh may start.
+        assert!(!a.netmap.fetching.load(Ordering::SeqCst));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -533,7 +533,7 @@ mod tests {
     fn word_rules_moas_and_the_withheld_headline() {
         // Two networks announce 198.51.100.0/24 here, so the shared /30 is not enough.
         let net = |s: &str| u32::from(s.parse::<std::net::Ipv4Addr>().unwrap());
-        let pfx2 = super::super::attr::Pfx2as::from_rows(
+        let pfx2 = super::super::attr::tests::table(
             [(net("198.51.100.0"), 24, 100, true), (net("203.0.113.0"), 24, 200, false), (net("192.0.2.0"), 24, 300, false)].into_iter(),
             std::iter::empty(),
         );

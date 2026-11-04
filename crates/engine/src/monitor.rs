@@ -51,10 +51,13 @@ pub fn spawn(app: Arc<AppState>) {
         let mut last_cycle = 0i64;
         // Held while this process records monitoring for its database.
         let mut owner: Option<lock::Guard> = None;
+        let mut seen = None;
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;
-            // Another process may have switched it on or off.
-            app.reload_monitors();
+            // Another process may have switched it on or off: re-read once something has written to the database.
+            if app.store.changed_since(&mut seen) {
+                app.reload_monitors();
+            }
             let cfg = app.monitor.borrow().clone();
             if !cfg.enabled {
                 // Let another Recursa process monitor this database instead; switched on again, start afresh.

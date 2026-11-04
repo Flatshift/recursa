@@ -240,10 +240,13 @@ pub fn spawn(app: Arc<AppState>) {
         let mut last_discovery = 0i64;
         let mut misses: HashMap<i64, u32> = HashMap::new();
         let mut owner: Option<lock::Guard> = None;
+        let mut seen = None;
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;
-            // Another process may have switched it on or off.
-            app.reload_border_monitor();
+            // Another process may have switched it on or off: re-read once something has written to the database.
+            if app.store.changed_since(&mut seen) {
+                app.reload_border_monitor();
+            }
             let cfg = app.border_monitor.borrow().clone();
             if !cfg.enabled || trace::available() != TraceCap::Ok {
                 owner = None;

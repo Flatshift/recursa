@@ -214,15 +214,8 @@ pub struct State {
     pub error: Mutex<Option<String>>,
     /// A run is going, from the request to the end of its post-processing.
     pub running: AtomicBool,
-    /// A dataset download is going.
-    fetching: AtomicBool,
-}
-
-impl State {
-    /// Whether a dataset download is going.
-    pub(crate) fn fetching(&self) -> bool {
-        self.fetching.load(Ordering::SeqCst)
-    }
+    /// A dataset download is going; clearing the data claims it too.
+    pub(crate) fetching: Arc<AtomicBool>,
 }
 
 pub fn datasets(store: &crate::store::Store) -> Datasets {
@@ -638,7 +631,7 @@ pub(crate) async fn run(app: &Arc<AppState>) -> Result<MapRun, String> {
         let (targets, skipped) = resolve_targets(&Resolve::new(system.clone()), &system, &roll, ipv6);
         // PeeringDB tables already on disk stay unused while the user has it off.
         let pdb = if a.store.get::<bool>(pdb::ACCEPTED) == Some(true) { Pdb::load(&a.store) } else { Pdb::default() };
-        (targets, skipped, Arc::new(Pfx2as::load(&a.store)), Arc::new(pdb), ipv6)
+        (targets, skipped, Arc::new(Pfx2as::new(a.store.clone())), Arc::new(pdb), ipv6)
     })
     .await
     .map_err(|e| e.to_string())?;
