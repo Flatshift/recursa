@@ -103,7 +103,7 @@
   const svgW = $derived(Math.round(tree.width * scale));
   const svgH = $derived(Math.round(tree.height * scale));
   const zoomBy = (f: number) => (zoom = Math.min(2, Math.max(0.4, scale * f)));
-  const more = $derived(groups.length > 0 && svgW + 24 - scrolled > viewW + 1);
+  const clipped = $derived(groups.length > 0 && svgW + 24 - scrolled > viewW + 1);
 
   // One row per distinct finding: destinations that were found to leave the same way share a row.
   interface Finding {
@@ -120,7 +120,7 @@
       const f = out.find((o) => o.key === key);
       if (f) {
         f.ids.push(c.target);
-        if (t) f.names.push(siteName(t));
+        if (t && !f.names.includes(siteName(t))) f.names.push(siteName(t));
       } else out.push({ key, claim: c, names: t ? [siteName(t)] : [c.target], ids: [c.target] });
     }
     return out;
@@ -147,7 +147,7 @@
   const path = (ids: string[]) => groups.filter((g) => g.members.length && g.targets.some((t) => ids.includes(t))).sort((a, b) => a.ttl_from - b.ttl_from);
 </script>
 
-<div class="map panel" class:more class:running>
+<div class="map panel" class:clipped class:running>
   <div class="scroller" bind:clientWidth={viewW} onscroll={(e) => (scrolled = e.currentTarget.scrollLeft)}>
     {#if groups.length}
       <svg width={svgW} height={svgH} viewBox="0 0 {tree.width} {tree.height}" role="img" aria-label={label}>
@@ -351,7 +351,7 @@
     font-size: var(--t-sm);
     color: var(--ink-3);
   }
-  .map.more::after {
+  .map.clipped::after {
     content: '';
     position: absolute;
     top: 0;

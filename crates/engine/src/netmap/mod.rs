@@ -493,17 +493,19 @@ fn holder_of(app: &AppState, res: &Resolve, asn: u32, online: bool) -> Option<St
     Some(name)
 }
 
-/// Name each hop's network, and return the names of the networks of destinations that never answered: those have no
-/// router of their own to carry the name.
-fn fill_holders(traces: &mut [MapTrace], pfx: &Pfx2as, mut name: impl FnMut(u32) -> Option<String>) -> HashMap<u32, String> {
+/// Name each hop's network, and return the names no router carries: the networks of destinations that never answered,
+/// and the owners of the exchange ports along the way, which a claim compares with the network beyond the exchange.
+fn fill_holders(traces: &mut [MapTrace], pfx: &Pfx2as, pdb: &Pdb, mut name: impl FnMut(u32) -> Option<String>) -> HashMap<u32, String> {
     let mut seen: HashMap<u32, Option<String>> = HashMap::new();
     for h in traces.iter_mut().flat_map(|t| t.trace.hops.iter_mut()) {
         if let Some(asn) = h.asn {
             h.holder = seen.entry(asn).or_insert_with(|| name(asn)).clone();
         }
     }
-    let ends: Vec<u32> = traces.iter().filter(|t| !t.trace.reached).filter_map(|t| pfx.asn_of(t.trace.target)).collect();
-    ends.into_iter().filter_map(|a| seen.entry(a).or_insert_with(|| name(a)).clone().map(|n| (a, n))).collect()
+    let ends = traces.iter().filter(|t| !t.trace.reached).filter_map(|t| pfx.asn_of(t.trace.target));
+    let ports = traces.iter().flat_map(|t| &t.trace.hops).flat_map(|h| &h.addrs).filter_map(|a| pdb.port_of(*a)).map(|p| p.asn);
+    let more: Vec<u32> = ends.chain(ports).collect();
+    more.into_iter().filter_map(|a| seen.entry(a).or_insert_with(|| name(a)).clone().map(|n| (a, n))).collect()
 }
 
 struct Inputs<'a> {
@@ -558,7 +560,7 @@ fn assemble(
         .filter(|(_, i)| traces[**i].target.family == 4)
         .map(|(((id, segs), g), i)| say::Path { id, name: &traces[*i].target.name, segs, groups: g })
         .collect();
-    let (claims, headline) = say::say(&say_paths, &groups, &edges, inp.you.asn, inp.pdb, month.as_deref());
+    let (claims, headline) = say::say(&say_paths, &groups, &edges, inp.you.asn, inp.pdb, month.as_deref(), holders);
     drop(say_paths);
     drop(paths);
     MapRun { ts, elapsed_ms, you: inp.you.clone(), traces, ipv6: inp.ipv6, groups, edges, claims, headline, skipped }
@@ -615,7 +617,7 @@ fn trace_all(inp: &Inputs, ts: i64, t0: Instant, targets: &[Target], skipped: &m
                     let mut so_far: Vec<(usize, MapTrace)> = d.traces.clone();
                     so_far.sort_by_key(|(i, _)| *i);
                     let mut traces: Vec<MapTrace> = so_far.into_iter().map(|(_, t)| t).collect();
-                    let holders = fill_holders(&mut traces, inp.pfx, |asn| holder_of(inp.app, &res, asn, false));
+                    let holders = fill_holders(&mut traces, inp.pfx, inp.pdb, |asn| holder_of(inp.app, &res, asn, false));
                     let none = HashMap::new();
                     let partial = assemble(
                         inp,
@@ -711,7 +713,7 @@ pub(crate) async fn run(app: &Arc<AppState>) -> Result<MapRun, String> {
     };
     let (a, y, p, d) = (app.clone(), you, pfx, pdb);
     let run = tokio::task::spawn_blocking(move || {
-        let holders = fill_holders(&mut traces, &p, |asn| holder_of(&a, &res, asn, true));
+        let holders = fill_holders(&mut traces, &p, &d, |asn| holder_of(&a, &res, asn, true));
         let mut y = y;
         if let (Some(asn), None) = (y.asn, &y.holder) {
             y.holder = holder_of(&a, &res, asn, true);
