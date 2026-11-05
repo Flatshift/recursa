@@ -205,7 +205,7 @@
       </a>
     {/if}
     </div>
-    <button class="gear" aria-label="Settings" title={mobile ? undefined : `Settings${desktop ? ` (${shortcut('cmd+,')})` : ''}`} onclick={settings}><Icon name="gear" size={mobile ? 20 : 15} /></button>
+    <button class="gear" aria-label="Settings" title={mobile ? undefined : `Settings${desktop ? ` (${shortcut('cmd+,')})` : ''}`} onclick={settings}><Icon name="gear" size={20} /></button>
   </div>
 </nav>
 
@@ -678,8 +678,8 @@
   .gear {
     display: grid;
     place-items: center;
-    width: 28px;
-    height: 26px;
+    width: 38px;
+    height: 38px;
     border: 0;
     border-radius: var(--r-md);
     background: transparent;
