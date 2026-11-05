@@ -14,9 +14,8 @@ mod smoke;
 use recursa_engine::app::AppState;
 use recursa_engine::caps::Caps;
 #[cfg(desktop)]
-use tauri::RunEvent;
-#[cfg(desktop)]
-use tauri::{Manager, WindowEvent};
+use tauri::WindowEvent;
+use tauri::{Manager, RunEvent};
 #[cfg(desktop)]
 use tauri_plugin_window_state::StateFlags;
 
