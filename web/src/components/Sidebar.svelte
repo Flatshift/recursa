@@ -106,17 +106,26 @@
     {#each places as p}
       {@const on = app.route.name === p.match}
       <li>
-        <a
-          href={p.href}
-          class="item"
-          class:on
-          aria-current={on ? 'page' : undefined}
-          onclick={(e) => (p.match === 'settings' ? settings(e) : go(e, p.href))}
-          title={mobile ? undefined : `${p.label} (${shortcut(`cmd+${p.key}`)})`}
-        >
-          <span class="ic" data-place={p.match}><Icon name={p.icon} size={mobile ? 18 : 13} /></span>
-          <span>{p.label}</span>
-        </a>
+        {#if p.match === 'settings' && app.boot?.caps.settings_window}
+          <!-- On the desktop Settings opens its own window, so it is a button rather than a link to a place: set a step
+               apart, with the ellipsis a menu gives a command that opens a window, and a hollow tile instead of a filled one. -->
+          <button type="button" class="item util" onclick={() => openSettings()} title={`${p.label}… (${shortcut(`cmd+${p.key}`)})`}>
+            <span class="ic" data-place={p.match}><Icon name={p.icon} size={13} /></span>
+            <span>{p.label}…</span>
+          </button>
+        {:else}
+          <a
+            href={p.href}
+            class="item"
+            class:on
+            aria-current={on ? 'page' : undefined}
+            onclick={(e) => go(e, p.href)}
+            title={mobile ? undefined : `${p.label} (${shortcut(`cmd+${p.key}`)})`}
+          >
+            <span class="ic" data-place={p.match}><Icon name={p.icon} size={mobile ? 18 : 13} /></span>
+            <span>{p.label}</span>
+          </a>
+        {/if}
       </li>
     {/each}
   </ul>
@@ -314,6 +323,22 @@
   }
   .ic[data-place='settings'] {
     --tile: oklch(var(--tile-l) 0.012 285);
+  }
+  /* The Settings button: a step of air above it, and its tile a ring where the places' are filled. */
+  button.item {
+    width: 100%;
+    border: 0;
+    background: none;
+  }
+  .util {
+    margin-top: 6px;
+  }
+  .util .ic {
+    border: 1.5px solid var(--tile);
+    background: none;
+  }
+  .util .ic :global(svg) {
+    color: var(--ink-3);
   }
   :global(html[data-theme='dark']) .ic {
     --tile-l: 0.66;
