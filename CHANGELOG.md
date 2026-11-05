@@ -2,16 +2,13 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.5.4 (2026-11-04)
 
 - Peering: the map is more compact, with each box's round trip inside it.
 - Peering: a network reached through two exchanges is drawn as two boxes, one under each exchange.
 - Settings sits in the sidebar under Method and opens only its own window.
 - Peering: the map no longer flickers after Fit when it is wider than the window.
 - Peering: a network reached at an exchange port held by one of its sibling networks is read as its own port, and a network's name appears once per finding.
-
-## 0.5.4 (2026-11-04)
-
 - Settings › Data: Clear Cache removes cached lookups and downloaded reference data; Clear All Data returns Recursa to a fresh install.
 - Peering: the map no longer makes the page shake at some window sizes.
 - Peering: runs start faster and use less memory; after an update, the prefix tables are fetched at startup instead of by the next map.
