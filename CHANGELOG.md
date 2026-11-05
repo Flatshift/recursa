@@ -2,6 +2,12 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Peering: the map is more compact, with each box's round trip inside it.
+- Peering: a network reached through two exchanges is drawn as two boxes, one under each exchange.
+- Settings is a regular item in the sidebar, under Method.
+
 ## 0.5.4 (2026-11-04)
 
 - Settings › Data: Clear Cache removes cached lookups and downloaded reference data; Clear All Data returns Recursa to a fresh install.

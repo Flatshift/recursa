@@ -128,8 +128,8 @@
   let open = $state<Record<string, boolean>>({});
   const toggle = (k: string) => (open[k] = !open[k]);
   /** The groups a finding's destinations pass through, nearest first, that have routers to list. */
-  // A cloud is drawn as one shaded block per column its boxes sit in, each wrapping that column's boxes and their
-  // round-trip line.
+  // A cloud is drawn as one shaded block per column its boxes sit in, each wrapping that column's boxes with the
+  // CDN's name under the last; the layout leaves that room.
   const blobs = (c: Cloud) => {
     const cols = new Map<number, TreeNode[]>();
     for (const id of c.ids) {
@@ -200,7 +200,9 @@
                 stroke={hue(g.role)}
                 stroke-width="2"
               />
-              <text class="xlabel" x={n.x + n.w / 2} y={cy + 29} text-anchor="middle">{g.label}</text>
+              <text class="xlabel" x={n.x + n.w / 2} y={cy + 28} text-anchor="middle"
+                >{g.label}{#if g.rtt_ms != null}<tspan class="rtt" dx="6">{ms(g.rtt_ms, true)}</tspan>{/if}</text
+              >
             {:else if g.role === 'home'}
               <rect x={n.x} y={n.y} width={n.w} height={n.h} rx="6" fill="color-mix(in oklch, {hue(g.role)} 12%, var(--surface))" stroke={hue(g.role)} stroke-width="1.5" />
               <path
@@ -220,13 +222,18 @@
                 stroke-dasharray={hollow ? '4 3' : undefined}
               />
               <foreignObject x={n.x} y={n.y} width={n.w} height={n.h}>
-                <div class="nbox" class:pill={g.role === 'content'} class:lone={!sub}>
+                <div class="nbox" class:pill={g.role === 'content'} class:lone={!sub && g.rtt_ms == null}>
                   <span class="nlabel">{g.label}</span>
-                  {#if sub}<span class="nsub">{sub}</span>{/if}
+                  {#if sub || g.rtt_ms != null}
+                    <span class="meta">
+                      {#if sub}<span class="nsub">{sub}</span>{/if}
+                      {#if g.rtt_ms != null}<span class="rtt">{ms(g.rtt_ms, true)}</span>{/if}
+                    </span>
+                  {/if}
                 </div>
               </foreignObject>
             {/if}
-            {#if g.rtt_ms != null}
+            {#if g.role === 'home' && g.rtt_ms != null}
               <text class="rtt" x={n.x + n.w} y={n.y + n.h + 13} text-anchor="end">{ms(g.rtt_ms, true)}</text>
             {/if}
           </g>
@@ -358,7 +365,7 @@
     display: block;
     margin: 0 auto;
   }
-  /* The label inside a box: one line each, the name alone may take two. */
+  /* The label inside a box: the name, then what is known and the round trip on one line; the name alone may take two. */
   .nbox {
     box-sizing: border-box;
     height: 100%;
@@ -393,12 +400,25 @@
     line-clamp: 2;
     overflow-wrap: anywhere;
   }
+  .meta {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+  }
   .nsub {
+    flex: 1 1 auto;
+    min-width: 0;
     font-size: var(--t-xs);
     color: var(--ink-3);
   }
   .rtt {
+    flex: none;
+    margin-left: auto;
     font-size: var(--t-2xs);
+    font-weight: 400;
+    color: var(--ink-3);
     fill: var(--ink-3);
     font-variant-numeric: tabular-nums;
   }

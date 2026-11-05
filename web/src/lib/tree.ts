@@ -9,8 +9,10 @@ interface TreeOpts {
   nodeW: number;
   nodeH: number;
   pad: number;
+  /** Room under a cloud's last box in a column, for the cloud's name. */
+  tail: number;
 }
-export const TREE: TreeOpts = { colW: 292, rowH: 72, nodeW: 188, nodeH: 50, pad: 16 };
+export const TREE: TreeOpts = { colW: 300, rowH: 62, nodeW: 196, nodeH: 50, pad: 16, tail: 14 };
 /** Half the width of the diamond an exchange is drawn as, centred in its node; its edges end on the points. */
 export const DIAMOND = 13;
 
@@ -90,7 +92,7 @@ export function layout(groups: NetGroup[], edges: NetLink[], o: TreeOpts = TREE,
     leaves = leaves.filter((id) => !block.includes(id));
     leaves.splice(first, 0, ...block);
   }
-  const y = new Map<number, number>(leaves.map((id, i) => [id, i]));
+  const y = new Map<number, number>(leaves.map((id, i) => [id, i * o.rowH]));
   const place = (id: number): number => {
     const ks = kids.get(id) ?? [];
     const v = ks.length ? ks.reduce((s, k) => s + place(k), 0) / ks.length : y.get(id)!;
@@ -98,19 +100,32 @@ export function layout(groups: NetGroup[], edges: NetLink[], o: TreeOpts = TREE,
     return v;
   };
   for (const g of roots) place(g.id);
+  // A cloud's name goes under its last box in each column; whatever sits below that box leaves room for it.
+  const tails = new Set<number>();
+  for (const set of together) {
+    const low = new Map<number, number>();
+    for (const id of set) {
+      const c = col.get(id);
+      if (c != null && (!low.has(c) || (y.get(id) ?? 0) > (y.get(low.get(c)!) ?? 0))) low.set(c, id);
+    }
+    for (const id of low.values()) tails.add(id);
+  }
   // A parent centred on its children can land on a leaf's row in its own column; it moves down until the row is free.
   const byCol = new Map<number, number[]>();
   for (const g of groups) byCol.set(col.get(g.id)!, [...(byCol.get(col.get(g.id)!) ?? []), g.id]);
   for (const ids of byCol.values()) {
     ids.sort((a, b) => y.get(a)! - y.get(b)! || Number(kids.has(a)) - Number(kids.has(b)));
-    for (let i = 1; i < ids.length; i++) y.set(ids[i], Math.max(y.get(ids[i])!, y.get(ids[i - 1])! + 1));
+    for (let i = 1; i < ids.length; i++) {
+      const gap = o.rowH + (tails.has(ids[i - 1]) ? o.tail : 0);
+      y.set(ids[i], Math.max(y.get(ids[i])!, y.get(ids[i - 1])! + gap));
+    }
   }
 
   // Your home is a square with a house in it; the rest get a name, and the columns after it close up by the difference.
   const xOf = (c: number) => o.pad + c * o.colW - (c ? o.nodeW - o.nodeH : 0);
   const nodes = groups.map((g): TreeNode => {
     const c = col.get(g.id)!;
-    return { id: g.id, col: c, x: xOf(c), y: o.pad + (y.get(g.id) ?? 0) * o.rowH, w: g.role === 'home' ? o.nodeH : o.nodeW, h: o.nodeH };
+    return { id: g.id, col: c, x: xOf(c), y: o.pad + (y.get(g.id) ?? 0), w: g.role === 'home' ? o.nodeH : o.nodeW, h: o.nodeH };
   });
   const at = new Map(nodes.map((n) => [n.id, n]));
   const diamond = new Set(groups.filter((g) => g.role === 'exchange').map((g) => g.id));
@@ -138,6 +153,6 @@ export function layout(groups: NetGroup[], edges: NetLink[], o: TreeOpts = TREE,
     nodes,
     edges: laid,
     width: o.pad + Math.max(o.pad + o.nodeW, ...nodes.map((n) => n.x + n.w)),
-    height: Math.max(o.pad * 2 + Math.max(0, ...y.values()) * o.rowH + o.nodeH, ...below),
+    height: Math.max(o.pad * 2 + Math.max(0, ...y.values()) + o.nodeH, ...below),
   };
 }

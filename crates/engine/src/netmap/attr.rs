@@ -604,8 +604,9 @@ fn aliases(members: &[Member]) -> Vec<Vec<IpAddr>> {
 }
 
 /// Join the traces' runs into one picture. A named network or exchange is one group however it is reached, carrier
-/// or destination, unless a trace comes back to it after leaving (a second visit) or its routers decode to another
-/// city; silence between two groups that answer goes on the link between them as `silent_hops`, and silence at the end
+/// or destination, unless a trace comes back to it after leaving (a second visit), its routers decode to another
+/// city, or it is entered from a different exchange (the same network behind two exchanges is two places; a direct
+/// way in joins the first); silence between two groups that answer goes on the link between them as `silent_hops`, and silence at the end
 /// of a trace or unknown addresses are only the same group when they follow the same group. When the routers differ at
 /// one hop on the same side the group is marked `parallel`. Returns the groups, the links between them, and for each
 /// input the ids of its groups in order. `rels` sets each link's kind where it knows the pair; a link out of an
@@ -613,6 +614,8 @@ fn aliases(members: &[Member]) -> Vec<Vec<IpAddr>> {
 pub fn merge(paths: &[(&str, Vec<Seg>)], rels: &AsRel) -> (Vec<Group>, Vec<Link>, Vec<Vec<usize>>) {
     let mut groups: Vec<Group> = Vec::new();
     let mut before: Vec<Option<usize>> = Vec::new();
+    // The exchange each group was entered from, once one is known.
+    let mut via_ix: Vec<Option<i64>> = Vec::new();
     let mut links: Vec<Link> = Vec::new();
     let mut steps: Vec<Vec<f64>> = Vec::new();
     let mut arrive: Vec<Vec<f64>> = Vec::new();
@@ -637,6 +640,7 @@ pub fn merge(paths: &[(&str, Vec<Seg>)], rels: &AsRel) -> (Vec<Group>, Vec<Link>
             }
             let ix_id = seg.ix.as_ref().map(|(id, _)| *id);
             let side = prev.map(|p| p.0);
+            let prev_ix = prev.and_then(|(_, s)| s.ix.as_ref().map(|(id, _)| *id));
             let hint = seg.members.iter().find_map(|m| m.hint.as_deref());
             let id = match groups.iter().position(|g| {
                 // A network that carries one trace and is another's destination is still one network.
@@ -649,6 +653,10 @@ pub fn merge(paths: &[(&str, Vec<Seg>)], rels: &AsRel) -> (Vec<Group>, Vec<Link>
                         Role::Isp | Role::Carrier | Role::Content | Role::Exchange => {
                             !mine.contains(&g.id)
                                 && match (hint, g.members.iter().find_map(|m| m.hint.as_deref())) {
+                                    (Some(a), Some(b)) => a == b,
+                                    _ => true,
+                                }
+                                && match (via_ix[g.id], prev_ix) {
                                     (Some(a), Some(b)) => a == b,
                                     _ => true,
                                 }
@@ -676,6 +684,9 @@ pub fn merge(paths: &[(&str, Vec<Seg>)], rels: &AsRel) -> (Vec<Group>, Vec<Link>
                     if seg.role == Role::Content {
                         g.role = Role::Content;
                     }
+                    if via_ix[id].is_none() {
+                        via_ix[id] = prev_ix;
+                    }
                     id
                 }
                 None => {
@@ -700,6 +711,7 @@ pub fn merge(paths: &[(&str, Vec<Seg>)], rels: &AsRel) -> (Vec<Group>, Vec<Link>
                         targets: Vec::new(),
                     });
                     before.push(prev.map(|p| p.0));
+                    via_ix.push(prev_ix);
                     arrive.push(Vec::new());
                     id
                 }
@@ -1004,6 +1016,35 @@ pub(crate) mod tests {
         let (groups, _, ids) = merge(&[("c", c), ("a", paths[0].1.clone())], &AsRel::empty());
         assert_eq!(groups.iter().map(|g| g.role).collect::<Vec<_>>(), [Role::Isp, Role::Content, Role::Unknown, Role::Carrier]);
         assert_eq!(ids, [vec![0, 1, 2], vec![0, 3, 1]]);
+    }
+
+    #[test]
+    fn a_network_behind_two_exchanges_is_two_boxes() {
+        let mut pdb = Pdb::default();
+        pdb.add_ix(31, "Equinix Ashburn");
+        pdb.add_lan(31, "206.126.236.0/22");
+        pdb.add_ix(565, "Boston Internet Exchange");
+        pdb.add_lan(565, "206.108.236.0/24");
+        let (pfx, names) = (pfx(), HashMap::new());
+        let cx = cx(&pfx, &pdb, &names);
+        // ISP, Ashburn, content; ISP, Boston, content; ISP, content directly.
+        let a = trace("192.0.2.9", &[Some("198.51.100.1"), Some("206.126.237.10"), Some("192.0.2.9")]);
+        let b = trace("192.0.2.10", &[Some("198.51.100.1"), Some("206.108.236.10"), Some("192.0.2.10")]);
+        let c = trace("192.0.2.11", &[Some("198.51.100.1"), Some("192.0.2.11")]);
+        let (groups, links, ids) = merge(&[("a", group(&a, &cx)), ("b", group(&b, &cx)), ("c", group(&c, &cx))], &AsRel::empty());
+        let roles: Vec<Role> = groups.iter().map(|g| g.role).collect();
+        assert_eq!(roles, [Role::Isp, Role::Exchange, Role::Content, Role::Exchange, Role::Content]);
+        // Each exchange feeds its own box; the direct way in joins the first.
+        assert_eq!(ids, [vec![0, 1, 2], vec![0, 3, 4], vec![0, 2]]);
+        assert_eq!(groups[2].targets, ["a", "c"]);
+        assert_eq!(groups[4].targets, ["b"]);
+        let into: Vec<(usize, usize)> = links.iter().filter(|l| groups[l.to].role == Role::Content).map(|l| (l.from, l.to)).collect();
+        assert_eq!(into, [(1, 2), (3, 4), (0, 2)]);
+        // Two traces through the same exchange still share one box.
+        let d = trace("192.0.2.12", &[Some("198.51.100.1"), Some("206.126.237.11"), Some("192.0.2.12")]);
+        let (groups, _, ids) = merge(&[("a", group(&a, &cx)), ("d", group(&d, &cx))], &AsRel::empty());
+        assert_eq!(groups.len(), 3);
+        assert_eq!(ids, [vec![0, 1, 2], vec![0, 1, 2]]);
     }
 
     #[test]
