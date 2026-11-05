@@ -72,11 +72,12 @@ describe('layout', () => {
     const plain = t.edges.find((e) => edges[e.index].to === 5)!;
     expect(plain.d.endsWith(`${n(5).x} ${n(5).y + n(5).h / 2}`)).toBe(true);
   });
-  it('pulls groups asked to sit together onto adjacent rows, keeping the height', () => {
+  it('pulls groups asked to sit together onto adjacent rows, leaving room for the cloud name under the last', () => {
     const u = layout(groups, edges, undefined, [[3, 6]]);
     const row = (id: number) => u.nodes.find((n) => n.id === id)!.y;
     expect(row(6) - row(3)).toBe(TREE.rowH);
-    expect(u.height).toBe(t.height);
+    expect(row(4)).toBe(row(6) + TREE.rowH + TREE.tail);
+    expect(u.height).toBe(t.height + TREE.tail);
     expect(row(5)).toBe(row(2) + TREE.rowH);
   });
   it('moves a parent off the leaf its children surround', () => {
@@ -85,7 +86,7 @@ describe('layout', () => {
     const u = layout(gs, [l(0, 1), l(1, 2), l(1, 3), l(3, 4), l(3, 5)], undefined, [[2, 4]]);
     const row = (id: number) => u.nodes.find((n) => n.id === id)!.y;
     expect(row(2)).toBe(row(4) + TREE.rowH);
-    expect(row(3)).toBe(row(2) + TREE.rowH);
+    expect(row(3)).toBe(row(2) + TREE.rowH + TREE.tail);
   });
   it('puts the labels of two edges into one node on opposite sides', () => {
     const [a, b] = t.edges.filter((e) => edges[e.index].to === 4);

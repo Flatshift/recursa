@@ -1,7 +1,7 @@
 <script lang="ts">
   // Source list: the app's places, then its runs, newest first.
   import { app } from '../lib/store.svelte';
-  import { desktop, mac, mobile, openSettings, SEPARATOR } from '../lib/api';
+  import { mac, mobile, openSettings, SEPARATOR } from '../lib/api';
   import { shortcut } from '../lib/keys';
   import { menu } from '../lib/menu.svelte';
   import { ms, shortWhen } from '../lib/format';
@@ -16,6 +16,7 @@
     { href: '/time', label: 'Time', icon: 'clock', match: 'time', key: '5' },
     { href: '/network', label: 'Peering', icon: 'network', match: 'network', key: '6' },
     { href: '/method', label: 'Method', icon: 'book', match: 'method', key: '4' },
+    { href: '/settings', label: 'Settings', icon: 'gear', match: 'settings', key: ',' },
   ] as const;
 
   const runs = $derived(app.boot?.runs ?? []);
@@ -105,10 +106,26 @@
     {#each places as p}
       {@const on = app.route.name === p.match}
       <li>
-        <a href={p.href} class="item" class:on aria-current={on ? 'page' : undefined} onclick={(e) => go(e, p.href)} title={mobile ? undefined : `${p.label} (${shortcut(`cmd+${p.key}`)})`}>
-          <span class="ic" data-place={p.match}><Icon name={p.icon} size={mobile ? 18 : 13} /></span>
-          <span>{p.label}</span>
-        </a>
+        {#if p.match === 'settings' && app.boot?.caps.settings_window}
+          <!-- On the desktop Settings opens its own window, so it is a button rather than a link to a place: set a step
+               apart, with the ellipsis a menu gives a command that opens a window, and a hollow tile instead of a filled one. -->
+          <button type="button" class="item util" onclick={() => openSettings()} title={`${p.label}… (${shortcut(`cmd+${p.key}`)})`}>
+            <span class="ic" data-place={p.match}><Icon name={p.icon} size={13} /></span>
+            <span>{p.label}…</span>
+          </button>
+        {:else}
+          <a
+            href={p.href}
+            class="item"
+            class:on
+            aria-current={on ? 'page' : undefined}
+            onclick={(e) => go(e, p.href)}
+            title={mobile ? undefined : `${p.label} (${shortcut(`cmd+${p.key}`)})`}
+          >
+            <span class="ic" data-place={p.match}><Icon name={p.icon} size={mobile ? 18 : 13} /></span>
+            <span>{p.label}</span>
+          </a>
+        {/if}
       </li>
     {/each}
   </ul>
@@ -205,7 +222,6 @@
       </a>
     {/if}
     </div>
-    <button class="gear" aria-label="Settings" title={mobile ? undefined : `Settings${desktop ? ` (${shortcut('cmd+,')})` : ''}`} onclick={settings}><Icon name="gear" size={mobile ? 20 : 15} /></button>
   </div>
 </nav>
 
@@ -304,6 +320,25 @@
   }
   .ic[data-place='method'] {
     --tile: oklch(var(--tile-l) 0.035 285);
+  }
+  .ic[data-place='settings'] {
+    --tile: oklch(var(--tile-l) 0.012 285);
+  }
+  /* The Settings button: a step of air above it, and its tile a ring where the places' are filled. */
+  button.item {
+    width: 100%;
+    border: 0;
+    background: none;
+  }
+  .util {
+    margin-top: 6px;
+  }
+  .util .ic {
+    border: 1.5px solid var(--tile);
+    background: none;
+  }
+  .util .ic :global(svg) {
+    color: var(--ink-3);
   }
   :global(html[data-theme='dark']) .ic {
     --tile-l: 0.66;
@@ -483,11 +518,6 @@
     padding: 0 12px 0 14px;
     border-radius: var(--r-lg);
     font-size: var(--t-sm);
-  }
-  :global(html.mobile) .gear {
-    width: 48px;
-    height: 48px;
-    border-radius: var(--r-lg);
   }
   @media (prefers-reduced-motion: reduce) {
     .acts {
@@ -674,19 +704,5 @@
     .dot {
       animation: none;
     }
-  }
-  .gear {
-    display: grid;
-    place-items: center;
-    width: 28px;
-    height: 26px;
-    border: 0;
-    border-radius: var(--r-md);
-    background: transparent;
-    color: var(--ink-2);
-  }
-  .gear:hover {
-    background: color-mix(in oklch, var(--side-sel) 45%, transparent);
-    color: var(--ink);
   }
 </style>

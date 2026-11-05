@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use tokio::task::JoinHandle;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MonitorConfig {
@@ -46,26 +47,30 @@ impl MonitorConfig {
     }
 }
 
-pub fn spawn(app: Arc<AppState>) {
+pub fn spawn(app: Arc<AppState>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut last_cycle = 0i64;
         // Held while this process records monitoring for its database.
         let mut owner: Option<lock::Guard> = None;
+        let mut seen = None;
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;
-            // Another process may have switched it on or off.
-            app.reload_monitors();
+            // Another process may have switched it on or off: re-read once something has written to the database.
+            if app.store.changed_since(&mut seen) {
+                app.reload_monitors();
+            }
             let cfg = app.monitor.borrow().clone();
             if !cfg.enabled {
-                // Let another Recursa process monitor this database instead.
+                // Let another Recursa process monitor this database instead; switched on again, start afresh.
                 owner = None;
+                last_cycle = 0;
                 continue;
             }
             let now = bench::now_ms();
             // Due time is derived from the current interval, so shortening it applies at once.
             let due = last_cycle + cfg.interval_min.clamp(1, 1440) as i64 * 60_000;
             // A database download or route-origin sync of ours would skew the probes: wait it out.
-            if app.run_active.load(Ordering::SeqCst) || app.intel.fetching() || now < due {
+            if app.run_active.load(Ordering::SeqCst) || app.downloading() || now < due {
                 continue;
             }
             if owner.is_none() {
@@ -88,7 +93,7 @@ pub fn spawn(app: Arc<AppState>) {
             let (raw, summaries) = prune_before(now, cfg.retention_days);
             app.store.monitor_prune(raw, summaries);
         }
-    });
+    })
 }
 
 /// One cached, one uncached and one TLD query per resolver address: the primary and the

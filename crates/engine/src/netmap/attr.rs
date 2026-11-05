@@ -12,20 +12,37 @@ use crate::stats::{median, round1};
 use crate::store::Store;
 use crate::trace::Trace;
 use flate2::read::GzDecoder;
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
 use std::io::{BufRead, BufReader, Read};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 const LOG_URL: &str = "https://publicdata.caida.org/datasets/routing/routeviews-prefix2as/pfx2as-creation.log";
 const DIR_URL: &str = "https://publicdata.caida.org/datasets/routing/routeviews-prefix2as/";
 const LOG6_URL: &str = "https://publicdata.caida.org/datasets/routing/routeviews6-prefix2as/pfx2as-creation.log";
 const DIR6_URL: &str = "https://publicdata.caida.org/datasets/routing/routeviews6-prefix2as/";
 pub(crate) const FETCHED_AT: &str = "netmap.pfx2as_fetched_at";
+pub(crate) const FETCHED_AT6: &str = "netmap.pfx2as6_fetched_at";
 pub(crate) const SOURCE: &str = "netmap.pfx2as_source";
 pub(crate) const SOURCE6: &str = "netmap.pfx2as6_source";
+/// The settings that describe the prefix tables: cleared with them.
+pub(crate) const SETTINGS: [&str; 4] = [SOURCE, SOURCE6, FETCHED_AT, FETCHED_AT6];
+
+/// When the older of the downloaded tables was fetched: `None` until one has been.
+pub(crate) fn fetched_at(store: &Store) -> Option<i64> {
+    [FETCHED_AT, FETCHED_AT6].iter().filter_map(|k| store.get::<i64>(k)).min()
+}
+
+/// Which tables to download now, IPv4 then IPv6: each that is empty, or whose own download is a day old.
+pub(crate) fn due(store: &Store) -> [bool; 2] {
+    let (have4, have6) = store.pfx2as_filled();
+    let now = crate::bench::now_ms();
+    let stale = |key: &str| store.get::<i64>(key).is_none_or(|t| now - t > super::REFRESH_MS);
+    [!have4 || stale(FETCHED_AT), !have6 || stale(FETCHED_AT6)]
+}
 /// Shortest prefix tried, as announced to the Internet's default-free zone.
 const SHORTEST: u8 = 8;
 /// Shortest IPv6 prefix tried.
@@ -44,11 +61,15 @@ pub struct Match {
     pub prefix: String,
 }
 
-/// Prefixes to their origin, probed by (length, masked address) from the longest down; one map per family.
-#[derive(Default)]
+/// Prefixes to their origin: the store's keyed tables, probed by (length, masked address) at each length the table
+/// holds from the longest down, one table per family, over a read-only connection of its own that holds one snapshot
+/// for the run (a refresh under WAL commits beside it). Nothing but the lengths is loaded into memory.
 pub struct Pfx2as {
-    map: HashMap<(u8, u32), (u32, bool)>,
-    map6: HashMap<(u8, u128), (u32, bool)>,
+    conn: Mutex<Connection>,
+    empty: bool,
+    /// The lengths each table holds, longest first.
+    lens: Vec<u8>,
+    lens6: Vec<u8>,
 }
 
 fn mask(len: u8) -> u32 {
@@ -60,54 +81,64 @@ fn mask6(len: u8) -> u128 {
 }
 
 impl Pfx2as {
-    pub fn from_rows(rows: impl Iterator<Item = (u32, u8, u32, bool)>, rows6: impl Iterator<Item = (u128, u8, u32, bool)>) -> Pfx2as {
-        Pfx2as {
-            map: rows.map(|(prefix, len, asn, moas)| ((len, prefix & mask(len)), (asn, moas))).collect(),
-            map6: rows6.map(|(prefix, len, asn, moas)| ((len, prefix & mask6(len)), (asn, moas))).collect(),
-        }
+    /// Open the tables of `store` as they are now: the snapshot is taken here and held until this is dropped.
+    pub fn open(store: &Store) -> rusqlite::Result<Pfx2as> {
+        let conn = Store::open_reader(&store.path)?;
+        conn.execute_batch("BEGIN")?;
+        let empty = conn.query_row(crate::store::PFX2AS_EMPTY, [], |r| r.get(0))?;
+        // The lengths present, one key probe each: `DISTINCT len` would walk every row of the table.
+        let lens = |table: &str, shortest: u8, longest: u8| -> rusqlite::Result<Vec<u8>> {
+            let mut st = conn.prepare(&format!(
+                "WITH RECURSIVE l(len) AS (
+                    SELECT min(len) FROM {table} WHERE len >= ?1
+                    UNION ALL
+                    SELECT (SELECT min(len) FROM {table} WHERE len > l.len) FROM l WHERE l.len < ?2
+                 )
+                 SELECT len FROM l WHERE len BETWEEN ?1 AND ?2 ORDER BY len DESC"
+            ))?;
+            st.query_map(params![shortest, longest], |r| r.get(0))?.collect()
+        };
+        let (lens, lens6) = (lens("pfx2as", SHORTEST, 32)?, lens("pfx2as6", SHORTEST6, 128)?);
+        Ok(Pfx2as { conn: Mutex::new(conn), empty, lens, lens6 })
     }
 
-    pub fn load(store: &Store) -> Pfx2as {
-        let mut map = HashMap::new();
-        store.pfx2as_each(|prefix, len, asn, moas| {
-            map.insert((len, prefix), (asn, moas));
-        });
-        let mut map6 = HashMap::new();
-        store.pfx2as6_each(|prefix, len, asn, moas| {
-            map6.insert((len, prefix), (asn, moas));
-        });
-        Pfx2as { map, map6 }
-    }
-
-    /// The IPv4 table is empty. Databases from before the IPv6 table have none until the next refresh, and an IPv6
-    /// hop is then unknown.
+    /// Either table had no rows in the snapshot. A run fetches before opening, so this is true only if that fetch
+    /// left a table empty.
     pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        self.empty
     }
 
     /// The longest announced prefix holding `addr`. Private, shared (carrier-grade NAT) and link-local space never
-    /// matches.
+    /// matches. A read error ends the probe: unknown is better than a shorter prefix's origin.
     pub fn lookup(&self, addr: IpAddr) -> Option<Match> {
         let addr = addr.to_canonical();
         if is_private(&addr) {
             return None;
         }
+        let c = self.conn.lock().unwrap();
+        let row = |r: &rusqlite::Row| Ok((r.get::<_, u32>(0)?, r.get::<_, bool>(1)?));
         match addr {
             IpAddr::V4(a) => {
                 let a = u32::from(a);
-                (SHORTEST..=32).rev().find_map(|len| {
+                let mut st = c.prepare_cached("SELECT asn, moas FROM pfx2as WHERE len = ?1 AND prefix = ?2").ok()?;
+                for &len in &self.lens {
                     let net = a & mask(len);
-                    let &(asn, moas) = self.map.get(&(len, net))?;
-                    Some(Match { asn, moas, prefix: format!("{}/{len}", Ipv4Addr::from(net)) })
-                })
+                    if let Some((asn, moas)) = st.query_row(params![len, net], row).optional().ok()? {
+                        return Some(Match { asn, moas, prefix: format!("{}/{len}", Ipv4Addr::from(net)) });
+                    }
+                }
+                None
             }
             IpAddr::V6(a) => {
                 let a = u128::from(a);
-                (SHORTEST6..=128).rev().find_map(|len| {
+                let mut st = c.prepare_cached("SELECT asn, moas FROM pfx2as6 WHERE len = ?1 AND prefix = ?2").ok()?;
+                for &len in &self.lens6 {
                     let net = a & mask6(len);
-                    let &(asn, moas) = self.map6.get(&(len, net))?;
-                    Some(Match { asn, moas, prefix: format!("{}/{len}", Ipv6Addr::from(net)) })
-                })
+                    if let Some((asn, moas)) = st.query_row(params![len, &net.to_be_bytes()[..]], row).optional().ok()? {
+                        return Some(Match { asn, moas, prefix: format!("{}/{len}", Ipv6Addr::from(net)) });
+                    }
+                }
+                None
             }
         }
     }
@@ -145,21 +176,29 @@ fn newest(log: &str) -> Option<&str> {
     log.lines().rev().find(|l| !l.starts_with('#') && !l.trim().is_empty())?.split('\t').nth(2).map(str::trim)
 }
 
-/// Fetch the newest IPv4 and IPv6 tables and replace the stored ones. `fetch` gets a URL and returns the body (it is
-/// where the caller refuses to fetch while a measurement runs). Each table is replaced as soon as its own download
-/// parses, so a failed IPv6 fetch leaves the fresh IPv4 table; an old table stays if its own fetch fails.
-/// `FETCHED_AT` is written only after both.
+/// Fetch the newest file of each table that is [`due`] and replace the stored one. `fetch` gets a URL and returns
+/// the body (it is where the caller refuses to fetch while a measurement runs). The tables are fetched on their own:
+/// one is replaced and stamped as soon as its download parses, and one whose download fails keeps its rows and stamp
+/// while the other is still tried, so a half-filled pair is finished with the missing table only and a fresh table
+/// isn't downloaded again. The error names every table that failed.
 pub async fn refresh<F, Fut>(store: &Arc<Store>, fetch: F) -> Result<(), String>
 where
     F: Fn(String) -> Fut,
     Fut: Future<Output = Result<Vec<u8>, String>>,
 {
-    let path = fetch_table(store, &fetch, LOG_URL, DIR_URL, false).await?;
-    store.put(SOURCE, &path);
-    let path6 = fetch_table(store, &fetch, LOG6_URL, DIR6_URL, true).await?;
-    store.put(SOURCE6, &path6);
-    store.put(FETCHED_AT, &crate::bench::now_ms());
-    Ok(())
+    const TABLES: [(&str, &str, bool, &str, &str); 2] =
+        [(LOG_URL, DIR_URL, false, SOURCE, FETCHED_AT), (LOG6_URL, DIR6_URL, true, SOURCE6, FETCHED_AT6)];
+    let mut failed = Vec::new();
+    for ((log_url, dir_url, v6, source, fetched_at), _) in TABLES.into_iter().zip(due(store)).filter(|(_, due)| *due) {
+        match fetch_table(store, &fetch, log_url, dir_url, v6).await {
+            Ok(path) => {
+                store.put(source, &path);
+                store.put(fetched_at, &crate::bench::now_ms());
+            }
+            Err(e) => failed.push(e),
+        }
+    }
+    if failed.is_empty() { Ok(()) } else { Err(failed.join(" ")) }
 }
 
 /// Fetch the newest file of one table's log and store its rows; returns the file's name.
@@ -172,7 +211,7 @@ where
     let path = newest(&log).ok_or("CAIDA's file list has no entries.")?.to_string();
     let gz = fetch(format!("{dir_url}{path}")).await?;
     let s = store.clone();
-    let rows = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let lines = BufReader::new(GzDecoder::new(&gz[..]).take(super::BODY_MAX as u64)).lines();
         let rows = lines.map_while(Result::ok).filter_map(|l| parse_line(&l));
         if v6 {
@@ -180,13 +219,13 @@ where
         } else {
             s.pfx2as_replace(rows.filter_map(|r| if let Row::V4(p, l, a, m) = r { Some((p, l, a, m)) } else { None }))
         }
-        .map_err(|e| e.to_string())
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => "CAIDA's table had no rows.".to_string(),
+            e => e.to_string(),
+        })
     })
     .await
     .map_err(|e| e.to_string())??;
-    if rows == 0 {
-        return Err("CAIDA's table had no rows.".into());
-    }
     Ok(path.rsplit('/').next().unwrap_or(&path).to_string())
 }
 
@@ -565,8 +604,9 @@ fn aliases(members: &[Member]) -> Vec<Vec<IpAddr>> {
 }
 
 /// Join the traces' runs into one picture. A named network or exchange is one group however it is reached, carrier
-/// or destination, unless a trace comes back to it after leaving (a second visit) or its routers decode to another
-/// city; silence between two groups that answer goes on the link between them as `silent_hops`, and silence at the end
+/// or destination, unless a trace comes back to it after leaving (a second visit), its routers decode to another
+/// city, or it is entered from a different exchange (the same network behind two exchanges is two places; a direct
+/// way in joins the first); silence between two groups that answer goes on the link between them as `silent_hops`, and silence at the end
 /// of a trace or unknown addresses are only the same group when they follow the same group. When the routers differ at
 /// one hop on the same side the group is marked `parallel`. Returns the groups, the links between them, and for each
 /// input the ids of its groups in order. `rels` sets each link's kind where it knows the pair; a link out of an
@@ -574,6 +614,8 @@ fn aliases(members: &[Member]) -> Vec<Vec<IpAddr>> {
 pub fn merge(paths: &[(&str, Vec<Seg>)], rels: &AsRel) -> (Vec<Group>, Vec<Link>, Vec<Vec<usize>>) {
     let mut groups: Vec<Group> = Vec::new();
     let mut before: Vec<Option<usize>> = Vec::new();
+    // The exchange each group was entered from, once one is known.
+    let mut via_ix: Vec<Option<i64>> = Vec::new();
     let mut links: Vec<Link> = Vec::new();
     let mut steps: Vec<Vec<f64>> = Vec::new();
     let mut arrive: Vec<Vec<f64>> = Vec::new();
@@ -598,6 +640,7 @@ pub fn merge(paths: &[(&str, Vec<Seg>)], rels: &AsRel) -> (Vec<Group>, Vec<Link>
             }
             let ix_id = seg.ix.as_ref().map(|(id, _)| *id);
             let side = prev.map(|p| p.0);
+            let prev_ix = prev.and_then(|(_, s)| s.ix.as_ref().map(|(id, _)| *id));
             let hint = seg.members.iter().find_map(|m| m.hint.as_deref());
             let id = match groups.iter().position(|g| {
                 // A network that carries one trace and is another's destination is still one network.
@@ -610,6 +653,10 @@ pub fn merge(paths: &[(&str, Vec<Seg>)], rels: &AsRel) -> (Vec<Group>, Vec<Link>
                         Role::Isp | Role::Carrier | Role::Content | Role::Exchange => {
                             !mine.contains(&g.id)
                                 && match (hint, g.members.iter().find_map(|m| m.hint.as_deref())) {
+                                    (Some(a), Some(b)) => a == b,
+                                    _ => true,
+                                }
+                                && match (via_ix[g.id], prev_ix) {
                                     (Some(a), Some(b)) => a == b,
                                     _ => true,
                                 }
@@ -637,6 +684,9 @@ pub fn merge(paths: &[(&str, Vec<Seg>)], rels: &AsRel) -> (Vec<Group>, Vec<Link>
                     if seg.role == Role::Content {
                         g.role = Role::Content;
                     }
+                    if via_ix[id].is_none() {
+                        via_ix[id] = prev_ix;
+                    }
                     id
                 }
                 None => {
@@ -661,6 +711,7 @@ pub fn merge(paths: &[(&str, Vec<Seg>)], rels: &AsRel) -> (Vec<Group>, Vec<Link>
                         targets: Vec::new(),
                     });
                     before.push(prev.map(|p| p.0));
+                    via_ix.push(prev_ix);
                     arrive.push(Vec::new());
                     id
                 }
@@ -746,6 +797,7 @@ pub fn merge(paths: &[(&str, Vec<Seg>)], rels: &AsRel) -> (Vec<Group>, Vec<Link>
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::store::tests::{Scratch, temp_path};
     use crate::trace::Hop;
 
     pub fn ip(s: &str) -> IpAddr {
@@ -774,10 +826,37 @@ pub(crate) mod tests {
         Trace { target: ip(target), protocol: "icmp", rounds: 4, reached: true, elapsed_ms: 0.0, hops }
     }
 
+    /// A prefix table over a scratch store, removed with it.
+    pub struct Table {
+        pfx: Pfx2as,
+        store: Store,
+        _files: Scratch,
+    }
+
+    impl std::ops::Deref for Table {
+        type Target = Pfx2as;
+        fn deref(&self) -> &Pfx2as {
+            &self.pfx
+        }
+    }
+
+    /// A prefix table in a scratch store, masked by length.
+    pub fn table(rows: impl Iterator<Item = (u32, u8, u32, bool)>, rows6: impl Iterator<Item = (u128, u8, u32, bool)>) -> Table {
+        let files = Scratch(temp_path());
+        let store = Store::open(files.0.clone()).unwrap();
+        store.pfx2as_replace(rows.map(|(p, len, asn, moas)| (p & mask(len), len, asn, moas))).unwrap();
+        // A fresh store's IPv6 table is already empty, and a replace with no rows is refused.
+        let mut rows6 = rows6.map(|(p, len, asn, moas)| (p & mask6(len), len, asn, moas)).peekable();
+        if rows6.peek().is_some() {
+            store.pfx2as6_replace(rows6).unwrap();
+        }
+        Table { pfx: Pfx2as::open(&store).unwrap(), store, _files: files }
+    }
+
     /// 198.51.100.0/24 is the ISP (AS100), 203.0.113.0/24 a carrier (AS200), 192.0.2.0/24 the content network (AS300).
-    pub fn pfx() -> Pfx2as {
+    pub fn pfx() -> Table {
         let net = |s: &str| u32::from(s.parse::<Ipv4Addr>().unwrap());
-        Pfx2as::from_rows(
+        table(
             [(net("198.51.100.0"), 24, 100, false), (net("203.0.113.0"), 24, 200, false), (net("192.0.2.0"), 24, 300, false)].into_iter(),
             std::iter::empty(),
         )
@@ -787,6 +866,25 @@ pub(crate) mod tests {
         static NO_REGISTRY: std::sync::LazyLock<HashMap<IpAddr, Block>> = std::sync::LazyLock::new(HashMap::new);
         static NO_HOLDERS: std::sync::LazyLock<HashMap<u32, String>> = std::sync::LazyLock::new(HashMap::new);
         Ctx { pfx, pdb, home: Some(100), names, you: None, registry: &NO_REGISTRY, holders: &NO_HOLDERS }
+    }
+
+    #[test]
+    fn a_table_keeps_its_snapshot_while_the_store_is_refreshed() {
+        let (v4, v6) = (ip("198.51.100.7"), ip("2001:db8::7"));
+        let t = table(
+            [(u32::from(Ipv4Addr::new(198, 51, 100, 0)), 24, 100, false)].into_iter(),
+            [(0x2001_0db8_u128 << 96, 32, 6, false)].into_iter(),
+        );
+        assert_eq!((t.asn_of(v4), t.asn_of(v6), t.is_empty()), (Some(100), Some(6), false));
+        // A refresh beside it changes one table; the snapshot answers as before.
+        t.store.pfx2as_replace([(u32::from(Ipv4Addr::new(198, 51, 100, 0)), 24, 999, false)].into_iter()).unwrap();
+        assert_eq!((t.asn_of(v4), t.asn_of(v6), t.is_empty()), (Some(100), Some(6), false));
+        // A download that parsed to nothing is refused and leaves the other table as it was.
+        assert!(matches!(t.store.pfx2as6_replace(std::iter::empty()), Err(rusqlite::Error::QueryReturnedNoRows)));
+        assert!(!t.store.pfx2as_empty());
+        // The next open sees the refresh.
+        let fresh = Pfx2as::open(&t.store).unwrap();
+        assert_eq!((fresh.asn_of(v4), fresh.asn_of(v6), fresh.is_empty()), (Some(999), Some(6), false));
     }
 
     #[test]
@@ -921,6 +1019,35 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_network_behind_two_exchanges_is_two_boxes() {
+        let mut pdb = Pdb::default();
+        pdb.add_ix(31, "Equinix Ashburn");
+        pdb.add_lan(31, "206.126.236.0/22");
+        pdb.add_ix(565, "Boston Internet Exchange");
+        pdb.add_lan(565, "206.108.236.0/24");
+        let (pfx, names) = (pfx(), HashMap::new());
+        let cx = cx(&pfx, &pdb, &names);
+        // ISP, Ashburn, content; ISP, Boston, content; ISP, content directly.
+        let a = trace("192.0.2.9", &[Some("198.51.100.1"), Some("206.126.237.10"), Some("192.0.2.9")]);
+        let b = trace("192.0.2.10", &[Some("198.51.100.1"), Some("206.108.236.10"), Some("192.0.2.10")]);
+        let c = trace("192.0.2.11", &[Some("198.51.100.1"), Some("192.0.2.11")]);
+        let (groups, links, ids) = merge(&[("a", group(&a, &cx)), ("b", group(&b, &cx)), ("c", group(&c, &cx))], &AsRel::empty());
+        let roles: Vec<Role> = groups.iter().map(|g| g.role).collect();
+        assert_eq!(roles, [Role::Isp, Role::Exchange, Role::Content, Role::Exchange, Role::Content]);
+        // Each exchange feeds its own box; the direct way in joins the first.
+        assert_eq!(ids, [vec![0, 1, 2], vec![0, 3, 4], vec![0, 2]]);
+        assert_eq!(groups[2].targets, ["a", "c"]);
+        assert_eq!(groups[4].targets, ["b"]);
+        let into: Vec<(usize, usize)> = links.iter().filter(|l| groups[l.to].role == Role::Content).map(|l| (l.from, l.to)).collect();
+        assert_eq!(into, [(1, 2), (3, 4), (0, 2)]);
+        // Two traces through the same exchange still share one box.
+        let d = trace("192.0.2.12", &[Some("198.51.100.1"), Some("206.126.237.11"), Some("192.0.2.12")]);
+        let (groups, _, ids) = merge(&[("a", group(&a, &cx)), ("d", group(&d, &cx))], &AsRel::empty());
+        assert_eq!(groups.len(), 3);
+        assert_eq!(ids, [vec![0, 1, 2], vec![0, 1, 2]]);
+    }
+
+    #[test]
     fn a_second_visit_or_another_city_keeps_a_network_apart() {
         let (pfx, pdb, names) = (pfx(), Pdb::default(), HashMap::new());
         // ISP, carrier, ISP, content: the ISP's second visit is its own box.
@@ -1028,7 +1155,7 @@ pub(crate) mod tests {
     #[test]
     fn the_longest_prefix_wins_and_private_space_never_matches() {
         let net = |s: &str| u32::from(s.parse::<Ipv4Addr>().unwrap());
-        let t = Pfx2as::from_rows(
+        let t = table(
             [
                 (net("8.0.0.0"), 8, 1, false),
                 (net("8.8.0.0"), 16, 2, false),
@@ -1085,7 +1212,7 @@ pub(crate) mod tests {
         pdb.add_ix(31, "Equinix Ashburn");
         pdb.add_lan(31, "206.126.236.0/22");
         let net = |s: &str| u32::from(s.parse::<Ipv4Addr>().unwrap());
-        let pfx = Pfx2as::from_rows(
+        let pfx = table(
             [
                 (net("198.51.100.0"), 24, 100, false),
                 (net("203.0.113.0"), 24, 200, false),
@@ -1122,5 +1249,71 @@ pub(crate) mod tests {
         assert!(!distinct_owner(Some("Cloudflare, Inc."), "CLOUDFLARE INC"));
         assert!(distinct_owner(None, "Example, Inc."));
         assert!(!distinct_owner(None, " "));
+    }
+
+    /// Each table is downloaded on its own: an IPv6 download that fails leaves the stored IPv4 table, the next
+    /// refresh fetches the IPv6 side only, a fresh pair is left alone, and a day on a failed IPv4 download neither
+    /// stops the IPv6 one nor loses the old IPv4 table.
+    #[tokio::test]
+    async fn each_table_is_fetched_on_its_own_when_empty_or_stale() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        fn gz(rows: &str) -> Vec<u8> {
+            use std::io::Write;
+            let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            e.write_all(rows.as_bytes()).unwrap();
+            e.finish().unwrap()
+        }
+        let files = Scratch(temp_path());
+        let store = Arc::new(Store::open(files.0.clone()).unwrap());
+        let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+        let v4_down = Arc::new(AtomicBool::new(false));
+        let v6_down = Arc::new(AtomicBool::new(true));
+        let fetch = |url: String| {
+            let (asked, v4_down, v6_down) = (asked.clone(), v4_down.clone(), v6_down.clone());
+            async move {
+                asked.lock().unwrap().push(url.clone());
+                let v6 = url.starts_with(DIR6_URL);
+                if url.ends_with("pfx2as-creation.log") {
+                    Ok(b"# header\n1\t1\t2026/11/table.pfx2as.gz\n".to_vec())
+                } else if (if v6 { &v6_down } else { &v4_down }).load(Ordering::SeqCst) {
+                    Err("timed out".to_string())
+                } else if v6 {
+                    Ok(gz("2001:db8::\t32\t64500\n"))
+                } else {
+                    Ok(gz("198.51.100.0\t24\t64496\n"))
+                }
+            }
+        };
+        let err = refresh(&store, &fetch).await.unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+        assert_eq!(store.pfx2as_filled(), (true, false));
+        // The IPv4 half is stamped and counts as downloaded; only the IPv6 half is due.
+        let at4 = store.get::<i64>(FETCHED_AT).unwrap();
+        assert_eq!((fetched_at(&store), due(&store)), (Some(at4), [false, true]));
+
+        v6_down.store(false, Ordering::SeqCst);
+        asked.lock().unwrap().clear();
+        refresh(&store, &fetch).await.unwrap();
+        let urls = asked.lock().unwrap().clone();
+        assert!(urls.len() == 2 && urls.iter().all(|u| u.starts_with(DIR6_URL)), "{urls:?}");
+        assert_eq!(store.pfx2as_filled(), (true, true));
+        // Finishing the pair keeps the older half's stamp: the pair is as old as that half.
+        assert_eq!((store.get::<i64>(FETCHED_AT), fetched_at(&store)), (Some(at4), Some(at4)));
+
+        asked.lock().unwrap().clear();
+        refresh(&store, &fetch).await.unwrap();
+        assert!(asked.lock().unwrap().is_empty());
+
+        let old = crate::bench::now_ms() - super::super::REFRESH_MS - 1;
+        store.put(FETCHED_AT, &old);
+        store.put(FETCHED_AT6, &old);
+        v4_down.store(true, Ordering::SeqCst);
+        asked.lock().unwrap().clear();
+        let err = refresh(&store, &fetch).await.unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+        assert_eq!((asked.lock().unwrap().len(), store.pfx2as_filled()), (4, (true, true)));
+        assert_eq!(store.get::<i64>(FETCHED_AT), Some(old));
+        assert!(store.get::<i64>(FETCHED_AT6).unwrap() > old);
+        assert_eq!(due(&store), [true, false]);
     }
 }

@@ -2,7 +2,29 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.5.4 (2026-11-04)
+
+- Peering: the map is more compact, with each box's round trip inside it.
+- Peering: a network reached through two exchanges is drawn as two boxes, one under each exchange.
+- Settings sits in the sidebar under Method and opens only its own window.
+- Peering: the map no longer flickers after Fit when it is wider than the window.
+- Peering: a network reached at an exchange port held by one of its sibling networks is read as its own port, and a network's name appears once per finding.
+- Settings › Data: Clear Cache removes cached lookups and downloaded reference data; Clear All Data returns Recursa to a fresh install.
+- Peering: the map no longer makes the page shake at some window sizes.
+- Peering: runs start faster and use less memory; after an update, the prefix tables are fetched at startup instead of by the next map.
+- Peering: the toolbar and the map say when a run is fetching the prefix tables, and the IPv4 and IPv6 tables are refreshed each on its own.
+- Settings › Monitoring: the monitored resolvers can be chosen there as well as in Reliability.
+- Release builds are smaller.
+- Quitting, and the CLI's one-shot commands, fold the database journal back into the file instead of leaving it beside it.
+
+## 0.5.3 (2026-11-02)
+
+- Windows answers now carry the IP hop count, so the hops and interception signals work there.
+- Windows waits for each answer without reusing a timed-out socket and discards late answers to earlier queries.
+- Windows adapter detection falls back to the IPv6 route when there is no IPv4 one.
+- Release builds pin the disk-image tool and check every version file against the tag.
+
+## 0.5.2 (2026-11-02)
 
 - Network map opens at a readable size and scrolls sideways when it is wider than the pane; Fit shows all of it.
 - Local route-origin validation updated, fixing two quick-xml denial-of-service advisories.

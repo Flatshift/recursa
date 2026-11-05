@@ -19,6 +19,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use tokio::task::JoinHandle;
 
 /// The shortest time between cycles.
 pub(crate) const MIN_INTERVAL_MIN: u32 = 2;
@@ -234,19 +235,26 @@ async fn rediscover(app: &AppState, roll: &RollCall, now: i64) -> Vec<Pair> {
     app.store.border_pairs(now)
 }
 
-pub fn spawn(app: Arc<AppState>) {
+pub fn spawn(app: Arc<AppState>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut last_cycle = 0i64;
         let mut last_discovery = 0i64;
         let mut misses: HashMap<i64, u32> = HashMap::new();
         let mut owner: Option<lock::Guard> = None;
+        let mut seen = None;
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;
-            // Another process may have switched it on or off.
-            app.reload_border_monitor();
+            // Another process may have switched it on or off: re-read once something has written to the database.
+            if app.store.changed_since(&mut seen) {
+                app.reload_border_monitor();
+            }
             let cfg = app.border_monitor.borrow().clone();
             if !cfg.enabled || trace::available() != TraceCap::Ok {
                 owner = None;
+                // Switched on again, start afresh: seed from what is recorded and discover at once.
+                last_cycle = 0;
+                last_discovery = 0;
+                misses.clear();
                 continue;
             }
             let now = bench::now_ms();
@@ -255,7 +263,7 @@ pub fn spawn(app: Arc<AppState>) {
                 last_cycle = app.store.border_latest().unwrap_or(0);
             }
             let due = last_cycle + cfg.interval_min.clamp(MIN_INTERVAL_MIN, 60) as i64 * 60_000;
-            if app.run_active.load(Ordering::SeqCst) || app.intel.fetching() || now < due {
+            if app.run_active.load(Ordering::SeqCst) || app.downloading() || now < due {
                 continue;
             }
             if owner.is_none() {
@@ -293,7 +301,7 @@ pub fn spawn(app: Arc<AppState>) {
             app.store.border_record(&samples);
             app.store.border_prune(now - cfg.retention_days as i64 * DAY_MS);
         }
-    });
+    })
 }
 
 // ---------------------------------------------------------------------------------------------

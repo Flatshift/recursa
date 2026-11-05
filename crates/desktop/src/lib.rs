@@ -14,9 +14,8 @@ mod smoke;
 use recursa_engine::app::AppState;
 use recursa_engine::caps::Caps;
 #[cfg(desktop)]
-use tauri::RunEvent;
-#[cfg(desktop)]
-use tauri::{Manager, WindowEvent};
+use tauri::WindowEvent;
+use tauri::{Manager, RunEvent};
 #[cfg(desktop)]
 use tauri_plugin_window_state::StateFlags;
 
@@ -138,6 +137,8 @@ pub fn run() {
             // The last window closed: keep running in the menu bar. Quit still quits.
             #[cfg(desktop)]
             RunEvent::ExitRequested { code: None, api, .. } => api.prevent_exit(),
+            // Quitting: fold the journal back into the database so nothing is left beside it.
+            RunEvent::Exit => app.state::<std::sync::Arc<AppState>>().close(),
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => shell::show_main(app, None),
             _ => {

@@ -59,6 +59,8 @@ jobs:
 
   macos:
     runs-on: macos-latest
+    permissions:
+      contents: write # the notices step commits to Dependabot branches
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -89,10 +91,30 @@ jobs:
           npx svelte-check --tsconfig ./tsconfig.json
           npm test
           npm run build
+      # Dependabot bumps the lockfiles without regenerating the notices, so on its pull requests the step commits the
+      # regenerated file to the branch instead of failing; the rest of the job then runs on that tree. GitHub holds the
+      # run for the pushed commit until someone approves it. Everywhere else a stale file fails the run.
       - name: Third-party notices are current
+        env:
+          DEPENDABOT: >-
+            ${{ github.event.pull_request.user.login == 'dependabot[bot]'
+            && github.event.pull_request.head.repo.full_name == github.repository }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
+          if [ "$DEPENDABOT" = true ]; then
+            git fetch --depth=1 origin "refs/heads/$BRANCH"
+            git checkout --detach FETCH_HEAD
+          fi
           python3 -I tools/notices.py
-          git diff --exit-code -- web/src/legal
+          git diff --quiet -- web/src/legal && exit 0
+          if [ "$DEPENDABOT" != true ]; then
+            git diff -- web/src/legal
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -s -m 'Update third-party notices' -- web/src/legal
+          git push origin "HEAD:refs/heads/$BRANCH"
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --release -- -D warnings
       - run: cargo test --workspace --release
@@ -113,6 +135,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Interface
         working-directory: web

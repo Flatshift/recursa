@@ -61,6 +61,26 @@ export function writeLocal(key: string, v: unknown) {
   }
 }
 
+/** Forget every saved preference and draft (never the session token), and tell other windows to reload. */
+export function resetLocal() {
+  try {
+    for (const k of Object.keys(localStorage)) if (k.startsWith('recursa.')) localStorage.removeItem(k);
+  } catch {
+    /* storage unavailable: nothing was saved to forget */
+  }
+  reloadOthers();
+}
+
+/** Reload every other window on this origin (App.svelte listens), so none shows what was just cleared. */
+export function reloadOthers() {
+  try {
+    localStorage.setItem('recursa.reset', '1');
+    localStorage.removeItem('recursa.reset');
+  } catch {
+    /* storage unavailable: other windows catch up when next opened */
+  }
+}
+
 class AppState {
   boot = $state<Bootstrap | null>(null);
   bootError = $state<string | null>(null);

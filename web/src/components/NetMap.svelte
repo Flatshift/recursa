@@ -14,7 +14,12 @@
   import Provenance from './Provenance.svelte';
   import SetupDial from './SetupDial.svelte';
 
-  let { run, label, running = false }: { run: MapRun | null; label: string; running?: boolean } = $props();
+  let {
+    run,
+    label,
+    running = false,
+    fetching = false,
+  }: { run: MapRun | null; label: string; running?: boolean; fetching?: boolean } = $props();
 
   const groups = $derived(run?.groups ?? []);
   // Nothing can be drawn until the first trace is back, which takes the address tables, the roll call and a whole trace.
@@ -98,7 +103,7 @@
   const svgW = $derived(Math.round(tree.width * scale));
   const svgH = $derived(Math.round(tree.height * scale));
   const zoomBy = (f: number) => (zoom = Math.min(2, Math.max(0.4, scale * f)));
-  const more = $derived(groups.length > 0 && svgW + 24 - scrolled > viewW + 1);
+  const clipped = $derived(groups.length > 0 && svgW + 24 - scrolled > viewW + 1);
 
   // One row per distinct finding: destinations that were found to leave the same way share a row.
   interface Finding {
@@ -115,7 +120,7 @@
       const f = out.find((o) => o.key === key);
       if (f) {
         f.ids.push(c.target);
-        if (t) f.names.push(siteName(t));
+        if (t && !f.names.includes(siteName(t))) f.names.push(siteName(t));
       } else out.push({ key, claim: c, names: t ? [siteName(t)] : [c.target], ids: [c.target] });
     }
     return out;
@@ -123,8 +128,8 @@
   let open = $state<Record<string, boolean>>({});
   const toggle = (k: string) => (open[k] = !open[k]);
   /** The groups a finding's destinations pass through, nearest first, that have routers to list. */
-  // A cloud is drawn as one shaded block per column its boxes sit in, each wrapping that column's boxes and their
-  // round-trip line.
+  // A cloud is drawn as one shaded block per column its boxes sit in, each wrapping that column's boxes with the
+  // CDN's name under the last; the layout leaves that room.
   const blobs = (c: Cloud) => {
     const cols = new Map<number, TreeNode[]>();
     for (const id of c.ids) {
@@ -142,7 +147,7 @@
   const path = (ids: string[]) => groups.filter((g) => g.members.length && g.targets.some((t) => ids.includes(t))).sort((a, b) => a.ttl_from - b.ttl_from);
 </script>
 
-<div class="map panel" class:more class:running>
+<div class="map panel" class:clipped class:running>
   <div class="scroller" bind:clientWidth={viewW} onscroll={(e) => (scrolled = e.currentTarget.scrollLeft)}>
     {#if groups.length}
       <svg width={svgW} height={svgH} viewBox="0 0 {tree.width} {tree.height}" role="img" aria-label={label}>
@@ -195,7 +200,9 @@
                 stroke={hue(g.role)}
                 stroke-width="2"
               />
-              <text class="xlabel" x={n.x + n.w / 2} y={cy + 29} text-anchor="middle">{g.label}</text>
+              <text class="xlabel" x={n.x + n.w / 2} y={cy + 28} text-anchor="middle"
+                >{g.label}{#if g.rtt_ms != null}<tspan class="rtt" dx="6">{ms(g.rtt_ms, true)}</tspan>{/if}</text
+              >
             {:else if g.role === 'home'}
               <rect x={n.x} y={n.y} width={n.w} height={n.h} rx="6" fill="color-mix(in oklch, {hue(g.role)} 12%, var(--surface))" stroke={hue(g.role)} stroke-width="1.5" />
               <path
@@ -215,13 +222,18 @@
                 stroke-dasharray={hollow ? '4 3' : undefined}
               />
               <foreignObject x={n.x} y={n.y} width={n.w} height={n.h}>
-                <div class="nbox" class:pill={g.role === 'content'} class:lone={!sub}>
+                <div class="nbox" class:pill={g.role === 'content'} class:lone={!sub && g.rtt_ms == null}>
                   <span class="nlabel">{g.label}</span>
-                  {#if sub}<span class="nsub">{sub}</span>{/if}
+                  {#if sub || g.rtt_ms != null}
+                    <span class="meta">
+                      {#if sub}<span class="nsub">{sub}</span>{/if}
+                      {#if g.rtt_ms != null}<span class="rtt">{ms(g.rtt_ms, true)}</span>{/if}
+                    </span>
+                  {/if}
                 </div>
               </foreignObject>
             {/if}
-            {#if g.rtt_ms != null}
+            {#if g.role === 'home' && g.rtt_ms != null}
               <text class="rtt" x={n.x + n.w} y={n.y + n.h + 13} text-anchor="end">{ms(g.rtt_ms, true)}</text>
             {/if}
           </g>
@@ -238,7 +250,11 @@
     {/if}
   </div>
   {#if starting}
-    <div class="starting" role="img" aria-label={label} aria-busy="true"><SetupDial /></div>
+    {@const phase = fetching ? 'Fetching the prefix tables' : 'Finding the first routes'}
+    <div class="starting" role="img" aria-label="{label}. {phase}" aria-busy="true">
+      <SetupDial />
+      <p>{phase}</p>
+    </div>
   {/if}
   {#if groups.length}
     <div class="zoom" role="group" aria-label="Zoom">
@@ -326,9 +342,16 @@
     inset: 0;
     display: grid;
     place-items: center;
+    align-content: center;
+    gap: 10px;
     pointer-events: none;
   }
-  .map.more::after {
+  .starting p {
+    margin: 0;
+    font-size: var(--t-sm);
+    color: var(--ink-3);
+  }
+  .map.clipped::after {
     content: '';
     position: absolute;
     top: 0;
@@ -342,7 +365,7 @@
     display: block;
     margin: 0 auto;
   }
-  /* The label inside a box: one line each, the name alone may take two. */
+  /* The label inside a box: the name, then what is known and the round trip on one line; the name alone may take two. */
   .nbox {
     box-sizing: border-box;
     height: 100%;
@@ -377,12 +400,25 @@
     line-clamp: 2;
     overflow-wrap: anywhere;
   }
+  .meta {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+  }
   .nsub {
+    flex: 1 1 auto;
+    min-width: 0;
     font-size: var(--t-xs);
     color: var(--ink-3);
   }
   .rtt {
+    flex: none;
+    margin-left: auto;
     font-size: var(--t-2xs);
+    font-weight: 400;
+    color: var(--ink-3);
     fill: var(--ink-3);
     font-variant-numeric: tabular-nums;
   }

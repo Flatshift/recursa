@@ -32,7 +32,9 @@
     {#snippet actions()}
       {#if view === 'map'}
         {#if nm.running}
-          <span class="progress" role="status">Mapping{prog ? `, ${prog.done} of ${prog.total}` : ''}</span>
+          <span class="progress" role="status"
+            >{prog ? `Mapping, ${prog.done} of ${prog.total}` : nm.data?.fetching ? 'Fetching the prefix tables' : 'Mapping'}</span
+          >
           <button class="btn" onclick={nm.cancel}>Cancel</button>
         {:else}
           <button class="btn primary" disabled={!nm.loaded || blocked} title="Trace the way to each destination and draw where your ISP hands it off" onclick={nm.start}>
@@ -71,5 +73,10 @@
     margin-right: 8px;
     font-size: var(--t-xs);
     color: var(--ink-3);
+  }
+  /* The map's size follows the pane's width. Reserving the scrollbar's gutter stops a scrollbar that comes and goes
+     from resizing the map, which brought it back again and made the page shake. */
+  .content {
+    scrollbar-gutter: stable;
   }
 </style>

@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::task::JoinHandle;
 
 /// The shortest time between cycles.
 pub(crate) const MIN_INTERVAL_MIN: u32 = 15;
@@ -81,17 +82,22 @@ impl NtpMonitorConfig {
     }
 }
 
-pub fn spawn(app: Arc<AppState>) {
+pub fn spawn(app: Arc<AppState>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut last_cycle = 0i64;
         let mut owner: Option<lock::Guard> = None;
+        let mut seen = None;
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;
-            // Another process may have switched it on or off.
-            app.reload_ntp_monitor();
+            // Another process may have switched it on or off: re-read once something has written to the database.
+            if app.store.changed_since(&mut seen) {
+                app.reload_ntp_monitor();
+            }
             let cfg = app.ntp_monitor.borrow().clone();
             if !cfg.enabled {
                 owner = None;
+                // Switched on again, seed afresh from what is recorded (nothing, once the data is cleared).
+                last_cycle = 0;
                 continue;
             }
             let now = bench::now_ms();
@@ -100,7 +106,7 @@ pub fn spawn(app: Arc<AppState>) {
                 last_cycle = app.store.ntp_latest().unwrap_or(0);
             }
             let due = last_cycle + cfg.interval_min.clamp(MIN_INTERVAL_MIN, 1440) as i64 * 60_000;
-            if app.run_active.load(Ordering::SeqCst) || app.intel.fetching() || now < due {
+            if app.run_active.load(Ordering::SeqCst) || app.downloading() || now < due {
                 continue;
             }
             if owner.is_none() {
@@ -143,7 +149,7 @@ pub fn spawn(app: Arc<AppState>) {
             }
             app.store.ntp_prune(now - cfg.retention_days as i64 * 86_400_000);
         }
-    });
+    })
 }
 
 /// One cycle: one query per address, no NTS handshake.

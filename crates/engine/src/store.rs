@@ -3,13 +3,15 @@
 
 use crate::border::{Kind, Pair, Sample as BorderSample};
 use crate::monitor::{HOUR_MS, HourRollup, Outage, OutageTracker, RollupBuilder, RollupRow};
+use crate::netmap::attr;
 use rusqlite::types::Type;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, Transaction, params};
 use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::time::{Duration, Instant};
 
 const PUT_HOUR: &str = "INSERT OR REPLACE INTO monitor_hour(hour, resolver_id, n, ok, cycles, up, first_ts, last_ts, lat)
      VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)";
@@ -95,9 +97,21 @@ impl Store {
             make_dir(dir);
         }
         let conn = Connection::open(&path)?;
+        // Older builds kept the prefix tables unkeyed, with a separate index; drop those so the schema below makes
+        // the keyed ones. The next refresh fills them.
+        let unkeyed: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'pfx2as' AND sql NOT LIKE '%WITHOUT ROWID%')",
+            [],
+            |r| r.get(0),
+        )?;
+        if unkeyed {
+            conn.execute_batch("DROP TABLE IF EXISTS pfx2as; DROP TABLE IF EXISTS pfx2as6")?;
+        }
+        // A reader's snapshot (a Peering run) keeps the WAL from resetting; the reset after it trims the file back.
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
+             PRAGMA journal_size_limit=4194304;
              CREATE TABLE IF NOT EXISTS runs(
                id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, finished_at INTEGER,
                status TEXT NOT NULL, summary TEXT NOT NULL, body TEXT NOT NULL);
@@ -133,9 +147,11 @@ impl Store {
                ts INTEGER NOT NULL, pair INTEGER NOT NULL, near_ms REAL, far_ms REAL);
              CREATE INDEX IF NOT EXISTS border_sample_ts ON border_sample(ts);
              CREATE TABLE IF NOT EXISTS pfx2as(
-               prefix INTEGER NOT NULL, len INTEGER NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL);
+               len INTEGER NOT NULL, prefix INTEGER NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL,
+               PRIMARY KEY (len, prefix)) WITHOUT ROWID;
              CREATE TABLE IF NOT EXISTS pfx2as6(
-               prefix BLOB NOT NULL, len INTEGER NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL);
+               len INTEGER NOT NULL, prefix BLOB NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL,
+               PRIMARY KEY (len, prefix)) WITHOUT ROWID;
              CREATE TABLE IF NOT EXISTS asrel(
                a INTEGER NOT NULL, b INTEGER NOT NULL, rel INTEGER NOT NULL, PRIMARY KEY (a, b));
              CREATE INDEX IF NOT EXISTS asrel_b ON asrel(b);
@@ -175,6 +191,18 @@ impl Store {
                 return Err(e);
             }
         }
+        if unkeyed {
+            // What the Data pane says about the dropped tables goes with them.
+            for k in attr::SETTINGS {
+                conn.execute("DELETE FROM settings WHERE key = ?1", params![k])?;
+            }
+        }
+        // Left over from older builds; one run on this database makes the indexes again.
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS isp_checks;
+             DROP INDEX IF EXISTS pfx2as_len_prefix;
+             DROP INDEX IF EXISTS pfx2as6_len_prefix",
+        )?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version < 1
             && let Err(e) = build_rollups(&mut conn)
@@ -182,9 +210,13 @@ impl Store {
             // History then fills in from new cycles; the next launch tries again.
             eprintln!("Couldn't build the monitoring rollups: {e}");
         }
-        let reader =
-            Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).ok().map(Mutex::new);
+        let reader = Store::open_reader(&path).ok().map(Mutex::new);
         Ok(Store { conn: Mutex::new(conn), reader, path })
+    }
+
+    /// A read-only connection to the database at `path`, for reads that must not wait on the writer.
+    pub(crate) fn open_reader(path: &Path) -> rusqlite::Result<Connection> {
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
     }
 
     pub fn cache_get(&self, key: &str, max_age_ms: i64) -> Option<(serde_json::Value, i64)> {
@@ -310,10 +342,11 @@ impl Store {
         c.execute("DELETE FROM custom WHERE id=?1", params![id]).map(|n| n > 0).unwrap_or(false)
     }
 
-    fn setting(&self, key: &str) -> Option<serde_json::Value> {
+    /// The setting at `key`: `Ok(None)` when there is no row or it isn't JSON, `Err` when the database couldn't be read.
+    fn setting(&self, key: &str) -> rusqlite::Result<Option<serde_json::Value>> {
         let c = self.conn.lock().unwrap();
-        let s: Option<String> = c.query_row("SELECT body FROM settings WHERE key=?1", params![key], |r| r.get(0)).optional().ok().flatten();
-        s.and_then(|s| serde_json::from_str(&s).ok())
+        let s: Option<String> = c.query_row("SELECT body FROM settings WHERE key=?1", params![key], |r| r.get(0)).optional()?;
+        Ok(s.and_then(|s| serde_json::from_str(&s).ok()))
     }
 
     fn set_setting(&self, key: &str, v: &serde_json::Value) {
@@ -321,9 +354,15 @@ impl Store {
         let _ = c.execute("INSERT OR REPLACE INTO settings(key, body) VALUES(?1, ?2)", params![key, v.to_string()]);
     }
 
-    /// The setting at `key` as a `T`; `None` when there is none or it doesn't parse.
+    /// The setting at `key` as a `T`; `None` when there is none, it doesn't parse or the database couldn't be read.
     pub fn get<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
-        self.setting(key).and_then(|v| serde_json::from_value(v).ok())
+        self.read(key).ok().flatten()
+    }
+
+    /// [`Store::get`] for callers that must tell a missing row from a database they couldn't read (busy, closed):
+    /// `Err` is the latter, and the row may well still be there.
+    pub fn read<T: serde::de::DeserializeOwned>(&self, key: &str) -> rusqlite::Result<Option<T>> {
+        Ok(self.setting(key)?.and_then(|v| serde_json::from_value(v).ok()))
     }
 
     /// Save `v` as the setting at `key`.
@@ -350,6 +389,15 @@ impl Store {
     /// The connection for a long read: the read-only one, else `conn`.
     fn rd(&self) -> MutexGuard<'_, Connection> {
         self.reader.as_ref().unwrap_or(&self.conn).lock().unwrap()
+    }
+
+    /// Whether any connection, in any process, has committed since the last call with this `seen` (updated here);
+    /// true the first time.
+    pub fn changed_since(&self, seen: &mut Option<i64>) -> bool {
+        match self.rd().query_row("PRAGMA data_version", [], |r| r.get(0)) {
+            Ok(v) => seen.replace(v) != Some(v),
+            Err(_) => true,
+        }
     }
 
     /// Hand the hourly rollups from `since` on to `f`, in hour order, on the read-only
@@ -518,6 +566,110 @@ impl Store {
     }
 }
 
+/// The tables Clear Cache empties: the lookup cache and downloaded reference data.
+pub(crate) const DOWNLOADED: [&str; 11] =
+    ["cache", "pfx2as", "pfx2as6", "asrel", "pdb_sync", "pdb_ix", "pdb_ixpfx", "pdb_netixlan", "pdb_fac", "pdb_netfac", "rdap_block"];
+/// The tables Clear All empties as well. Every table but `settings` is in one list or the other.
+pub(crate) const HISTORY: [&str; 10] = [
+    "runs",
+    "monitor",
+    "monitor_hour",
+    "monitor_outage",
+    "ntp_sample",
+    "ntp_clock",
+    "border_pair",
+    "border_sample",
+    "netmap_run",
+    "custom",
+];
+
+/// Whether either prefix table is empty, on any connection to the database.
+pub(crate) const PFX2AS_EMPTY: &str = "SELECT NOT EXISTS(SELECT 1 FROM pfx2as) OR NOT EXISTS(SELECT 1 FROM pfx2as6)";
+
+/// What the Data pane clears (see [`Store::clear`]).
+impl Store {
+    /// Empty the cache and the downloaded reference tables, and delete the settings in `forget`; with `all`, every
+    /// other table and setting too, except `keep`. One transaction: a failure leaves everything. The space the rows
+    /// held goes back with [`Store::compact`].
+    pub fn clear(&self, all: bool, forget: &[&str], keep: &str) -> rusqlite::Result<()> {
+        let mut c = self.conn.lock().unwrap();
+        let tx = c.transaction()?;
+        for t in DOWNLOADED.iter().chain(if all { HISTORY.iter() } else { [].iter() }) {
+            tx.execute(&format!("DELETE FROM {t}"), [])?;
+        }
+        if all {
+            tx.execute("DELETE FROM settings WHERE key != ?1", params![keep])?;
+        } else {
+            for k in forget {
+                tx.execute("DELETE FROM settings WHERE key = ?1", params![k])?;
+            }
+        }
+        tx.commit()
+    }
+
+    /// Give the space deleted rows held back to the file system: VACUUM, then a WAL checkpoint, skipped if another
+    /// process has the database busy.
+    pub fn compact(&self) -> rusqlite::Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute_batch("VACUUM")?;
+        let _ = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+        Ok(())
+    }
+
+    /// Fold the WAL back into the file and close both connections, so quitting leaves no journal beside the
+    /// database and the next open has nothing to recover. For the way out only: calls after this fail. Waits a few
+    /// seconds at most, for a write in progress (a VACUUM, a table replace) and for a snapshot a map run still holds;
+    /// past that the journal stays, and the next open recovers it, rolling the write back.
+    pub fn close(&self) {
+        const WAIT: Duration = Duration::from_secs(3);
+        // The connection behind `m`, waiting until `deadline` for whoever holds it; a poisoned lock is taken as it is.
+        fn take(m: &Mutex<Connection>, deadline: Instant) -> Option<MutexGuard<'_, Connection>> {
+            loop {
+                match m.try_lock() {
+                    Ok(c) => return Some(c),
+                    Err(TryLockError::Poisoned(p)) => return Some(p.into_inner()),
+                    Err(TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+                    Err(TryLockError::WouldBlock) => return None,
+                }
+            }
+        }
+        // Swap `c` for a throwaway in-memory connection and close it.
+        fn shut(c: &mut Connection) {
+            if let Ok(dummy) = Connection::open_in_memory() {
+                let _ = std::mem::replace(c, dummy).close();
+            }
+        }
+        let deadline = Instant::now() + WAIT;
+        // The reader first, on its own: its snapshot would hold the checkpoint back.
+        if let Some(mut r) = self.reader.as_ref().and_then(|m| take(m, deadline)) {
+            shut(&mut r);
+        }
+        let Some(mut c) = take(&self.conn, deadline) else { return };
+        // The checkpoint waits for other connections' snapshots through the busy handler: the rest of the budget.
+        let _ = c.busy_timeout(deadline.saturating_duration_since(Instant::now()));
+        let _ = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+        shut(&mut c);
+    }
+
+    /// The bytes the database and its WAL take on disk.
+    pub fn file_size(&self) -> u64 {
+        let wal = format!("{}-wal", self.path.display());
+        [self.path.as_path(), Path::new(&wal)].iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum()
+    }
+}
+
+/// The size of everything under `dir`, in bytes; 0 if it isn't there.
+pub(crate) fn dir_size(dir: &Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+    rd.flatten()
+        .map(|e| match e.metadata() {
+            Ok(m) if m.is_dir() => dir_size(&e.path()),
+            Ok(m) => m.len(),
+            Err(_) => 0,
+        })
+        .sum()
+}
+
 impl Store {
     /// Store a new pair, returning its id.
     pub fn border_insert_pair(&self, p: &Pair) -> i64 {
@@ -645,6 +797,11 @@ impl Store {
         let _ = c.execute("INSERT OR REPLACE INTO netmap_run(id, ts, body) VALUES(1, ?1, ?2)", params![ts, body]);
     }
 
+    /// Whether a network map has been run.
+    pub fn netmap_exists(&self) -> bool {
+        self.rd().query_row("SELECT 1 FROM netmap_run WHERE id = 1", [], |_| Ok(())).optional().ok().flatten().is_some()
+    }
+
     /// The stored network map run: when it was made, and its JSON.
     pub fn netmap_last(&self) -> Option<(i64, String)> {
         let c = self.rd();
@@ -652,36 +809,25 @@ impl Store {
     }
 
     /// Replace the whole prefix-to-network table with `rows` (prefix as a number, length, origin, whether several
-    /// networks announce it), in one transaction: a failure leaves the old table.
+    /// networks announce it), in one transaction: a failure leaves the old table, and so does no rows at all
+    /// (`QueryReturnedNoRows`), since a download that parsed to nothing mustn't wipe it. Of two rows for one prefix,
+    /// the first stays.
     pub fn pfx2as_replace(&self, rows: impl Iterator<Item = (u32, u8, u32, bool)>) -> rusqlite::Result<usize> {
         let mut c = self.conn.lock().unwrap();
         let tx = c.transaction()?;
         tx.execute("DELETE FROM pfx2as", [])?;
         let mut n = 0;
         {
-            let mut st = tx.prepare("INSERT INTO pfx2as(prefix, len, asn, moas) VALUES(?1,?2,?3,?4)")?;
+            let mut st = tx.prepare("INSERT OR IGNORE INTO pfx2as(len, prefix, asn, moas) VALUES(?1,?2,?3,?4)")?;
             for (prefix, len, asn, moas) in rows {
-                st.execute(params![prefix, len, asn, moas])?;
-                n += 1;
+                n += st.execute(params![len, prefix, asn, moas])?;
             }
+        }
+        if n == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
         }
         tx.commit()?;
         Ok(n)
-    }
-
-    /// Hand every prefix-to-network row to `f`, on the read-only connection.
-    pub fn pfx2as_each(&self, mut f: impl FnMut(u32, u8, u32, bool)) {
-        let c = self.rd();
-        let Ok(mut st) = c.prepare("SELECT prefix, len, asn, moas FROM pfx2as") else { return };
-        let Ok(rows) = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))) else { return };
-        for (p, l, a, m) in rows.flatten() {
-            f(p, l, a, m);
-        }
-    }
-
-    pub fn pfx2as_count(&self) -> usize {
-        let c = self.rd();
-        c.query_row("SELECT COUNT(*) FROM pfx2as", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize
     }
 
     /// [`Store::pfx2as_replace`] for the IPv6 table: the prefix is the masked network as a number, stored as its 16
@@ -692,31 +838,28 @@ impl Store {
         tx.execute("DELETE FROM pfx2as6", [])?;
         let mut n = 0;
         {
-            let mut st = tx.prepare("INSERT INTO pfx2as6(prefix, len, asn, moas) VALUES(?1,?2,?3,?4)")?;
+            let mut st = tx.prepare("INSERT OR IGNORE INTO pfx2as6(len, prefix, asn, moas) VALUES(?1,?2,?3,?4)")?;
             for (prefix, len, asn, moas) in rows {
-                st.execute(params![&prefix.to_be_bytes()[..], len, asn, moas])?;
-                n += 1;
+                n += st.execute(params![len, &prefix.to_be_bytes()[..], asn, moas])?;
             }
+        }
+        if n == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
         }
         tx.commit()?;
         Ok(n)
     }
 
-    /// Hand every IPv6 prefix-to-network row to `f`, on the read-only connection.
-    pub fn pfx2as6_each(&self, mut f: impl FnMut(u128, u8, u32, bool)) {
-        let c = self.rd();
-        let Ok(mut st) = c.prepare("SELECT prefix, len, asn, moas FROM pfx2as6") else { return };
-        let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get(1)?, r.get(2)?, r.get(3)?))) else { return };
-        for (p, l, a, m) in rows.flatten() {
-            if let Ok(b) = <[u8; 16]>::try_from(p.as_slice()) {
-                f(u128::from_be_bytes(b), l, a, m);
-            }
-        }
+    /// Either prefix table is empty: fetched before any run.
+    pub fn pfx2as_empty(&self) -> bool {
+        self.rd().query_row(PFX2AS_EMPTY, [], |r| r.get(0)).unwrap_or(true)
     }
 
-    pub fn pfx2as6_count(&self) -> usize {
-        let c = self.rd();
-        c.query_row("SELECT COUNT(*) FROM pfx2as6", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize
+    /// Whether the IPv4 and the IPv6 prefix table each hold rows.
+    pub fn pfx2as_filled(&self) -> (bool, bool) {
+        self.rd()
+            .query_row("SELECT EXISTS(SELECT 1 FROM pfx2as), EXISTS(SELECT 1 FROM pfx2as6)", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap_or((false, false))
     }
 
     /// Replace the whole AS-relationship table with `rows` (a, b, rel: -1 = a provides for b, 0 = peers), in one
@@ -889,21 +1032,57 @@ fn build_rollups(conn: &mut Connection) -> rusqlite::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn temp_path() -> PathBuf {
+    pub(crate) fn temp_path() -> PathBuf {
         std::env::temp_dir().join(format!("recursa-store-{:x}.db", fastrand::u64(..)))
     }
 
-    fn remove(path: &std::path::Path) {
+    pub(crate) fn remove(path: &std::path::Path) {
         for ext in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{ext}", path.display()));
         }
     }
 
+    /// A scratch database's path, removed with its WAL and index when dropped.
+    pub(crate) struct Scratch(pub(crate) PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            remove(&self.0);
+        }
+    }
+
     fn ids(store: &Store) -> Vec<String> {
         store.list_runs(100).into_iter().map(|r| r.id).collect()
+    }
+
+    #[test]
+    fn changed_since_sees_commits_by_other_connections() {
+        let path = temp_path();
+        let a = Store::open(path.clone()).unwrap();
+        let b = Store::open(path.clone()).unwrap();
+        let mut seen = None;
+        assert!(a.changed_since(&mut seen), "the first call");
+        assert!(!a.changed_since(&mut seen), "nothing committed since");
+        b.put("monitor", &true);
+        assert!(a.changed_since(&mut seen), "another connection's commit");
+        assert!(!a.changed_since(&mut seen));
+        drop((a, b));
+        remove(&path);
+    }
+
+    #[test]
+    fn opening_drops_the_table_left_by_older_builds() {
+        let path = temp_path();
+        Connection::open(&path).unwrap().execute_batch("CREATE TABLE isp_checks(id INTEGER)").unwrap();
+        let store = Store::open(path.clone()).unwrap();
+        let n: i64 =
+            store.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = 'isp_checks'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+        drop(store);
+        remove(&path);
     }
 
     #[test]
@@ -1021,7 +1200,7 @@ mod tests {
         assert!(!rows[0].saved);
         assert!(store.set_run_saved("old", true));
         // Its runs predate saving, so cleanup starts switched off.
-        assert_eq!(store.setting("housekeeping"), Some(serde_json::json!({ "keep_runs": null, "keep_days": null })));
+        assert_eq!(store.setting("housekeeping").unwrap(), Some(serde_json::json!({ "keep_runs": null, "keep_days": null })));
         drop(store);
         // Opening again leaves the column and the mark alone.
         let store = Store::open(path.clone()).unwrap();
@@ -1040,10 +1219,10 @@ mod tests {
             )
             .unwrap();
         }
-        assert_eq!(Store::open(path.clone()).unwrap().setting("housekeeping"), None);
+        assert_eq!(Store::open(path.clone()).unwrap().setting("housekeeping").unwrap(), None);
         remove(&path);
         let path = temp_path();
-        assert_eq!(Store::open(path.clone()).unwrap().setting("housekeeping"), None);
+        assert_eq!(Store::open(path.clone()).unwrap().setting("housekeeping").unwrap(), None);
         remove(&path);
     }
 
@@ -1051,19 +1230,25 @@ mod tests {
     fn netmap_tables_replace_wholesale_and_keep_one_run() {
         let path = temp_path();
         let store = Store::open(path.clone()).unwrap();
-        // The prefix table is swapped in one go: the second load leaves none of the first.
+        let rows = |t: &str| -> Vec<(u8, u32, bool)> {
+            store.with_conn(|c| {
+                let mut st = c.prepare(&format!("SELECT len, asn, moas FROM {t}")).unwrap();
+                st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect()
+            })
+        };
+        // The prefix table is swapped in one go: the second load leaves none of the first, and of two rows for one
+        // prefix the first stays. Either table empty counts as empty.
+        assert!(store.pfx2as_empty());
         assert_eq!(store.pfx2as_replace([(0x0800_0000, 8, 1, false), (0x0808_0800, 24, 15169, true)].into_iter()).unwrap(), 2);
-        assert_eq!(store.pfx2as_replace([(0x0102_0300, 24, 7, false)].into_iter()).unwrap(), 1);
-        let mut rows = Vec::new();
-        store.pfx2as_each(|p, l, a, m| rows.push((p, l, a, m)));
-        assert_eq!((store.pfx2as_count(), rows), (1, vec![(0x0102_0300, 24, 7, false)]));
+        assert_eq!(store.pfx2as_replace([(0x0102_0300, 24, 7, false), (0x0102_0300, 24, 8, false)].into_iter()).unwrap(), 1);
+        assert_eq!(rows("pfx2as"), [(24, 7, false)]);
+        assert!(store.pfx2as_empty());
         // The IPv6 table is the same, with 16-byte prefixes.
         let net6 = 0x2001_0db8_u128 << 96;
         assert_eq!(store.pfx2as6_replace([(net6, 32, 1, false), (net6 | (1 << 80), 48, 2, true)].into_iter()).unwrap(), 2);
         assert_eq!(store.pfx2as6_replace([(net6 | (1 << 80), 48, 7, true)].into_iter()).unwrap(), 1);
-        let mut rows6 = Vec::new();
-        store.pfx2as6_each(|p, l, a, m| rows6.push((p, l, a, m)));
-        assert_eq!((store.pfx2as6_count(), rows6), (1, vec![(net6 | (1 << 80), 48, 7, true)]));
+        assert_eq!(rows("pfx2as6"), [(48, 7, true)]);
+        assert!(!store.pfx2as_empty());
         // The relationship table is swapped whole too, and read by either side.
         store.asrel_replace(&[(9, 9, 0)]).unwrap();
         store.asrel_replace(&[(1299, 64500, -1), (2906, 64500, 0), (6461, 20055, -1)]).unwrap();
@@ -1083,5 +1268,90 @@ mod tests {
         }
         drop(store);
         remove(&path);
+    }
+
+    #[test]
+    fn opening_rekeys_the_prefix_tables_of_older_builds() {
+        let files = Scratch(temp_path());
+        const OLD_INDEXES: &str =
+            "CREATE INDEX pfx2as_len_prefix ON pfx2as(len, prefix); CREATE INDEX pfx2as6_len_prefix ON pfx2as6(len, prefix)";
+        {
+            let c = Connection::open(&files.0).unwrap();
+            c.execute_batch(
+                "CREATE TABLE pfx2as(prefix INTEGER NOT NULL, len INTEGER NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL);
+                 CREATE TABLE pfx2as6(prefix BLOB NOT NULL, len INTEGER NOT NULL, asn INTEGER NOT NULL, moas INTEGER NOT NULL);
+                 INSERT INTO pfx2as VALUES(134217728, 8, 1, 0);
+                 CREATE TABLE settings(key TEXT PRIMARY KEY, body TEXT NOT NULL);
+                 INSERT INTO settings VALUES('other', '2')",
+            )
+            .unwrap();
+            c.execute_batch(OLD_INDEXES).unwrap();
+            for k in attr::SETTINGS {
+                c.execute("INSERT INTO settings VALUES(?1, '1')", params![k]).unwrap();
+            }
+        }
+        // Every table and index on the prefix tables, with its SQL.
+        fn schema(store: &Store) -> Vec<(String, String)> {
+            store.with_conn(|c| {
+                let mut st = c.prepare("SELECT name, sql FROM sqlite_master WHERE tbl_name LIKE 'pfx2as%' ORDER BY name").unwrap();
+                st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+            })
+        }
+        let keyed = |store: &Store| {
+            let schema = schema(store);
+            assert_eq!(schema.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(), ["pfx2as", "pfx2as6"]);
+            assert!(schema.iter().all(|(_, sql)| sql.ends_with("WITHOUT ROWID")), "{schema:?}");
+        };
+        // The unkeyed tables of an older build go, rows, indexes and fetch record and all; keyed ones take their place.
+        let store = Store::open(files.0.clone()).unwrap();
+        keyed(&store);
+        assert!(store.pfx2as_empty());
+        assert!(attr::SETTINGS.into_iter().all(|k| store.get::<i64>(k).is_none()));
+        assert_eq!(store.get::<i64>("other"), Some(2));
+        // A keyed table survives reopening, and an older build's run on it only adds the indexes back.
+        store.pfx2as_replace([(0x0800_0000, 8, 1, false)].into_iter()).unwrap();
+        store.pfx2as6_replace([(0x2001_0db8_u128 << 96, 32, 1, false)].into_iter()).unwrap();
+        store.with_conn(|c| c.execute_batch(OLD_INDEXES).unwrap());
+        drop(store);
+        let store = Store::open(files.0.clone()).unwrap();
+        keyed(&store);
+        assert!(!store.pfx2as_empty());
+    }
+
+    #[test]
+    fn clear_empties_the_tables_and_compact_gives_the_space_back() {
+        let files = Scratch(temp_path());
+        let store = Store::open(files.0.clone()).unwrap();
+        let count = |t: &str| -> i64 { store.with_conn(|c| c.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap()) };
+        store.pfx2as_replace((1..50_000u32).map(|i| (i << 12, 20, i, false))).unwrap();
+        store.netmap_put(10, "{}");
+        for (k, v) in [("a", 1), ("b", 2), ("keep", 3)] {
+            store.put(k, &v);
+        }
+        let before = store.file_size();
+        // Clear Cache empties the downloaded tables and forgets the settings named; history and the rest stay.
+        store.clear(false, &["a"], "keep").unwrap();
+        assert_eq!((count("pfx2as"), count("netmap_run")), (0, 1));
+        assert_eq!((store.get::<i64>("a"), store.get::<i64>("b"), store.get::<i64>("keep")), (None, Some(2), Some(3)));
+        // The rows' space comes back once compacted.
+        store.compact().unwrap();
+        let after = store.file_size();
+        assert!(after < before, "{after} >= {before}");
+        // Clear All empties the history too, and every setting but the one kept.
+        store.clear(true, &[], "keep").unwrap();
+        assert_eq!(count("netmap_run"), 0);
+        assert_eq!((store.get::<i64>("b"), store.get::<i64>("keep")), (None, Some(3)));
+    }
+
+    #[test]
+    fn close_leaves_no_journal_beside_the_database() {
+        let files = Scratch(temp_path());
+        let store = Store::open(files.0.clone()).unwrap();
+        store.put("k", &1);
+        let wal = PathBuf::from(format!("{}-wal", files.0.display()));
+        assert!(std::fs::metadata(&wal).is_ok_and(|m| m.len() > 0));
+        store.close();
+        assert!(!wal.exists());
+        assert_eq!(Store::open(files.0.clone()).unwrap().get::<i64>("k"), Some(1));
     }
 }

@@ -51,7 +51,7 @@ mod table;
 
 use crate::app::{ApiError, AppState};
 use crate::bench::now_ms;
-use crate::store::Store;
+use crate::store::{Store, dir_size};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
 use std::net::IpAddr;
@@ -83,6 +83,8 @@ pub struct Rpki {
     /// Bumped when the setting goes off: a sync that began earlier is ended.
     epoch: AtomicU64,
     state: Mutex<State>,
+    /// Held for reading while a sync runs; Settings › Data's clears take it for writing (see [`crate::intel::Intel`]).
+    fetches: Arc<tokio::sync::RwLock<()>>,
 }
 
 #[derive(Default)]
@@ -103,8 +105,8 @@ struct State {
 
 impl Rpki {
     /// `dir` is `<data dir>/rpki`. Nothing is read or created until it is needed.
-    pub(crate) fn new(dir: PathBuf, store: Arc<Store>, measuring: Arc<AtomicBool>) -> Arc<Self> {
-        Arc::new(Rpki { dir, store, measuring, epoch: AtomicU64::new(0), state: Mutex::default() })
+    pub(crate) fn new(dir: PathBuf, store: Arc<Store>, measuring: Arc<AtomicBool>, fetches: Arc<tokio::sync::RwLock<()>>) -> Arc<Self> {
+        Arc::new(Rpki { dir, store, measuring, epoch: AtomicU64::new(0), state: Mutex::default(), fetches })
     }
 
     pub(crate) fn enabled(&self) -> bool {
@@ -144,22 +146,27 @@ impl Rpki {
         if on {
             self.start_sync();
         } else {
-            self.epoch.fetch_add(1, Ordering::SeqCst);
-            let idle = {
-                let mut s = self.state.lock().unwrap();
-                s.loaded = true;
-                s.table = None;
-                s.error = None;
-                s.stats = None;
-                s.disk_bytes = 0;
-                s.syncing_since.is_none()
-            };
-            // A sync in progress is ended within a moment and deletes the cache as it ends.
-            if idle {
-                self.delete_cache();
-            }
+            self.turn_off();
         }
         self.status()
+    }
+
+    /// Forget the table and delete the cache, leaving the setting as it is: Clear All Data has already dropped it.
+    pub(crate) fn turn_off(&self) {
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+        let idle = {
+            let mut s = self.state.lock().unwrap();
+            s.loaded = true;
+            s.table = None;
+            s.error = None;
+            s.stats = None;
+            s.disk_bytes = 0;
+            s.syncing_since.is_none()
+        };
+        // A sync in progress is ended within a moment and deletes the cache as it ends.
+        if idle {
+            self.delete_cache();
+        }
     }
 
     /// Removes what this module wrote, and the folder if nothing else is in it.
@@ -189,6 +196,10 @@ impl Rpki {
         if !self.enabled() || self.measuring.load(Ordering::SeqCst) || crate::lock::busy() {
             return false;
         }
+        // A clear is emptying the data folder: nothing starts until it is done.
+        let Ok(fetching) = self.fetches.clone().try_read_owned() else {
+            return false;
+        };
         {
             let mut s = self.state.lock().unwrap();
             if s.syncing_since.is_some() {
@@ -197,7 +208,10 @@ impl Rpki {
             s.syncing_since = Some(now_ms());
         }
         let me = self.clone();
-        let spawned = std::thread::Builder::new().name("recursa-rpki".into()).spawn(move || me.sync_thread());
+        let spawned = std::thread::Builder::new().name("recursa-rpki".into()).spawn(move || {
+            let _fetching = fetching;
+            me.sync_thread()
+        });
         if spawned.is_err() {
             self.state.lock().unwrap().syncing_since = None;
             return false;
@@ -462,17 +476,6 @@ fn verdict(table: &Table, time: i64, asn: u64, prefix: &str) -> Value {
     json!({ "status": v.status, "state": "ready", "roas": roas, "validator": Rpki::validator(), "vrp_time": time })
 }
 
-fn dir_size(dir: &Path) -> u64 {
-    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
-    rd.flatten()
-        .map(|e| match e.metadata() {
-            Ok(m) if m.is_dir() => dir_size(&e.path()),
-            Ok(m) => m.len(),
-            Err(_) => 0,
-        })
-        .sum()
-}
-
 /// `GET /api/rpki` (status), `PUT /api/rpki` (`{ "enabled": bool }`), `POST /api/rpki/sync`.
 pub async fn call(app: &Arc<AppState>, method: &str, segs: &[&str], body: Value) -> Result<String, ApiError> {
     let rpki = &app.intel.rpki;
@@ -607,7 +610,7 @@ mod tests {
     fn rpki_in(dir: &Path, enabled: bool, measuring: bool) -> Arc<Rpki> {
         let store = Arc::new(Store::open(dir.join("test.db")).unwrap());
         store.put(SETTING, &enabled);
-        Rpki::new(dir.join("rpki"), store, Arc::new(AtomicBool::new(measuring)))
+        Rpki::new(dir.join("rpki"), store, Arc::new(AtomicBool::new(measuring)), Arc::default())
     }
 
     fn scratch() -> PathBuf {

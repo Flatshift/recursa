@@ -90,9 +90,10 @@
   const onRun = $derived(app.route.name === 'run' && app.run);
   const stripEnv = $derived(onRun ? app.run!.env : app.env);
 
-  // A settings window changing the theme updates this one too.
+  // A settings window changing the theme updates this one too, and clearing data reloads every window.
   function onStorage(e: StorageEvent) {
     if (e.key === 'recursa.theme' && e.newValue) app.setTheme(JSON.parse(e.newValue));
+    if (e.key === 'recursa.reset' && e.newValue) location.reload();
   }
 
   // The app has no "Reload / Inspect Element" menu: keep the WebKit default only where it

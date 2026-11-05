@@ -139,7 +139,7 @@
         </span>
       </label>
       {#if sets && sets.pfx2as.fetched_at == null}
-        <span class="chip">Network names need the CAIDA table, fetching</span>
+        <span class="chip">Network names need the prefix tables, fetching</span>
       {/if}
     </div>
   </div>
@@ -147,7 +147,7 @@
   {#if view === 'table' && run}
     <NetMapTable {run} />
   {:else}
-    <NetMap {run} {label} {running} />
+    <NetMap {run} {label} {running} fetching={d?.fetching ?? false} />
   {/if}
   {#if run?.skipped.length}
     <p class="fine">Not traced: {run.skipped.map((s) => `${s.target} (${s.reason})`).join(', ')}.</p>

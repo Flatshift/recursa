@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { app } from '../lib/store.svelte';
-  import { mobile } from '../lib/api';
+  import { mobile, openSettings } from '../lib/api';
   import { status, stateLabel, stateGlyph, localNote } from '../lib/status.svelte';
   import { RESOLVER_INTERVAL_MIN, RETENTION_DAYS, resolverMonitor } from '../lib/monitor.svelte';
   import type { MonitorHist } from '../lib/types';
@@ -11,6 +11,7 @@
   import Toolbar from '../components/Toolbar.svelte';
   import Info from '../components/Info.svelte';
   import Picks from '../components/Picks.svelte';
+  import ResolverChips from '../components/ResolverChips.svelte';
   import Record, { type Mark } from '../components/Record.svelte';
 
   const RANGES: [number, string, string][] = [
@@ -29,6 +30,12 @@
     saved: (c) => (c.enabled ? `Monitoring every ${c.interval_min} min while Recursa runs.` : 'Monitoring paused.'),
     clearPrompt: 'Delete all monitoring history? This can’t be undone.',
   });
+  // Settings is a window on the desktop and a page elsewhere; either way, land on Monitoring, where the resolvers are picked.
+  function toSettings(e: MouseEvent) {
+    e.preventDefault();
+    if (app.boot?.caps.settings_window) openSettings('monitoring');
+    else app.navigate('/settings#monitoring');
+  }
   // Monitoring was switched from the menu bar: take its config as the new baseline.
   $effect(() => {
     if (!app.monitorRev) return;
@@ -213,19 +220,9 @@
           </label>
           <details class="pickers">
             <summary><Icon name="chevron-right" size={12} />{plural(mon.cfg.resolvers.length, 'resolver')} {mon.cfg.enabled ? 'monitored' : 'selected'}</summary>
-            <div class="chips">
-              {#each resolvers.filter((r) => r.group !== 'legacy') as r (r.id)}
-                {@const on = mon.cfg.resolvers.includes(r.id)}
-                <button
-                  class="chip"
-                  class:on
-                  aria-pressed={on}
-                  onclick={() => mon.save({ ...mon.cfg!, resolvers: on ? mon.cfg!.resolvers.filter((x) => x !== r.id) : [...mon.cfg!.resolvers, r.id] })}
-                  >{#if on}<Icon name="check" size={11} />{/if}{r.provider} {r.variant}</button
-                >
-              {/each}
-            </div>
+            <ResolverChips cfg={mon.cfg} {resolvers} disabled={mon.saving} save={mon.save} />
           </details>
+          <a class="change" href="/settings#monitoring" onclick={toSettings}><Icon name="gear" size={12} />Change in Settings</a>
           {#if mon.data?.last}<span class="last">Last check {ago(mon.data.last)}</span>{/if}
         </div>
       {/if}
@@ -449,34 +446,23 @@
   .pickers[open] summary :global(svg) {
     transform: rotate(90deg);
   }
+  .change {
+    display: inline-flex;
+    gap: 5px;
+    align-items: center;
+    color: var(--ink-2);
+  }
+  .change:hover {
+    color: var(--ink);
+  }
   .last {
     margin-left: auto;
     font-size: var(--t-xs);
     color: var(--ink-3);
   }
-  .chips {
+  .pickers :global(.chips) {
     order: 10;
     flex-basis: 100%;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .chip {
-    display: inline-flex;
-    gap: 4px;
-    align-items: center;
-    border: 1px solid var(--rule);
-    background: transparent;
-    border-radius: 14px;
-    padding: 3px 10px;
-    font-size: var(--t-xs);
-    cursor: default;
-    color: var(--ink-2);
-  }
-  .chip.on {
-    background: var(--sel);
-    border-color: var(--rule-2);
-    color: var(--ink);
   }
 
   .sheet {
@@ -796,8 +782,5 @@
   }
   :global(html.mobile) .pickers summary {
     min-height: 44px;
-  }
-  :global(html.mobile) .chip {
-    min-height: 36px;
   }
 </style>

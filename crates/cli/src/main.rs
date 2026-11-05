@@ -121,6 +121,13 @@ fn open_state(cli: &Cli, calibrate: bool) -> Arc<AppState> {
     })
 }
 
+/// Leave with `code` once the database is folded away: `process::exit` runs no destructors, so without this a one-shot
+/// command leaves the journal for the next open to recover.
+fn exit(app: &AppState, code: i32) -> ! {
+    app.close();
+    std::process::exit(code)
+}
+
 async fn trace(cli: &Cli, target: &str) {
     use recursa_engine::trace::{self, TraceCap};
     let fail = |msg: &str| -> ! {
@@ -134,10 +141,21 @@ async fn trace(cli: &Cli, target: &str) {
     }
     let ip: std::net::IpAddr = match target.parse() {
         Ok(ip) => ip,
-        Err(_) => match open_state(cli, false).find_resolver(target) {
-            Err(_) => fail(&format!("No resolver or address called {target}.")),
-            Ok(r) => r.primary(false).unwrap_or_else(|| fail("This resolver has no IPv4 address.")),
-        },
+        Err(_) => {
+            let app = open_state(cli, false);
+            let ip = match app.find_resolver(target) {
+                Err(_) => {
+                    eprintln!("No resolver or address called {target}.");
+                    exit(&app, 1)
+                }
+                Ok(r) => r.primary(false).unwrap_or_else(|| {
+                    eprintln!("This resolver has no IPv4 address.");
+                    exit(&app, 1)
+                }),
+            };
+            app.close();
+            ip
+        }
     };
     let t = tokio::task::spawn_blocking(move || {
         trace::run_enriched(
@@ -269,10 +287,10 @@ async fn main() {
                 if plugin {
                     let c = recursa_engine::ntp_report::check(&[], &skipped, warning, critical);
                     println!("{}", c.line);
-                    std::process::exit(c.state.into());
+                    exit(&app, c.state.into());
                 }
                 eprintln!("Nothing to ask: to be gentle, every server picked is being left alone for now.");
-                std::process::exit(1);
+                exit(&app, 1);
             }
             if !plugin {
                 let custom = recursa_engine::ntp::CUSTOM_SPACING.as_secs();
@@ -298,19 +316,22 @@ async fn main() {
             if plugin {
                 let c = recursa_engine::ntp_report::check(&results, &skipped, warning, critical);
                 println!("{}", c.line);
-                std::process::exit(c.state.into());
+                exit(&app, c.state.into());
             }
             match format.unwrap_or(NtpFormat::Table) {
                 NtpFormat::Json => println!("{}", recursa_engine::ntp_report::to_json(&results, consensus.as_ref())),
                 NtpFormat::Csv => print!("{}", recursa_engine::ntp_report::to_csv(&results)),
                 NtpFormat::Table => print_ntp(&results, consensus.as_ref()),
             }
+            app.close();
         }
         Some(Cmd::Trace { ref target }) => trace(&cli, target).await,
         Some(Cmd::List) => {
-            for r in open_state(&cli, false).resolvers() {
+            let app = open_state(&cli, false);
+            for r in app.resolvers() {
                 println!("{:<24} {:<18} {:<26} {}", r.id, r.provider, r.variant, r.ipv4.first().cloned().unwrap_or_default());
             }
+            app.close();
         }
         Some(Cmd::Run { ref resolvers, ref transports, samples, quick, latency_only, json, ref cached_names, ref cached_names_file }) => {
             // Bad arguments fail before anything touches the database or the network.
@@ -365,7 +386,7 @@ async fn main() {
                 Ok(h) => h,
                 Err(e) => {
                     eprintln!("{}", e.error);
-                    std::process::exit(2);
+                    exit(&app, 2);
                 }
             };
             let (mut rx, _) = h.subscribe();
@@ -390,6 +411,7 @@ async fn main() {
             } else {
                 print_table(&s);
             }
+            app.close();
         }
     }
 }
@@ -600,13 +622,14 @@ async fn serve(cli: Cli) {
             c.floor_p50_us
         );
     }
-    let srv = Arc::new(server::Server { app, sessions: Mutex::new(sessions), port });
+    let srv = Arc::new(server::Server { app: app.clone(), sessions: Mutex::new(sessions), port });
     // Live event streams never end on their own, so Ctrl-C exits directly rather than
-    // waiting for them to drain. SQLite in WAL mode is safe to stop at any point.
+    // waiting for them to drain; the store is closed so no journal is left beside the database.
     tokio::select! {
         r = axum::serve(listener, server::router(srv)) => r.expect("server"),
         _ = tokio::signal::ctrl_c() => eprintln!("\nStopped."),
     }
+    app.close();
     if let Some(p) = page {
         let _ = std::fs::remove_file(p);
     }

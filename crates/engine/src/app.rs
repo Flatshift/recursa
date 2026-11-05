@@ -19,11 +19,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 use tokio::sync::watch;
+use tokio::task::{AbortHandle, JoinHandle};
 
 pub struct AppState {
     /// What this build can do; sent to the UI in the bootstrap.
@@ -55,19 +56,24 @@ pub struct AppState {
     pub ntp_epoch: AtomicU64,
     /// The live threat-feed hosts the Deep Dive's blocking check last used (see [`crate::deepdive::LiveSample`]).
     pub live_sample: Mutex<Option<crate::deepdive::LiveSample>>,
+    /// The background tasks (detection, the monitoring loops), aborted by [`AppState::close`].
+    tasks: Mutex<Vec<JoinHandle<()>>>,
+    /// The detection tasks in flight, stopped when [`AppState::detect_network`] starts over.
+    detection: Mutex<Vec<AbortHandle>>,
+    closing: AtomicBool,
 }
 
 /// A flag set for as long as this lives. Dropping it clears the flag, so a handler dropped mid-await (a closed
 /// connection) can't leave `run_active` or `measuring` set for every later run.
-struct FlagGuard(Option<Arc<AtomicBool>>);
+pub(crate) struct FlagGuard(Option<Arc<AtomicBool>>);
 
 impl FlagGuard {
     /// Claims `flag` if nobody holds it.
-    fn claim(flag: &Arc<AtomicBool>) -> Option<Self> {
+    pub(crate) fn claim(flag: &Arc<AtomicBool>) -> Option<Self> {
         flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok().then(|| FlagGuard(Some(flag.clone())))
     }
 
-    fn set(flag: &Arc<AtomicBool>) -> Self {
+    pub(crate) fn set(flag: &Arc<AtomicBool>) -> Self {
         flag.store(true, Ordering::SeqCst);
         FlagGuard(Some(flag.clone()))
     }
@@ -126,15 +132,23 @@ fn builtin() -> &'static [Resolver] {
 }
 
 /// The monitoring setting as saved, if there is one and it parses.
-fn stored_monitor(store: &Store) -> Option<MonitorConfig> {
-    store.get::<MonitorConfig>("monitor").map(MonitorConfig::clamped)
+fn stored_monitor(store: &Store) -> rusqlite::Result<Option<MonitorConfig>> {
+    store.read::<MonitorConfig>("monitor").map(|c| c.map(MonitorConfig::clamped))
 }
 
-/// Apply a setting another process saved, when it was readable and differs from what subscribers have.
-fn reload<T: Clone + PartialEq>(tx: &watch::Sender<T>, saved: Option<T>) {
-    if let Some(new) = saved {
-        tx.send_if_modified(|c| std::mem::replace(c, new.clone()) != new);
-    }
+/// Apply a setting as saved, or the default once its row is gone (Clear All Data) or doesn't parse, when it differs
+/// from what subscribers have. A read that failed (the database busy or closed) changes nothing: the row may well
+/// still be there.
+fn reload<T: Clone + PartialEq + Default>(tx: &watch::Sender<T>, saved: rusqlite::Result<Option<T>>) {
+    let Ok(saved) = saved else { return };
+    let new = saved.unwrap_or_default();
+    tx.send_if_modified(|c| {
+        if *c == new {
+            return false;
+        }
+        *c = new;
+        true
+    });
 }
 
 /// What GET `/monitor` and GET `/ntp/monitor` answer.
@@ -175,12 +189,28 @@ fn stored_housekeeping(store: &Store) -> Housekeeping {
     store.get::<Housekeeping>("housekeeping").map(Housekeeping::clamped).unwrap_or_default()
 }
 
-fn stored_ntp_monitor(store: &Store) -> Option<NtpMonitorConfig> {
-    store.get::<NtpMonitorConfig>("ntp_monitor").map(NtpMonitorConfig::clamped)
+fn stored_ntp_monitor(store: &Store) -> rusqlite::Result<Option<NtpMonitorConfig>> {
+    store.read::<NtpMonitorConfig>("ntp_monitor").map(|c| c.map(NtpMonitorConfig::clamped))
 }
 
-fn stored_border_monitor(store: &Store) -> Option<BorderMonitorConfig> {
-    store.get::<BorderMonitorConfig>("border_monitor").map(BorderMonitorConfig::clamped)
+fn stored_border_monitor(store: &Store) -> rusqlite::Result<Option<BorderMonitorConfig>> {
+    store.read::<BorderMonitorConfig>("border_monitor").map(|c| c.map(BorderMonitorConfig::clamped))
+}
+
+/// The settings a cache clear forgets: where the downloaded reference data came from and when.
+fn forgotten_settings() -> Vec<&'static str> {
+    [&crate::netmap::attr::SETTINGS[..], &[crate::netmap::asrel::SOURCE, crate::netmap::asrel::FETCHED_AT][..]].concat()
+}
+
+/// Remove the `isp` folder older builds left in the data folder, and say how many bytes it took. Only beside the
+/// shared database (`shared`): beside one opened elsewhere, a folder of that name may be someone else's.
+fn remove_leftovers(dir: &Path, shared: bool) -> u64 {
+    let isp = dir.join("isp");
+    if !shared || !isp.is_dir() {
+        return 0;
+    }
+    let n = store::dir_size(&isp);
+    if std::fs::remove_dir_all(&isp).is_ok() { n } else { 0 }
 }
 
 impl AppState {
@@ -192,9 +222,9 @@ impl AppState {
         let measuring = Arc::new(AtomicBool::new(false));
         let system = Arc::new(RwLock::new(crate::sysdns::discover()));
         let intel = Arc::new(Intel::new(store.clone(), measuring.clone(), system.clone()));
-        let monitor_cfg = stored_monitor(&store).unwrap_or_default();
-        let ntp_monitor_cfg = stored_ntp_monitor(&store).unwrap_or_default();
-        let border_monitor_cfg = stored_border_monitor(&store).unwrap_or_default();
+        let monitor_cfg = stored_monitor(&store).ok().flatten().unwrap_or_default();
+        let ntp_monitor_cfg = stored_ntp_monitor(&store).ok().flatten().unwrap_or_default();
+        let border_monitor_cfg = stored_border_monitor(&store).ok().flatten().unwrap_or_default();
         Ok(Arc::new(AppState {
             caps,
             store,
@@ -216,7 +246,39 @@ impl AppState {
             netmap: crate::netmap::State::default(),
             ntp_epoch: AtomicU64::new(0),
             live_sample: Mutex::new(None),
+            tasks: Mutex::new(Vec::new()),
+            detection: Mutex::new(Vec::new()),
+            closing: AtomicBool::new(false),
         }))
+    }
+
+    /// Keep `task` to abort on close; aborted at once if that has happened.
+    fn track(&self, task: JoinHandle<()>) {
+        let mut tasks = self.tasks.lock().unwrap();
+        tasks.retain(|t| !t.is_finished());
+        if self.closing.load(Ordering::SeqCst) { task.abort() } else { tasks.push(task) }
+    }
+
+    /// Look at the network afresh: the vantage point, interception and the local forwarders, forgetting what was
+    /// found before. At start, and when Clear All Data takes everything back to a fresh install. A detection still
+    /// going is stopped first, so it can't write what it found over the fresh one.
+    fn detect_network(self: &Arc<Self>) {
+        let mut detection = self.detection.lock().unwrap();
+        for task in detection.drain(..) {
+            task.abort();
+        }
+        *self.vantage.write().unwrap() = Value::Null;
+        *self.interception.write().unwrap() = Value::Null;
+        self.forwarders.write().unwrap().clear();
+        let forwarders = {
+            let app = self.clone();
+            async move { detect_forwarders(&app).await }
+        };
+        for task in [tokio::spawn(detect_vantage(self.clone())), tokio::spawn(detect_interception(self.clone())), tokio::spawn(forwarders)]
+        {
+            detection.push(task.abort_handle());
+            self.track(task);
+        }
     }
 
     /// Start the background work a long-lived front end needs: calibration if it hasn't
@@ -224,7 +286,7 @@ impl AppState {
     /// Calibration goes first so none of our own traffic disturbs it. Needs a Tokio runtime.
     pub fn start_background(self: &Arc<Self>) {
         let app = self.clone();
-        tokio::spawn(async move {
+        self.track(tokio::spawn(async move {
             if app.calibration.read().unwrap().is_none()
                 && let Ok(Ok(c)) = tokio::task::spawn_blocking(|| crate::calibrate::run(crate::calibrate::STARTUP_SAMPLES)).await
             {
@@ -235,16 +297,22 @@ impl AppState {
             if let Some(_measuring) = lock::try_lock(&lock::measure_path()) {
                 app.cleanup_runs();
             }
-            tokio::spawn(detect_vantage(app.clone()));
-            tokio::spawn(detect_interception(app.clone()));
-            tokio::spawn({
-                let app = app.clone();
-                async move { detect_forwarders(&app).await }
-            });
-            ntp_monitor::spawn(app.clone());
-            border::spawn(app.clone());
-            monitor::spawn(app);
-        });
+            app.detect_network();
+            app.track(ntp_monitor::spawn(app.clone()));
+            app.track(border::spawn(app.clone()));
+            app.track(monitor::spawn(app.clone()));
+            // The map's tables, empty after an update, are fetched now rather than by the next map, which would wait for
+            // them. Only once a map has been run: the first one asks before anything is downloaded.
+            if crate::netmap::tables_missing(&app.store) {
+                crate::netmap::refresh_in_background(&app);
+            }
+        }));
+    }
+
+    /// A download of ours is going: a route-origin sync or one of the map's tables. The probes wait it out, since it
+    /// would skew them.
+    pub fn downloading(&self) -> bool {
+        self.intel.fetching() || self.netmap.fetching.load(Ordering::SeqCst) || self.netmap.fetching_pfx2as.load(Ordering::SeqCst)
     }
 
     pub fn resolvers(&self) -> Vec<Resolver> {
@@ -702,6 +770,8 @@ impl AppState {
             ("GET", ["network", "map"]) => ok(json!({
                 "last": crate::netmap::last(&self.store),
                 "running": self.netmap_running(),
+                // A run's own download, or one it waits for; not the daily refresh of tables it already has.
+                "fetching": self.netmap.fetching_pfx2as.load(Ordering::SeqCst) && self.store.pfx2as_empty(),
                 "progress": *self.netmap.progress.lock().unwrap(),
                 "error": *self.netmap.error.lock().unwrap(),
                 "datasets": crate::netmap::datasets(&self.store),
@@ -770,10 +840,67 @@ impl AppState {
                 self.store.ntp_clear();
                 ok(json!({ "cleared": true }))
             }
+            ("DELETE", ["cache"]) => self.clear_data(false).await,
+            ("DELETE", ["data"]) => self.clear_data(true).await,
             #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
             (_, ["rpki", rest @ ..]) => crate::rpki::call(self, method, rest, body).await,
             _ => Err(ApiError::new(404, "No such endpoint.")),
         }
+    }
+
+    /// Clear the cache and downloaded reference data, or with `all` everything back to a fresh install (see the Data
+    /// pane). Holds the run slot throughout, so nothing is measuring or recording meanwhile. Answers with the bytes the
+    /// database file gave back, and a warning when it could not be compacted afterwards.
+    async fn clear_data(self: &Arc<Self>, all: bool) -> Result<String, ApiError> {
+        let held = self.claim_run().await?;
+        // Claimed, not read: a download starting after a read would fill the tables being emptied.
+        let fetching = FlagGuard::claim(&self.netmap.fetching)
+            .zip(FlagGuard::claim(&self.netmap.fetching_pfx2as))
+            .zip(self.intel.fetches.clone().try_write_owned().ok());
+        if fetching.is_none() {
+            return Err(ApiError::new(409, "Wait for the download to finish."));
+        }
+        let app = self.clone();
+        let (freed, warning) = tokio::task::spawn_blocking(move || {
+            let _held = (held, fetching);
+            let dir = app.store.path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+            let mut freed = 0;
+            let before = app.store.file_size();
+            // The NTP politeness ledger (servers asked in the last ten minutes aren't asked again; servers that sent a
+            // rate/deny kiss-of-death are left alone for an hour/a week): a promise to third parties, not user data.
+            app.store.clear(all, &forgotten_settings(), "ntp_asked").map_err(|e| format!("Couldn't clear the data: {e}"))?;
+            if all {
+                // Its setting went with the rows; its files go now, after a clear that could still have failed. Their
+                // bytes aren't counted: nothing shows the answer to Clear All Data, and sizing the folder is a walk of
+                // thousands of files.
+                #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
+                app.intel.rpki.turn_off();
+                // The monitor rows are gone: the loops and the desktop menus hear the defaults, as another process does.
+                app.reload_monitors();
+                app.reload_ntp_monitor();
+                app.reload_border_monitor();
+                app.runs.lock().unwrap().clear();
+                *app.ntp.lock().unwrap() = None;
+                *app.edges.lock().unwrap() = None;
+                *app.netmap.error.lock().unwrap() = None;
+                *app.netmap.progress.lock().unwrap() = None;
+            }
+            *app.live_sample.lock().unwrap() = None;
+            freed += remove_leftovers(&dir, app.store.path.parent() == store::default_path().parent());
+            // Last: the rows are gone and forgotten above whatever this does, so a failure here is a warning on the
+            // answer, not an error; their space stays taken for now.
+            let warning = app.store.compact().err().map(|e| format!("The database could not be compacted: {e}"));
+            freed += before.saturating_sub(app.store.file_size());
+            Ok::<_, String>((freed, warning))
+        })
+        .await
+        .map_err(|e| ApiError::new(500, e.to_string()))?
+        .map_err(|e| ApiError::new(500, e))?;
+        if all {
+            // What was learnt about the network goes too, and is looked for again as at a fresh start.
+            self.detect_network();
+        }
+        Ok(json!({ "freed": freed, "warning": warning }).to_string())
     }
 
     /// Claim this process's one run slot, then the machine-wide measure lock: a 409 if either is taken. Waits out a
@@ -951,7 +1078,19 @@ impl AppState {
         Ok(serde_json::to_value(&row).unwrap())
     }
 
-    /// Picks up monitoring settings another process saved to this database. Unreadable ones are ignored.
+    /// For the way out: stop the background tasks and a map run, whose table snapshot would hold the journal open,
+    /// then fold the journal back into the database (see [`Store::close`]). Bounded: a run that won't stop or a long
+    /// write leaves the journal for the next open to recover.
+    pub fn close(&self) {
+        self.closing.store(true, Ordering::SeqCst);
+        for task in self.tasks.lock().unwrap().drain(..) {
+            task.abort();
+        }
+        self.netmap.cancel.store(true, Ordering::SeqCst);
+        self.store.close();
+    }
+
+    /// Picks up the monitoring setting as saved to this database, by another process or a clear (see [`reload`]).
     pub(crate) fn reload_monitors(&self) {
         reload(&self.monitor, stored_monitor(&self.store));
     }
@@ -1213,10 +1352,10 @@ pub async fn detect_interception(app: Arc<AppState>) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn app() -> Arc<AppState> {
+    pub(crate) fn app() -> Arc<AppState> {
         crate::install_crypto_provider();
         let db = std::env::temp_dir().join(format!("recursa-test-{:x}.db", fastrand::u64(..)));
         AppState::open(Some(db), false, crate::caps::Caps::BROWSER).unwrap()
@@ -1470,5 +1609,196 @@ mod tests {
         for ext in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{ext}", a.store.path.display()));
         }
+    }
+
+    use crate::store::{DOWNLOADED, HISTORY};
+
+    /// An app on a database in its own directory, with one row in every table, the settings the Data pane touches, an
+    /// `isp` folder (not Recursa's, outside the default data folder) and (where built) fake route-origin files.
+    fn seeded() -> (Arc<AppState>, PathBuf) {
+        crate::install_crypto_provider();
+        let dir = std::env::temp_dir().join(format!("recursa-data-test-{:x}", fastrand::u64(..)));
+        let a = AppState::open(Some(dir.join("recursa.db")), false, crate::caps::Caps::BROWSER).unwrap();
+        let c = rusqlite::Connection::open(&a.store.path).unwrap();
+        c.execute_batch(
+            "INSERT INTO runs(id, started_at, status, summary, body, saved) VALUES('r1', 1, 'done', '{}', '{}', 1);
+             INSERT INTO monitor VALUES(1, 'x', 't', 5, 1);
+             INSERT INTO cache VALUES('k', 1, '{}');
+             INSERT INTO custom VALUES('c', '{}');
+             INSERT INTO monitor_hour VALUES(1, 'x', 1, 1, 1, 1, 1, 1, x'00');
+             INSERT INTO monitor_outage VALUES('x', 1, 2, 1, NULL);
+             INSERT INTO ntp_sample(ts, server, ok) VALUES(1, 's', 1);
+             INSERT INTO ntp_clock VALUES(1, 0.5, 1.0, 3, 2);
+             INSERT INTO border_pair(cdn, target, near, near_ttl, far, far_ttl, kind, found_at) VALUES('c', 't', 'n', 1, 'f', 2, 'k', 1);
+             INSERT INTO border_sample(ts, pair) VALUES(1, 1);
+             INSERT INTO pfx2as VALUES(24, 1, 64500, 0);
+             INSERT INTO pfx2as6 VALUES(32, x'00', 64500, 0);
+             INSERT INTO asrel VALUES(1, 2, 0);
+             INSERT INTO netmap_run VALUES(1, 1, '{}');
+             INSERT INTO pdb_sync VALUES('ix', 1, NULL);
+             INSERT INTO pdb_ix(id) VALUES(1);
+             INSERT INTO pdb_ixpfx(id) VALUES(1);
+             INSERT INTO pdb_netixlan(id) VALUES(1);
+             INSERT INTO pdb_fac(id) VALUES(1);
+             INSERT INTO pdb_netfac(id) VALUES(1);
+             INSERT INTO rdap_block VALUES(x'00', x'01', '{}', 1);",
+        )
+        .unwrap();
+        for k in forgotten_settings() {
+            a.store.put(k, &"x");
+        }
+        for k in [crate::netmap::pdb::ACCEPTED, crate::netmap::rdap::ACCEPTED, crate::netmap::RDNS] {
+            a.store.put(k, &true);
+        }
+        let on = MonitorConfig { enabled: true, interval_min: 15, ..Default::default() };
+        a.set_monitor(on);
+        a.store.put("cached_lists", &json!([{ "name": "Home", "names": ["a.com"] }]));
+        a.store.put("housekeeping", &json!({ "keep_runs": 5, "keep_days": null }));
+        a.store.put("ntp_asked", &json!({ "s": 1 }));
+        std::fs::create_dir_all(dir.join("isp")).unwrap();
+        std::fs::write(dir.join("isp").join("x.json"), "{}").unwrap();
+        #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
+        {
+            std::fs::create_dir_all(dir.join("rpki")).unwrap();
+            std::fs::write(dir.join("rpki").join("vrps.bin"), "x").unwrap();
+            a.store.put("rpki_local", &true);
+        }
+        (a, dir)
+    }
+
+    fn count(a: &AppState, table: &str) -> i64 {
+        let c = rusqlite::Connection::open(&a.store.path).unwrap();
+        c.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap()
+    }
+
+    fn setting_keys(a: &AppState) -> Vec<String> {
+        let c = rusqlite::Connection::open(&a.store.path).unwrap();
+        let mut q = c.prepare("SELECT key FROM settings ORDER BY key").unwrap();
+        q.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+    }
+
+    #[tokio::test]
+    async fn clear_cache_removes_downloaded_data_and_keeps_the_rest() {
+        let (a, dir) = seeded();
+        let r: Value = serde_json::from_str(&a.call("DELETE", "/api/cache", Value::Null).await.unwrap()).unwrap();
+        assert!(r["freed"].is_u64());
+        for t in DOWNLOADED {
+            assert_eq!(count(&a, t), 0, "{t}");
+        }
+        for t in HISTORY {
+            assert_eq!(count(&a, t), 1, "{t}");
+        }
+        let keys = setting_keys(&a);
+        for gone in forgotten_settings() {
+            assert!(!keys.iter().any(|k| k == gone), "{gone}");
+        }
+        for kept in
+            ["netmap.peeringdb_accepted", "netmap.rdap_accepted", "netmap.rdns", "monitor", "cached_lists", "housekeeping", "ntp_asked"]
+        {
+            assert!(keys.iter().any(|k| k == kept), "{kept}");
+        }
+        assert!(a.monitor.borrow().enabled);
+        assert!(dir.join("isp").exists());
+        #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
+        assert!(dir.join("rpki").join("vrps.bin").exists() && keys.iter().any(|k| k == "rpki_local"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn clear_all_data_returns_to_a_fresh_install() {
+        let (a, dir) = seeded();
+        a.ntp_monitor.send_replace(NtpMonitorConfig { enabled: true, ..Default::default() });
+        a.border_monitor.send_replace(BorderMonitorConfig { enabled: true, ..Default::default() });
+        *a.edges.lock().unwrap() = Some(Default::default());
+        let watching = a.monitor.subscribe();
+        let r: Value = serde_json::from_str(&a.call("DELETE", "/api/data", Value::Null).await.unwrap()).unwrap();
+        assert!(r["freed"].is_u64());
+        for t in DOWNLOADED.iter().chain(HISTORY.iter()) {
+            assert_eq!(count(&a, t), 0, "{t}");
+        }
+        // Only the NTP politeness ledger stays; the monitors are at their defaults, here and for any other process.
+        assert_eq!(setting_keys(&a), ["ntp_asked"]);
+        assert!(watching.has_changed().unwrap());
+        assert_eq!(*a.monitor.borrow(), MonitorConfig::default());
+        assert_eq!(*a.ntp_monitor.borrow(), NtpMonitorConfig::default());
+        assert_eq!(*a.border_monitor.borrow(), BorderMonitorConfig::default());
+        assert!(a.edges.lock().unwrap().is_none());
+        assert!(dir.join("isp").exists());
+        #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
+        assert!(!dir.join("rpki").exists() && !a.intel.rpki.enabled());
+        // Every table is in one of the lists, so a new one can't be missed.
+        let c = rusqlite::Connection::open(&a.store.path).unwrap();
+        let mut q = c.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").unwrap();
+        for t in q.query_map([], |r| r.get::<_, String>(0)).unwrap().map(Result::unwrap) {
+            assert!(t == "settings" || DOWNLOADED.contains(&t.as_str()) || HISTORY.contains(&t.as_str()), "{t}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn clearing_is_refused_while_a_run_is_active() {
+        let (a, dir) = seeded();
+        a.run_active.store(true, Ordering::SeqCst);
+        for path in ["/api/cache", "/api/data"] {
+            assert_eq!(a.call("DELETE", path, Value::Null).await.unwrap_err().status, 409, "{path}");
+        }
+        assert_eq!(count(&a, "runs"), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn clearing_is_refused_while_a_download_is_going_and_claims_the_slot() {
+        let (a, dir) = seeded();
+        a.netmap.fetching.store(true, Ordering::SeqCst);
+        assert_eq!(a.call("DELETE", "/api/cache", Value::Null).await.unwrap_err().status, 409);
+        assert_eq!(count(&a, "asrel"), 1);
+        a.netmap.fetching.store(false, Ordering::SeqCst);
+        // Either download: the prefix table's has a flag of its own.
+        a.netmap.fetching_pfx2as.store(true, Ordering::SeqCst);
+        assert_eq!(a.call("DELETE", "/api/cache", Value::Null).await.unwrap_err().status, 409);
+        assert!(!a.netmap.fetching.load(Ordering::SeqCst), "the refused clear let the other flag go");
+        a.netmap.fetching_pfx2as.store(false, Ordering::SeqCst);
+        // A feed or status fetch, or a route-origin sync, in flight: the same answer.
+        let fetch = a.intel.fetches.clone().try_read_owned().unwrap();
+        assert_eq!(a.call("DELETE", "/api/cache", Value::Null).await.unwrap_err().status, 409);
+        assert!(!a.netmap.fetching.load(Ordering::SeqCst) && !a.netmap.fetching_pfx2as.load(Ordering::SeqCst));
+        drop(fetch);
+        a.call("DELETE", "/api/cache", Value::Null).await.unwrap();
+        // Released with the clear: the next refresh may start.
+        assert!(!a.netmap.fetching.load(Ordering::SeqCst) && !a.netmap.fetching_pfx2as.load(Ordering::SeqCst));
+        assert!(a.intel.fetches.try_write().is_ok());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn closing_waits_for_a_run_s_snapshot_and_leaves_no_journal() {
+        let (a, dir) = seeded();
+        let wal = PathBuf::from(format!("{}-wal", a.store.path.display()));
+        assert!(std::fs::metadata(&wal).is_ok_and(|m| m.len() > 0));
+        // A run holds its prefix snapshot until it sees the cancel that closing sets.
+        let snapshot = crate::netmap::attr::Pfx2as::open(&a.store).unwrap();
+        let run = a.clone();
+        let t = std::thread::spawn(move || {
+            while !run.netmap.cancel.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            drop(snapshot);
+        });
+        a.close();
+        t.join().unwrap();
+        assert!(!wal.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn leftover_isp_folder_goes_only_beside_the_shared_database() {
+        let dir = std::env::temp_dir().join(format!("recursa-isp-test-{:x}", fastrand::u64(..)));
+        std::fs::create_dir_all(dir.join("isp")).unwrap();
+        std::fs::write(dir.join("isp").join("x.json"), "{}").unwrap();
+        assert_eq!(remove_leftovers(&dir, false), 0);
+        assert!(dir.join("isp").is_dir());
+        assert_eq!(remove_leftovers(&dir, true), 2);
+        assert!(!dir.join("isp").exists());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -11,6 +11,7 @@ use super::asrel::Rel;
 use super::attr::{Group, Link, LinkKind, Role, Seg, same_link, short_holder};
 use super::pdb::Pdb;
 use serde::Serialize;
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -90,7 +91,7 @@ fn net_name(s: &Seg) -> String {
 }
 
 /// Everything about one trace's hand-off the claim needs.
-fn claim(p: &Path, i: usize, links: &[Link], pdb: &Pdb, rel_month: Option<&str>) -> Option<Claim> {
+fn claim(p: &Path, i: usize, links: &[Link], pdb: &Pdb, rel_month: Option<&str>, holders: &HashMap<u32, String>) -> Option<Claim> {
     let (isp, next) = (&p.segs[i], p.segs.get(i + 1)?);
     // Silence after the ISP sits on the link to the next group that answers.
     let to = (i + 1..p.segs.len()).find(|j| p.segs[*j].role != Role::Silent).map_or(p.groups[i + 1], |j| p.groups[j]);
@@ -138,15 +139,31 @@ fn claim(p: &Path, i: usize, links: &[Link], pdb: &Pdb, rel_month: Option<&str>)
         let ix = next.ix.as_ref().map(|(_, n)| n.as_str()).filter(|n| !n.is_empty()).unwrap_or("an");
         if let (Some(port), Some(m)) = (port, first) {
             far_asn = far_asn.or(Some(port.asn)).filter(|a| Some(*a) != isp.asn).or(Some(port.asn));
+            let far = beyond.and_then(|s| s.asn);
+            // A big network runs several numbers under one name; a port of a sibling number is the network's own.
+            let kin = far.is_some_and(|a| a != port.asn)
+                && beyond
+                    .and_then(|s| s.holder.as_deref())
+                    .zip(holders.get(&port.asn))
+                    .is_some_and(|(a, b)| short_holder(a).eq_ignore_ascii_case(short_holder(b)));
+            let theirs = far == Some(port.asn) || kin;
             let owns = if Some(port.asn) == isp.asn {
                 format!("{isp_n}'s")
-            } else if beyond.and_then(|s| s.asn) == Some(port.asn) {
+            } else if theirs {
                 format!("{}'s", beyond.map(net_name).unwrap_or_default())
             } else {
                 format!("AS{}'s", port.asn)
             };
             ev.push(listed("PeeringDB netixlan", &port.updated, format!("{} is listed as AS{}'s port on {ix}", m.addr, port.asn)));
-            let matches = Some(port.asn) == isp.asn || beyond.and_then(|s| s.asn) == Some(port.asn);
+            if kin {
+                ev.push(Evidence::Inferred(format!(
+                    "AS{} and AS{} both carry the name {}.",
+                    port.asn,
+                    far.unwrap_or_default(),
+                    beyond.map(net_name).unwrap_or_default()
+                )));
+            }
+            let matches = Some(port.asn) == isp.asn || theirs;
             if matches && !moas {
                 tier = Tier::High;
                 text = format!("Traffic to {} leaves {isp_n} at {owns} port on the {ix} exchange, per PeeringDB.", p.name);
@@ -338,6 +355,7 @@ pub fn say(
     home: Option<u32>,
     pdb: &Pdb,
     rel_month: Option<&str>,
+    holders: &HashMap<u32, String>,
 ) -> (Vec<Claim>, Option<Headline>) {
     let Some(home) = home else { return (Vec::new(), None) };
     let mut claims = Vec::new();
@@ -345,7 +363,7 @@ pub fn say(
     let mut isp = String::new();
     for p in paths {
         let Some(i) = p.segs.iter().rposition(|s| s.role == Role::Isp && s.asn == Some(home)) else { continue };
-        if let Some(c) = claim(p, i, links, pdb, rel_month) {
+        if let Some(c) = claim(p, i, links, pdb, rel_month, holders) {
             open |= !blind(p.segs, i);
             isp = isp_name(&p.segs[i]);
             claims.push(c);
@@ -408,26 +426,39 @@ mod tests {
     }
 
     fn run_with(pdb: &Pdb, traces: &[(&str, &[Option<&str>])], rels: &AsRel) -> (Vec<Claim>, Option<Headline>) {
+        run_named(pdb, traces, rels, &holders())
+    }
+
+    /// The AS names a run would have looked up, by number.
+    fn holders() -> HashMap<u32, String> {
+        [(100, "EXAMPLENET - Example Net Inc"), (200, "Carrier Co"), (300, "Content Co"), (301, "CONTENT-WEST - Content Co")]
+            .into_iter()
+            .map(|(a, n)| (a, n.to_string()))
+            .collect()
+    }
+
+    fn run_named(
+        pdb: &Pdb,
+        traces: &[(&str, &[Option<&str>])],
+        rels: &AsRel,
+        named: &HashMap<u32, String>,
+    ) -> (Vec<Claim>, Option<Headline>) {
         let (pfx, names) = (pfx(), HashMap::new());
         let segs: Vec<(&str, Vec<Seg>)> = traces.iter().map(|(t, h)| (*t, group(&trace("192.0.2.9", h), &cx(&pfx, pdb, &names)))).collect();
         // Give the ISP and the carrier a holder, as the run does from the AS names.
+        let known = holders();
         let segs: Vec<(&str, Vec<Seg>)> = segs
             .into_iter()
             .map(|(t, mut s)| {
                 for seg in &mut s {
-                    seg.holder = match seg.asn {
-                        Some(100) => Some("EXAMPLENET - Example Net Inc".into()),
-                        Some(200) => Some("Carrier Co".into()),
-                        Some(300) => Some("Content Co".into()),
-                        _ => None,
-                    };
+                    seg.holder = seg.asn.and_then(|a| known.get(&a).cloned());
                 }
                 (t, s)
             })
             .collect();
         let (groups, links, ids) = merge(&segs, rels);
         let paths: Vec<Path> = segs.iter().zip(&ids).map(|((t, s), g)| Path { id: t, name: "Content Co", segs: s, groups: g }).collect();
-        say(&paths, &groups, &links, Some(100), pdb, Some("October 2026"))
+        say(&paths, &groups, &links, Some(100), pdb, Some("October 2026"), named)
     }
 
     #[test]
@@ -442,7 +473,7 @@ mod tests {
         let segs = [("a", segs)];
         let (groups, links, ids) = merge(&segs, &AsRel::empty());
         let paths = [Path { id: "a", name: "Content Co", segs: &segs[0].1, groups: &ids[0] }];
-        let (claims, _) = say(&paths, &groups, &links, Some(100), &pdb, None);
+        let (claims, _) = say(&paths, &groups, &links, Some(100), &pdb, None, &HashMap::new());
         assert_eq!(claims.len(), 1);
         let c = &claims[0];
         assert_eq!(c.tier, Tier::Low);
@@ -464,7 +495,7 @@ mod tests {
         let segs = [("a", segs)];
         let (groups, links, ids) = merge(&segs, &AsRel::empty());
         let paths = [Path { id: "a", name: "Content Co", segs: &segs[0].1, groups: &ids[0] }];
-        let (claims, _) = say(&paths, &groups, &links, Some(100), &pdb, None);
+        let (claims, _) = say(&paths, &groups, &links, Some(100), &pdb, None, &HashMap::new());
         assert_eq!(claims.len(), 1);
         let c = &claims[0];
         assert_ne!(c.tier, Tier::Low, "{}", c.text);
@@ -506,6 +537,29 @@ mod tests {
     }
 
     #[test]
+    fn a_port_of_the_far_networks_sibling_number_is_its_own() {
+        let mut pdb = exchange();
+        pdb.add_port(31, 301, "206.126.237.11");
+        let via = [Some("198.51.100.1"), Some("198.51.100.2"), Some("206.126.237.11"), Some("192.0.2.9")];
+        let (claims, _) = run(&pdb, &[("a", &via)]);
+        assert_eq!(claims[0].tier, Tier::High, "{}", claims[0].text);
+        assert_eq!(
+            claims[0].text,
+            "Traffic to Content Co leaves Example Net Inc at Content Co's port on the Equinix Ashburn exchange, per PeeringDB."
+        );
+        let why = Evidence::Inferred("AS301 and AS300 both carry the name Content Co.".into());
+        assert!(claims[0].evidence.contains(&why), "{:?}", claims[0].evidence);
+        // With no name for the port's number, it is somebody else's port and the sentence stays guarded.
+        let (claims, _) = run_named(&pdb, &[("a", &via)], &AsRel::empty(), &HashMap::new());
+        assert_eq!(claims[0].tier, Tier::Medium);
+        assert!(
+            claims[0].text.starts_with("This hop is AS301's port on the Equinix Ashburn exchange, per PeeringDB; it is not clear"),
+            "{}",
+            claims[0].text
+        );
+    }
+
+    #[test]
     fn a_shared_link_is_high_and_others_are_medium_or_low_with_the_building_sentence() {
         let mut pdb = Pdb::default();
         pdb.add_listing(1, "Equinix DC2", 100, "2026-01-10T00:00:00Z");
@@ -533,7 +587,7 @@ mod tests {
     fn word_rules_moas_and_the_withheld_headline() {
         // Two networks announce 198.51.100.0/24 here, so the shared /30 is not enough.
         let net = |s: &str| u32::from(s.parse::<std::net::Ipv4Addr>().unwrap());
-        let pfx2 = super::super::attr::Pfx2as::from_rows(
+        let pfx2 = super::super::attr::tests::table(
             [(net("198.51.100.0"), 24, 100, true), (net("203.0.113.0"), 24, 200, false), (net("192.0.2.0"), 24, 300, false)].into_iter(),
             std::iter::empty(),
         );
@@ -543,7 +597,7 @@ mod tests {
         assert!(segs[0].members[0].moas);
         let (groups, links, ids) = merge(&[("a", segs.clone())], &AsRel::empty());
         let paths = [Path { id: "a", name: "Content Co", segs: &segs, groups: &ids[0] }];
-        let (claims, _) = say(&paths, &groups, &links, Some(100), &pdb, None);
+        let (claims, _) = say(&paths, &groups, &links, Some(100), &pdb, None, &HashMap::new());
         assert!(claims.iter().all(|c| c.tier != Tier::High));
 
         // "peering" appears only on a claim that cites PeeringDB, and a city is never "in".

@@ -450,14 +450,21 @@ mod win {
         r == ERROR_SUCCESS && caps.SoftwareCapabilities.AllReceive
     }
 
-    /// The adapter a packet to 1.1.1.1 leaves through; failing that, the first adapter that is up
-    /// and has a gateway.
+    /// The adapter a packet to 1.1.1.1, or failing that to 2606:4700:4700::1111, leaves through; failing that,
+    /// the first adapter that is up and has a gateway.
     pub(crate) fn best() -> Option<Adapter> {
         let mut dest: SOCKADDR_IN = unsafe { std::mem::zeroed() };
         dest.sin_family = AF_INET;
         dest.sin_addr.S_un.S_addr = u32::from(Ipv4Addr::new(1, 1, 1, 1)).to_be();
         let mut index: u32 = 0;
-        let routed = unsafe { GetBestInterfaceEx((&raw const dest).cast::<SOCKADDR>(), &mut index) } == ERROR_SUCCESS;
+        let mut routed = unsafe { GetBestInterfaceEx((&raw const dest).cast::<SOCKADDR>(), &mut index) } == ERROR_SUCCESS;
+        if !routed {
+            // No IPv4 default route: an IPv6-only network still has an adapter its packets leave through.
+            let mut dest6: SOCKADDR_IN6 = unsafe { std::mem::zeroed() };
+            dest6.sin6_family = AF_INET6;
+            dest6.sin6_addr.u.Byte = Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111).octets();
+            routed = unsafe { GetBestInterfaceEx((&raw const dest6).cast::<SOCKADDR>(), &mut index) } == ERROR_SUCCESS;
+        }
         let buf = adapters()?;
         let mut fallback = None;
         let mut p = buf.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
