@@ -2,7 +2,7 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
-## 0.6.0 (2026-11-04)
+## 0.5.4 (2026-11-04)
 
 - Settings › Data: Clear Cache removes cached lookups and downloaded reference data; Clear All Data returns Recursa to a fresh install.
 - Peering: the map no longer makes the page shake at some window sizes.
