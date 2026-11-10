@@ -2,6 +2,10 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.5.5 (2026-11-10)
+
+- The sidebar icons and transport labels are neutral, and spacing, corners and type are more consistent across the app.
+
 ## 0.5.4 (2026-11-04)
 
 - Peering: the map is more compact, with each box's round trip inside it.
