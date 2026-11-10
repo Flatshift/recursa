@@ -2,6 +2,10 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.5.6 (2026-11-10)
+
+- Layout and style clean-ups in the Time summary and transport labels, and the iOS build carries the release version.
+
 ## 0.5.5 (2026-11-10)
 
 - The sidebar icons and transport labels are neutral, and spacing, corners and type are more consistent across the app.

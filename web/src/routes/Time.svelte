@@ -1401,6 +1401,7 @@
   @media (max-width: 1000px) {
     .summary {
       grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: none;
       grid-template-areas:
         'head'
         'picks'

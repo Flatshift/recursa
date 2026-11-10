@@ -104,10 +104,7 @@
   --side: oklch(0.958 0.003 285);
   --side-sel: oklch(0.912 0.005 285);
   /* Transport badges (UDP, TCP, DoT, DoH): one neutral fill; the label names the transport. */
-  --tx-udp: oklch(0.94 0.006 240);
-  --tx-tcp: var(--tx-udp);
-  --tx-dot: var(--tx-udp);
-  --tx-doh: var(--tx-udp);
+  --tx: oklch(0.94 0.006 240);
   --brand-answer: var(--s-cached);
   --bar-h: 54px;
   --status-h: 26px;
@@ -156,7 +153,7 @@
     --shadow-pop: 0 10px 30px -10px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.09);
     --side: oklch(0.175 0.005 285);
     --side-sel: oklch(0.27 0.007 285);
-    --tx-udp: oklch(0.3 0.008 240);
+    --tx: oklch(0.3 0.008 240);
   }
 }
 :root[data-theme='dark'] {
@@ -200,7 +197,7 @@
   --shadow-pop: 0 10px 30px -10px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.09);
   --side: oklch(0.175 0.005 285);
   --side-sel: oklch(0.27 0.007 285);
-  --tx-udp: oklch(0.3 0.008 240);
+  --tx: oklch(0.3 0.008 240);
 }
 
 *,
