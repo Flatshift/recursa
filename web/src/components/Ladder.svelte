@@ -794,7 +794,7 @@
   .x {
     color: var(--critical);
     margin-right: 2px;
-    font-weight: 700;
+    font-weight: 680;
   }
   .ncol {
     display: grid;

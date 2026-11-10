@@ -702,7 +702,7 @@
               {:else}
                 {Math.abs(c.median_ms).toFixed(1)} ms {c.median_ms > 0 ? 'behind' : 'ahead of'} the servers' median (± {num(c.bound_ms)} ms).
               {/if}
-              {c.voters} servers close enough to judge{#if c.independent < c.voters} ({c.independent} independent: those of one operator or one upstream count once){/if} agree within {c.spread_ms.toFixed(2)} ms across their middle half,
+              {c.voters} servers close enough to judge{#if c.independent < c.voters}{' '}({c.independent} independent: those of one operator or one upstream count once){/if} agree within {c.spread_ms.toFixed(2)} ms across their middle half,
               but they are all reached over your connection and share its error, so that agreement can't shrink the ±. No server is the truth.
               {verdict}
             </p>
@@ -1137,7 +1137,6 @@
     grid-area: rest;
     font-size: var(--t-xs);
     color: var(--ink-3);
-    font-style: italic;
   }
   .custom {
     display: flex;
@@ -1169,7 +1168,7 @@
     gap: 4px;
     padding: 2px 4px 2px 10px;
     border: 1px solid var(--rule-2);
-    border-radius: 999px;
+    border-radius: var(--r-md);
     font-size: var(--t-xs);
   }
   .chips .x {
@@ -1380,6 +1379,7 @@
     display: grid;
     gap: 14px 40px;
     grid-template-columns: minmax(0, 1fr) minmax(260px, 400px);
+    grid-template-rows: auto 1fr;
     grid-template-areas:
       'head picks'
       'clock picks';
@@ -1505,7 +1505,7 @@
     gap: 4px;
     padding: 1px 8px;
     border: 1px solid var(--rule-2);
-    border-radius: 12px;
+    border-radius: var(--r-sm);
     font-size: var(--t-xs);
     color: var(--ink-3);
   }

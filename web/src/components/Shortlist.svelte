@@ -94,8 +94,6 @@
     font-size: var(--t-2xs);
     font-weight: 620;
     color: var(--ink-3);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
   }
   .row {
     display: grid;

@@ -172,7 +172,7 @@
   }
   .toolbar :global(.btn) {
     height: 28px;
-    padding: 0 11px;
+    padding: 0 12px;
     font-size: var(--t-xs);
   }
   /* Tight windows: the subtitle goes first; pages swap wide controls for compact ones. */

@@ -687,7 +687,7 @@
     min-height: 52px;
     padding: 8px 4px 8px 12px;
     border-bottom: 1px solid var(--rule);
-    transition: background 140ms cubic-bezier(0.22, 1, 0.36, 1);
+    transition: background var(--dur-fast) var(--ease-out);
   }
   .srow:hover {
     background: var(--surface-2);

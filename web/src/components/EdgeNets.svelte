@@ -35,7 +35,7 @@
   }
   .net {
     padding: 2px 8px;
-    border-radius: 999px;
+    border-radius: var(--r-sm);
     background: var(--surface-2);
     border: 1px solid var(--rule);
     white-space: nowrap;

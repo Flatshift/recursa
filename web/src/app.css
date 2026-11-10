@@ -103,11 +103,11 @@
      bar, and a status bar. */
   --side: oklch(0.958 0.003 285);
   --side-sel: oklch(0.912 0.005 285);
-  /* Transport badges (UDP, TCP, DoT, DoH): a fill only, kept off the chart series hues (blue, orange, green). */
+  /* Transport badges (UDP, TCP, DoT, DoH): one neutral fill; the label names the transport. */
   --tx-udp: oklch(0.94 0.006 240);
-  --tx-tcp: oklch(0.89 0.06 300);
-  --tx-dot: oklch(0.9 0.06 205);
-  --tx-doh: oklch(0.89 0.06 10);
+  --tx-tcp: var(--tx-udp);
+  --tx-dot: var(--tx-udp);
+  --tx-doh: var(--tx-udp);
   --brand-answer: var(--s-cached);
   --bar-h: 54px;
   --status-h: 26px;
@@ -157,9 +157,6 @@
     --side: oklch(0.175 0.005 285);
     --side-sel: oklch(0.27 0.007 285);
     --tx-udp: oklch(0.3 0.008 240);
-    --tx-tcp: oklch(0.37 0.08 300);
-    --tx-dot: oklch(0.37 0.062 205);
-    --tx-doh: oklch(0.37 0.08 10);
   }
 }
 :root[data-theme='dark'] {
@@ -204,9 +201,6 @@
   --side: oklch(0.175 0.005 285);
   --side-sel: oklch(0.27 0.007 285);
   --tx-udp: oklch(0.3 0.008 240);
-  --tx-tcp: oklch(0.37 0.08 300);
-  --tx-dot: oklch(0.37 0.062 205);
-  --tx-doh: oklch(0.37 0.08 10);
 }
 
 *,
@@ -252,7 +246,6 @@ h4 {
   font-weight: 620;
   line-height: 1.2;
   text-wrap: balance;
-  letter-spacing: -0.01em;
 }
 
 p {
@@ -510,7 +503,7 @@ input[type='checkbox']:focus-visible {
   background: var(--surface);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-pop);
-  padding: 7px 10px;
+  padding: 8px 10px;
   font-size: var(--t-xs);
   white-space: nowrap;
 }
@@ -540,7 +533,7 @@ input[type='checkbox']:focus-visible {
    fixed to the viewport, so every placeholder on screen moves as one wave. */
 .ghost {
   display: block;
-  border-radius: 4px;
+  border-radius: var(--r-sm);
   background: linear-gradient(
       100deg,
       transparent 30%,
@@ -643,8 +636,8 @@ html.mobile input[type='checkbox']::before {
   height: 13px;
 }
 html.mobile .seg {
-  gap: 3px;
-  padding: 3px;
+  gap: 4px;
+  padding: 4px;
   border-radius: var(--r-lg);
   font-size: var(--t-sm);
 }
@@ -703,7 +696,7 @@ html.mobile .segbtn input:checked + span {
   align-items: center;
   gap: 6px;
   height: 26px;
-  padding: 0 11px;
+  padding: 0 12px;
   border: 0;
   background: transparent;
   border-radius: var(--r-sm);
@@ -818,7 +811,7 @@ html.mobile .segmented {
   display: flex;
   flex: 1 1 auto;
   min-width: 0;
-  padding: 3px;
+  padding: 4px;
   gap: 2px;
   border-radius: var(--r-lg);
 }
@@ -992,7 +985,7 @@ html.mobile .segmented button {
   display: inline-block;
   height: 0.85em;
   width: 4em;
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   background: var(--rule);
   vertical-align: middle;
 }

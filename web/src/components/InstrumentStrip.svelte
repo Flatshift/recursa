@@ -239,7 +239,7 @@
     color: var(--ink-2);
     text-align: left;
     overflow: hidden;
-    transition: background-color 150ms ease-out;
+    transition: background-color var(--dur-fast) var(--ease-out);
   }
   .bar:hover,
   .bar[aria-expanded='true'] {
@@ -284,7 +284,7 @@
     display: inline-grid;
     flex-shrink: 0;
     color: var(--ink-3);
-    transition: transform 150ms ease-out;
+    transition: transform var(--dur-fast) var(--ease-out);
   }
   .chev.up {
     transform: rotate(180deg);

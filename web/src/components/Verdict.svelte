@@ -338,7 +338,6 @@
     gap: 6px;
     font-size: var(--t-sm);
     font-weight: 600;
-    letter-spacing: -0.01em;
     line-height: 1.3;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
@@ -578,7 +577,7 @@
     min-height: 32px;
     padding: 0 12px;
     border: 1px solid var(--rule);
-    border-radius: 999px;
+    border-radius: var(--r-md);
     color: var(--ink);
     font-weight: 560;
     list-style: none;

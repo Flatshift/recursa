@@ -28,7 +28,7 @@
     border: 1.5px solid currentColor;
     border-radius: 4px;
     font-size: 0.5625rem;
-    font-weight: 700;
+    font-weight: 680;
     line-height: 1;
     color: var(--ink-3);
   }

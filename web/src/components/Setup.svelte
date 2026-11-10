@@ -288,7 +288,7 @@
       {#if pickerOpen}
       <label class="search">
         <span class="visually-hidden">Filter resolvers</span>
-        <input bind:this={filterEl} type="text" bind:value={filter} placeholder="Filter by name, address or what it blocks…" />
+        <input bind:this={filterEl} type="text" bind:value={filter} placeholder="Filter by name, address or blocking" />
         <kbd aria-hidden="true">/</kbd>
       </label>
 

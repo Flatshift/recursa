@@ -108,9 +108,9 @@
       <li>
         {#if p.match === 'settings' && app.boot?.caps.settings_window}
           <!-- On the desktop Settings opens its own window, so it is a button rather than a link to a place: set a step
-               apart, with the ellipsis a menu gives a command that opens a window, and a hollow tile instead of a filled one. -->
+               apart, with the ellipsis a menu gives a command that opens a window. -->
           <button type="button" class="item util" onclick={() => openSettings()} title={`${p.label}… (${shortcut(`cmd+${p.key}`)})`}>
-            <span class="ic" data-place={p.match}><Icon name={p.icon} size={13} /></span>
+            <span class="ic"><Icon name={p.icon} size={16} /></span>
             <span>{p.label}…</span>
           </button>
         {:else}
@@ -122,7 +122,7 @@
             onclick={(e) => go(e, p.href)}
             title={mobile ? undefined : `${p.label} (${shortcut(`cmd+${p.key}`)})`}
           >
-            <span class="ic" data-place={p.match}><Icon name={p.icon} size={mobile ? 18 : 13} /></span>
+            <span class="ic"><Icon name={p.icon} size={mobile ? 20 : 16} /></span>
             <span>{p.label}</span>
           </a>
         {/if}
@@ -249,7 +249,6 @@
     color: var(--ink);
     font-size: var(--t-base);
     font-weight: 680;
-    letter-spacing: -0.015em;
     text-decoration: none;
   }
   ul,
@@ -265,7 +264,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    min-height: 30px;
+    min-height: 32px;
     padding: 0 10px;
     border-radius: var(--r-md);
     color: var(--ink);
@@ -285,46 +284,15 @@
   .item.on :global(svg) {
     color: var(--accent-text);
   }
-  /* Each place has a colored tile with a white glyph, as a Mac source list does. The hues are a navigation
-     vocabulary drawn from Recursa's own palette: the answer blue, TLD green and uncached rose of the icon's stops, the
-     TCP violet and slate, all at one lightness and chroma. None is the good, warning or serious color. */
+  /* Each place has a line glyph in one fixed box, so the labels start on one line. No hue: the sidebar is chrome. */
   .ic {
-    --tile-l: 0.58;
-    --tile-c: 0.15;
     display: grid;
     place-items: center;
     flex: none;
-    width: 22px;
-    height: 22px;
-    border-radius: var(--r-md);
-    background: var(--tile);
+    width: 16px;
+    height: 16px;
   }
-  .ic :global(svg),
-  .item.on .ic :global(svg) {
-    color: #fff;
-  }
-  .ic[data-place='bench'] {
-    --tile: oklch(var(--tile-l) var(--tile-c) 258); /* --s-cached */
-  }
-  .ic[data-place='resolvers'] {
-    --tile: oklch(var(--tile-l) var(--tile-c) 162); /* --s-tld */
-  }
-  .ic[data-place='reliability'] {
-    --tile: oklch(var(--tile-l) var(--tile-c) 40); /* --s-uncached */
-  }
-  .ic[data-place='time'] {
-    --tile: oklch(var(--tile-l) var(--tile-c) 300);
-  }
-  .ic[data-place='network'] {
-    --tile: oklch(var(--tile-l) var(--tile-c) 200);
-  }
-  .ic[data-place='method'] {
-    --tile: oklch(var(--tile-l) 0.035 285);
-  }
-  .ic[data-place='settings'] {
-    --tile: oklch(var(--tile-l) 0.012 285);
-  }
-  /* The Settings button: a step of air above it, and its tile a ring where the places' are filled. */
+  /* The Settings button: a step of air above it. */
   button.item {
     width: 100%;
     border: 0;
@@ -332,23 +300,6 @@
   }
   .util {
     margin-top: 6px;
-  }
-  .util .ic {
-    border: 1.5px solid var(--tile);
-    background: none;
-  }
-  .util .ic :global(svg) {
-    color: var(--ink-3);
-  }
-  :global(html[data-theme='dark']) .ic {
-    --tile-l: 0.66;
-    --tile-c: 0.13;
-  }
-  @media (prefers-color-scheme: dark) {
-    :global(html:not([data-theme='light'])) .ic {
-      --tile-l: 0.66;
-      --tile-c: 0.13;
-    }
   }
   .places .item.on > span:not(.ic) {
     font-weight: 600;
@@ -459,9 +410,8 @@
     background: var(--side-sel);
   }
   :global(html.mobile) .ic {
-    width: 30px;
-    height: 30px;
-    border-radius: 8px;
+    width: 20px;
+    height: 20px;
   }
   :global(html.mobile) .item:active {
     background: var(--side-sel);
@@ -488,7 +438,7 @@
   :global(html.mobile) .run {
     min-height: 56px;
     gap: 2px;
-    padding: 8px 100px 8px 7px;
+    padding: 8px 100px 8px 8px;
   }
   :global(html.mobile) .run.on,
   :global(html.mobile) .run:active {
@@ -529,7 +479,7 @@
     align-self: start;
     max-height: calc(100% - 10px);
     margin: 0 8px 10px;
-    padding: 3px;
+    padding: 4px;
     background: var(--surface);
     border: 1px solid var(--rule);
     border-radius: var(--r-lg);
@@ -537,7 +487,7 @@
   .run {
     display: grid;
     gap: 0;
-    padding: 5px 6px;
+    padding: 4px 6px;
     line-height: 1.3;
   }
   /* On the tray's surface the selection is the on-surface step, not the sidebar's. */
@@ -573,17 +523,17 @@
   :global(html.mobile) .rt .score {
     margin-left: auto;
   }
-  /* The speed score as a chip in the answer blue; a live run says so in the measuring orange. */
+  /* The speed score as a quiet neutral chip; a live run is marked by its dot. */
   .chip {
-    padding: 0 5px;
-    border-radius: 999px;
-    background: color-mix(in oklch, var(--s-cached) 13%, transparent);
-    color: color-mix(in oklch, var(--s-cached) 78%, var(--ink));
+    padding: 0 4px;
+    border-radius: var(--r-sm);
+    background: color-mix(in oklch, var(--ink) 7%, transparent);
+    color: var(--ink-2);
     font-size: var(--t-2xs);
     line-height: 16px;
   }
   .live {
-    color: var(--s-uncached);
+    color: var(--ink);
     font-weight: 560;
   }
   .faint {
@@ -593,8 +543,8 @@
     color: var(--ink-2);
   }
   .dot {
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     background: var(--s-uncached);
     animation: pulse 1.4s var(--ease-out) infinite;
@@ -642,7 +592,7 @@
     color: var(--ink);
     text-decoration: none;
     cursor: default;
-    transition: background-color 120ms ease, border-color 120ms ease;
+    transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
   }
   .mon:hover {
     background: var(--surface-2);
@@ -685,17 +635,6 @@
   .mon.on .dot {
     background: var(--good);
     box-shadow: none;
-  }
-  /* Switched on, the card takes a wash of the good color. */
-  .mon.on {
-    border-color: color-mix(in oklch, var(--good) 40%, var(--rule));
-    background: color-mix(in oklch, var(--good) 9%, var(--surface));
-  }
-  .mon.on:hover {
-    background: color-mix(in oklch, var(--good) 15%, var(--surface));
-  }
-  .mon.on .sub {
-    color: color-mix(in oklch, var(--good) 75%, var(--ink));
   }
   @media (prefers-reduced-motion: reduce) {
     .mon {
