@@ -151,10 +151,13 @@ pub fn notify(handle: AppHandle, title: String, body: String) {
     }
 }
 
+/// Async, and handed to the event loop: a synchronous command runs inside the webview's message callback on the
+/// main thread, where a window built on Windows never finishes.
 #[cfg(desktop)]
 #[tauri::command]
-pub fn open_settings(handle: AppHandle, section: Option<String>) {
-    crate::shell::show_settings(&handle, section.as_deref());
+pub async fn open_settings(handle: AppHandle, section: Option<String>) {
+    let app = handle.clone();
+    let _ = handle.run_on_main_thread(move || crate::shell::show_settings(&app, section.as_deref()));
 }
 
 #[cfg(mobile)]

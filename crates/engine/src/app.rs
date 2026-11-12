@@ -217,6 +217,10 @@ impl AppState {
     /// Open the database and build the state. `calibrate` measures the timing floor first;
     /// otherwise [`AppState::start_background`] does it. `caps` is the host's row of [`crate::caps::BUILDS`].
     pub fn open(db: Option<PathBuf>, calibrate: bool, caps: crate::caps::Caps) -> Result<Arc<Self>, String> {
+        #[cfg(windows)]
+        if db.is_none() {
+            store::leave_install_folder();
+        }
         let path = db.unwrap_or_else(store::default_path);
         let store = Arc::new(Store::open(path.clone()).map_err(|e| format!("{}: {e}", path.display()))?);
         let measuring = Arc::new(AtomicBool::new(false));

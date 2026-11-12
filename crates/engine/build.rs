@@ -20,8 +20,9 @@ fn main() {
     let dirty = run("git", &["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
     // SOURCE_DATE_EPOCH pins the stamp for reproducible builds (BSD date takes -r, GNU date -d @).
     let when = match std::env::var("SOURCE_DATE_EPOCH").ok().filter(|e| e.bytes().all(|b| b.is_ascii_digit()) && !e.is_empty()) {
-        Some(e) => run("date", &["-u", "-r", &e, "+%Y-%m-%d %H:%M %Z"])
-            .or_else(|| run("date", &["-u", "-d", &format!("@{e}"), "+%Y-%m-%d %H:%M %Z"])),
+        // "UTC" spelled out: some systems abbreviate their name for it differently ("CUT" on Windows).
+        Some(e) => run("date", &["-u", "-r", &e, "+%Y-%m-%d %H:%M UTC"])
+            .or_else(|| run("date", &["-u", "-d", &format!("@{e}"), "+%Y-%m-%d %H:%M UTC"])),
         None => run("date", &["+%Y-%m-%d %H:%M %Z"]),
     }
     .unwrap_or_default();

@@ -136,7 +136,7 @@ async fn trace(cli: &Cli, target: &str) {
     };
     match trace::available() {
         TraceCap::Ok => {}
-        TraceCap::NeedsAdmin => fail("Trace route needs Administrator on Windows and CAP_NET_RAW or root on Linux."),
+        TraceCap::NeedsAdmin => fail("Trace route needs CAP_NET_RAW or root on Linux."),
         TraceCap::Unsupported => fail("Trace route is not available on this platform."),
     }
     let ip: std::net::IpAddr = match target.parse() {

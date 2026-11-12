@@ -79,7 +79,16 @@ pub fn run() {
     let solo = true;
     #[cfg(desktop)]
     if solo {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| shell::show_main(app, None)));
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            // On Windows the plugin calls this inside its hidden window's procedure, while the second launch waits
+            // in SendMessage: a window built there never finishes. Hand the work to the event loop from another
+            // thread (on the main thread, run_on_main_thread would run it right here).
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || shell::show_main(&handle, None));
+            });
+        }));
     }
     #[cfg(desktop)]
     {

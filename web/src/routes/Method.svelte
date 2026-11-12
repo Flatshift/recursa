@@ -355,7 +355,7 @@
         </li>
         <li>
           <b>Trace route:</b> ICMP probes with rising TTL, four rounds, sent by <a href="https://trippy.rs" target="_blank" rel="noreferrer">Trippy</a>, a Rust tracer
-          that runs as the user on macOS. Each hop's network comes from the same Team Cymru lookup. Nothing is stored.
+          that runs as the user on macOS (on Windows, by the system's own ICMP API, as <code>tracert</code> does). Each hop's network comes from the same Team Cymru lookup. Nothing is stored.
         </li>
         <li>
           <b>Peering map:</b> each router's network is read on this computer from <a href="https://www.caida.org/catalog/datasets/routeviews-prefix2as/" target="_blank" rel="noreferrer">CAIDA's prefix-to-AS table</a>,

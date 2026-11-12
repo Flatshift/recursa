@@ -2,6 +2,14 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.5.7 (2026-11-12)
+
+- Windows: route traces, the Peering map and the border-link monitor work without Administrator.
+- Windows: opening Recursa a second time, or Settings from the page, no longer freezes the app.
+- Windows: the database moves out of the install folder, so uninstalling can remove it.
+- Peering: a map on which no router answered reports an error instead of saving an empty map.
+- Windows: the build time reads UTC, and the View menu says Peering.
+
 ## 0.5.6 (2026-11-10)
 
 - Layout and style clean-ups in the Time summary and transport labels, and the iOS build carries the release version.

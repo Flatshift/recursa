@@ -31,11 +31,14 @@ webpki-roots.workspace = true
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 log = { workspace = true, optional = true }
 routinator = { workspace = true, optional = true }
+
+# Windows traces through IP Helper instead.
+[target.'cfg(not(any(target_os = "ios", windows)))'.dependencies]
 trippy-core.workspace = true
 trippy-privilege.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-# Adapters, their DNS servers and gateways (IP Helper), ICMP echoes for the link check, measurement-thread priority,
+# Adapters, their DNS servers and gateways (IP Helper), ICMP echoes for the link check and traces, measurement-thread priority,
 # the performance counter and SIO_TIMESTAMPING receive stamps.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

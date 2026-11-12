@@ -93,7 +93,7 @@
       {#if unsupported}
         It needs the path tracer, which this platform does not offer.
       {:else}
-        <Icon name="lock" size={13} />Needs administrator rights on {app.env?.platform === 'windows' ? 'Windows' : 'this computer'}. Start Recursa as an administrator to map.
+        <Icon name="lock" size={13} />Needs administrator rights on this computer. Start Recursa as an administrator to map.
       {/if}
     </p>
   </div>

@@ -12,4 +12,4 @@ What each build of Recursa can do. Generated from `crates/engine/src/caps.rs` by
 | Open at login, monitor from the menu bar or tray | yes | yes | no | no |
 | Trace the route to a resolver | yes | yes | no | yes |
 
-Trace route needs Administrator on Windows and CAP_NET_RAW or root on Linux; macOS runs it as the user.
+Trace route needs CAP_NET_RAW or root on Linux; macOS and Windows run it as the user.

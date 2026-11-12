@@ -683,6 +683,10 @@ pub(crate) async fn run(app: &Arc<AppState>) -> Result<MapRun, String> {
         if a.netmap.cancel.load(Ordering::SeqCst) {
             return Err("Cancelled.".to_string());
         }
+        // Not even the first router answered: there is no map in that, and saved it would read as a finished one.
+        if !traces.is_empty() && traces.iter().all(|t| t.trace.hops.is_empty()) {
+            return Err("No router answered any probe. A firewall on this computer may be dropping ICMP replies.".to_string());
+        }
         // Addresses past your ISP that no network announces.
         let (names, blocks, holders) = (HashMap::new(), HashMap::new(), HashMap::new());
         let cx = Ctx { pfx: &p, pdb: &d, home: y.asn, names: &names, you: coords, registry: &blocks, holders: &holders };

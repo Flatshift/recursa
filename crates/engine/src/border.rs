@@ -1,7 +1,7 @@
 //! Background border-link monitoring: for each CDN edge address (see [`crate::edge`]), the last router inside your own
 //! network and the first router beyond it are probed with ICMP every few minutes, and the two round trips are kept for
 //! weeks. When only the far router slows down, and at the same hours each day, the queue is on the link between them;
-//! when both slow down, it is on your side. The pairs come from a trace (Trippy), found again daily.
+//! when both slow down, it is on your side. The pairs come from a trace (Trippy; IP Helper on Windows), found again daily.
 //!
 //! Probes are two per side per cycle, a few seconds at most, through the same machine-wide lock as runs. iOS builds
 //! exclude Trippy and get stubs, so there nothing is found or probed.
@@ -145,7 +145,7 @@ fn discover(target: IpAddr, cdn: &str, target_asn: Option<u32>, home_asn: Option
 
 /// Two ICMP probes toward `target` that expire at `ttl`. The lowest round trip of those answered by `expect`; a reply
 /// from another address (the route moved) counts as no answer.
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", windows)))]
 fn side(target: IpAddr, ttl: u8, expect: IpAddr, id: u16) -> Option<f64> {
     use std::sync::Mutex;
     use trippy_core::{Builder, PrivilegeMode, ProbeStatus, Protocol};
@@ -178,6 +178,28 @@ fn side(target: IpAddr, ttl: u8, expect: IpAddr, id: u16) -> Option<f64> {
         })
         .ok()?;
     best.into_inner().unwrap().map(|ms| (ms * 100.0).round() / 100.0)
+}
+
+/// [`side`] on Windows, through IP Helper (see [`trace::win`]): two probes 200 ms apart.
+#[cfg(windows)]
+fn side(target: IpAddr, ttl: u8, expect: IpAddr, id: u16) -> Option<f64> {
+    let _ = id;
+    let mut prober = trace::win::Prober::open(target).ok()?;
+    let mut best: Option<f64> = None;
+    for round in 0..2 {
+        if round > 0 {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let Ok(probes) = prober.round(ttl, ttl) else { break };
+        for (_, reply) in probes {
+            if let Some((host, ms)) = reply
+                && host == expect
+            {
+                best = Some(best.map_or(ms, |b| b.min(ms)));
+            }
+        }
+    }
+    best.map(|ms| (ms * 100.0).round() / 100.0)
 }
 
 #[cfg(target_os = "ios")]

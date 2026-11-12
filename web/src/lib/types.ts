@@ -416,7 +416,7 @@ export interface Env {
   db: string;
   /** Whether this build can check route origins on this computer. */
   rpki_local?: boolean;
-  /** Whether a trace route can run here: as the user on macOS, with Administrator elsewhere. */
+  /** Whether a trace route can run here: as the user on macOS and Windows, with CAP_NET_RAW or root on Linux. */
   trace?: 'ok' | 'needs_admin' | 'unsupported';
 }
 

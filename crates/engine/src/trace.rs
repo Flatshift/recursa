@@ -1,5 +1,6 @@
-//! Trace the route to a resolver's address with ICMP probes of rising TTL, using Trippy (trippy.rs).
-//! The result is a live view, like the Deep Dive: nothing is stored. iOS builds exclude Trippy and get stubs.
+//! Trace the route to a resolver's address with ICMP probes of rising TTL, using Trippy (trippy.rs), or on Windows
+//! the system's IP Helper (see [`win`]). The result is a live view, like the Deep Dive: nothing is stored. iOS builds
+//! exclude Trippy and get stubs.
 
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
@@ -118,11 +119,11 @@ pub fn run_enriched(target: IpAddr, res: &Resolve, cancel: &AtomicBool) -> Resul
     Ok(t)
 }
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", windows)))]
 pub fn available() -> TraceCap {
     if cfg!(target_os = "macos") {
         TraceCap::Ok
-    } else if cfg!(any(target_os = "linux", windows)) {
+    } else if cfg!(target_os = "linux") {
         match trippy_privilege::Privilege::discover() {
             Ok(p) if p.has_privileges() => TraceCap::Ok,
             _ => TraceCap::NeedsAdmin,
@@ -130,6 +131,12 @@ pub fn available() -> TraceCap {
     } else {
         TraceCap::Unsupported
     }
+}
+
+/// Windows probes through IP Helper (see [`win`]), which asks for no rights.
+#[cfg(windows)]
+pub fn available() -> TraceCap {
+    TraceCap::Ok
 }
 
 #[cfg(target_os = "ios")]
@@ -148,7 +155,7 @@ pub(crate) fn run(target: IpAddr, cancel: &AtomicBool) -> Result<Trace, String> 
 
 /// [`run`], handing `on_round` the trace as it stands after each round. Traces that run at the same time need
 /// distinct non-zero `id`s: each tracer drops replies carrying another's identifier (0 accepts any).
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", windows)))]
 pub(crate) fn run_live(target: IpAddr, id: u16, on_round: &dyn Fn(&Trace)) -> Result<Trace, String> {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
@@ -196,6 +203,34 @@ pub(crate) fn run_live(target: IpAddr, id: u16, on_round: &dyn Fn(&Trace)) -> Re
     Ok(snapshot(&rounds.into_inner().unwrap()))
 }
 
+/// [`run_live`] on Windows, through IP Helper (see [`win`]). `id` is not needed: the system matches each reply to
+/// its own request, so traces running at the same time can't take each other's.
+#[cfg(windows)]
+pub(crate) fn run_live(target: IpAddr, id: u16, on_round: &dyn Fn(&Trace)) -> Result<Trace, String> {
+    const ROUNDS: usize = 4;
+    let _ = id;
+    let mut prober = win::Prober::open(target)?;
+    let t0 = std::time::Instant::now();
+    let snapshot = |rounds: &[RoundProbes]| {
+        let (hops, reached) = fold(rounds, target);
+        let elapsed_ms = round1(t0.elapsed().as_secs_f64() * 1000.0);
+        Trace { target, protocol: "icmp", rounds: rounds.len() as u32, reached, elapsed_ms, hops }
+    };
+    let mut rounds: Vec<RoundProbes> = Vec::with_capacity(ROUNDS);
+    // The first round probes to the limit; later ones stop at the TTL the target answered.
+    let mut last = win::MAX_TTL;
+    for _ in 0..ROUNDS {
+        let probes = prober.round(1, last)?;
+        let reached_at = probes.iter().filter(|(_, r)| r.is_some_and(|(host, _)| host == target)).map(|(ttl, _)| *ttl).min();
+        if let Some(ttl) = reached_at {
+            last = last.min(ttl);
+        }
+        rounds.push(probes);
+        on_round(&snapshot(&rounds));
+    }
+    Ok(snapshot(&rounds))
+}
+
 #[cfg(target_os = "ios")]
 pub(crate) fn run(_target: IpAddr, _cancel: &AtomicBool) -> Result<Trace, String> {
     Err("Trace route is not available on this platform.".to_string())
@@ -204,6 +239,291 @@ pub(crate) fn run(_target: IpAddr, _cancel: &AtomicBool) -> Result<Trace, String
 #[cfg(target_os = "ios")]
 pub(crate) fn run_live(_target: IpAddr, _id: u16, _on_round: &dyn Fn(&Trace)) -> Result<Trace, String> {
     Err("Trace route is not available on this platform.".to_string())
+}
+
+/// The Windows prober. Echo requests go through IP Helper (`IcmpSendEcho2`, `Icmp6SendEcho2`), each with its own TTL:
+/// a router where it expires answers "time exceeded", which the call reports as a reply from that router. Unlike a
+/// raw socket this needs no Administrator, and Windows Firewall passes the replies (it drops them for a raw socket
+/// unless a rule allows inbound ICMP). It is how `tracert` works.
+#[cfg(windows)]
+pub(crate) mod win {
+    use super::RoundProbes;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_IO_PENDING, HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        ICMP_ECHO_REPLY, IP_OPTION_INFORMATION, Icmp6CreateFile, Icmp6ParseReplies, Icmp6SendEcho2, IcmpCloseHandle, IcmpCreateFile,
+        IcmpParseReplies, IcmpSendEcho2,
+    };
+    use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, WaitForMultipleObjects, WaitForSingleObject};
+
+    pub(crate) const MAX_TTL: u8 = 30;
+    /// How long the system waits for one probe's reply.
+    const TIMEOUT_MS: u32 = 1000;
+    /// Once the target has answered, how much longer the routers before it get.
+    const GRACE: Duration = Duration::from_millis(100);
+    /// Between two probes of a round, so the target's answer can stop the round before every TTL is sent.
+    const PACE: Duration = Duration::from_millis(5);
+    const PAYLOAD: usize = 32;
+    /// Room for either reply struct, the echoed payload, an ICMP error and the IO_STATUS_BLOCK an asynchronous call
+    /// also writes: more than the documented minimum for both families.
+    const REPLY_BYTES: usize = 256;
+    const IP_SUCCESS: u32 = 0;
+    /// Also `IP_HOP_LIMIT_EXCEEDED`, the IPv6 name for the same status.
+    const IP_TTL_EXPIRED_TRANSIT: u32 = 11013;
+    const AF_INET6: u16 = 23;
+
+    /// `SOCKADDR_IN6`, laid out by hand so no union has to be written through.
+    #[repr(C)]
+    struct SockaddrIn6 {
+        family: u16,
+        port: u16,
+        flowinfo: u32,
+        addr: [u8; 16],
+        scope_id: u32,
+    }
+
+    /// One request: the event the system signals when it completes, and the reply buffer it fills.
+    struct Slot {
+        event: HANDLE,
+        reply: Vec<u8>,
+    }
+
+    pub(crate) struct Prober {
+        icmp: HANDLE,
+        target: IpAddr,
+        payload: [u8; PAYLOAD],
+        slots: Vec<Slot>,
+        /// Slots no request is using.
+        free: Vec<usize>,
+        /// Slots whose request a round gave up on. The system still writes the buffer when the request ends, so the
+        /// slot is not used again until its event is set.
+        stale: Vec<usize>,
+    }
+
+    impl Drop for Prober {
+        fn drop(&mut self) {
+            // A pending request writes into its buffer when it completes: wait for each (its own timeout bounds
+            // this) before the buffers are freed.
+            for &i in &self.stale {
+                unsafe { WaitForSingleObject(self.slots[i].event, TIMEOUT_MS + 500) };
+            }
+            for s in &self.slots {
+                unsafe { CloseHandle(s.event) };
+            }
+            unsafe { IcmpCloseHandle(self.icmp) };
+        }
+    }
+
+    fn os_error() -> std::io::Error {
+        std::io::Error::last_os_error()
+    }
+
+    fn ms_since(sent: Instant) -> f64 {
+        sent.elapsed().as_secs_f64() * 1000.0
+    }
+
+    impl Prober {
+        pub(crate) fn open(target: IpAddr) -> Result<Prober, String> {
+            let icmp = unsafe { if target.is_ipv4() { IcmpCreateFile() } else { Icmp6CreateFile() } };
+            if icmp == INVALID_HANDLE_VALUE {
+                return Err(format!("Could not open an ICMP handle ({}).", os_error()));
+            }
+            let mut payload = [0u8; PAYLOAD];
+            for (i, b) in payload.iter_mut().enumerate() {
+                *b = i as u8;
+            }
+            Ok(Prober { icmp, target, payload, slots: Vec::new(), free: Vec::new(), stale: Vec::new() })
+        }
+
+        /// A slot to send from: a free one, else a new one.
+        fn slot(&mut self) -> Result<usize, String> {
+            if let Some(i) = self.free.pop() {
+                return Ok(i);
+            }
+            // Manual reset: `send` resets it before each request.
+            let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+            if event.is_null() {
+                return Err(format!("Could not create an event ({}).", os_error()));
+            }
+            self.slots.push(Slot { event, reply: vec![0; REPLY_BYTES] });
+            Ok(self.slots.len() - 1)
+        }
+
+        /// Free the given-up slots whose requests have ended since.
+        fn reclaim(&mut self) {
+            let slots = &self.slots;
+            let (ended, pending): (Vec<usize>, Vec<usize>) =
+                self.stale.iter().copied().partition(|&i| unsafe { WaitForSingleObject(slots[i].event, 0) } == WAIT_OBJECT_0);
+            self.free.extend(ended);
+            self.stale = pending;
+        }
+
+        /// Send one echo that expires after `ttl` routers. `Ok(true)` when it is in flight, `Ok(false)` when it
+        /// completed on the spot.
+        fn send(&mut self, slot: usize, ttl: u8) -> Result<bool, String> {
+            let s = &mut self.slots[slot];
+            unsafe { ResetEvent(s.event) };
+            let options = IP_OPTION_INFORMATION { Ttl: ttl, Tos: 0, Flags: 0, OptionsSize: 0, OptionsData: std::ptr::null_mut() };
+            let sent = unsafe {
+                match self.target {
+                    IpAddr::V4(a) => IcmpSendEcho2(
+                        self.icmp,
+                        s.event,
+                        None,
+                        std::ptr::null(),
+                        // Network byte order, as IP Helper wants it.
+                        u32::from_ne_bytes(a.octets()),
+                        self.payload.as_ptr().cast(),
+                        PAYLOAD as u16,
+                        &options,
+                        s.reply.as_mut_ptr().cast(),
+                        s.reply.len() as u32,
+                        TIMEOUT_MS,
+                    ),
+                    IpAddr::V6(a) => {
+                        // The unspecified source lets the system choose the address.
+                        let from = SockaddrIn6 { family: AF_INET6, port: 0, flowinfo: 0, addr: [0; 16], scope_id: 0 };
+                        let to = SockaddrIn6 { family: AF_INET6, port: 0, flowinfo: 0, addr: a.octets(), scope_id: 0 };
+                        Icmp6SendEcho2(
+                            self.icmp,
+                            s.event,
+                            None,
+                            std::ptr::null(),
+                            (&raw const from).cast(),
+                            (&raw const to).cast(),
+                            self.payload.as_ptr().cast(),
+                            PAYLOAD as u16,
+                            &options,
+                            s.reply.as_mut_ptr().cast(),
+                            s.reply.len() as u32,
+                            TIMEOUT_MS,
+                        )
+                    }
+                }
+            };
+            if sent != 0 {
+                return Ok(false);
+            }
+            let e = os_error();
+            if e.raw_os_error() == Some(ERROR_IO_PENDING as i32) { Ok(true) } else { Err(e.to_string()) }
+        }
+
+        /// Who answered a completed request: the target, or the router where the probe expired. `None` for a
+        /// timeout or any other failure. Call once per request: parsing rewrites the buffer.
+        fn answered(&mut self, slot: usize) -> Option<IpAddr> {
+            let buf = &mut self.slots[slot].reply;
+            let ok = |status: u32| matches!(status, IP_SUCCESS | IP_TTL_EXPIRED_TRANSIT);
+            match self.target {
+                IpAddr::V4(_) => {
+                    if unsafe { IcmpParseReplies(buf.as_mut_ptr().cast(), buf.len() as u32) } < 1 {
+                        return None;
+                    }
+                    let r: ICMP_ECHO_REPLY = unsafe { std::ptr::read_unaligned(buf.as_ptr().cast()) };
+                    ok(r.Status).then(|| IpAddr::V4(Ipv4Addr::from(r.Address.to_ne_bytes())))
+                }
+                IpAddr::V6(_) => {
+                    if unsafe { Icmp6ParseReplies(buf.as_mut_ptr().cast(), buf.len() as u32) } < 1 {
+                        return None;
+                    }
+                    // ICMPV6_ECHO_REPLY: a packed IPV6_ADDRESS_EX (port 2, flow 4, address 16, scope 4 = 26 bytes),
+                    // then the status at offset 28.
+                    let status = u32::from_ne_bytes(buf[28..32].try_into().ok()?);
+                    let addr: [u8; 16] = buf[6..22].try_into().ok()?;
+                    ok(status).then(|| IpAddr::V6(Ipv6Addr::from(addr)))
+                }
+            }
+        }
+
+        /// One round: a probe for each TTL from `first` to `last`, sent in order a few milliseconds apart and all
+        /// awaited together. When the target answers, no higher TTL is sent and the round ends after [`GRACE`].
+        /// An error only when no probe could be sent at all.
+        pub(crate) fn round(&mut self, first: u8, last: u8) -> Result<RoundProbes, String> {
+            self.reclaim();
+            let mut out: RoundProbes = Vec::new();
+            // In flight: the slot, the TTL and when it was sent.
+            let mut open: Vec<(usize, u8, Instant)> = Vec::new();
+            let mut next = first;
+            let mut reached = false;
+            let mut deadline: Option<Instant> = None;
+            let mut failed: Option<String> = None;
+            loop {
+                if !reached && next <= last {
+                    let ttl = next;
+                    next += 1;
+                    match self.slot() {
+                        Ok(slot) => {
+                            let sent = Instant::now();
+                            match self.send(slot, ttl) {
+                                Ok(true) => open.push((slot, ttl, sent)),
+                                Ok(false) => {
+                                    let ms = ms_since(sent);
+                                    let reply = self.answered(slot).map(|host| (host, ms));
+                                    self.free.push(slot);
+                                    reached |= reply.is_some_and(|(host, _)| host == self.target);
+                                    out.push((ttl, reply));
+                                }
+                                Err(e) => {
+                                    self.free.push(slot);
+                                    failed = Some(e);
+                                }
+                            }
+                        }
+                        Err(e) => failed = Some(e),
+                    }
+                }
+                let sending = !reached && next <= last;
+                if !sending && open.is_empty() {
+                    break;
+                }
+                let now = Instant::now();
+                let wait = if sending {
+                    PACE
+                } else {
+                    // Everything is sent: the system's own timeout ends each request, plus slack for the wake-up.
+                    let until = *deadline.get_or_insert(now + Duration::from_millis(u64::from(TIMEOUT_MS) + 200));
+                    match until.checked_duration_since(now) {
+                        Some(d) if !d.is_zero() => d,
+                        _ => break,
+                    }
+                };
+                if open.is_empty() {
+                    std::thread::sleep(wait);
+                    continue;
+                }
+                // At most MAX_TTL handles, under the 64 one wait can take.
+                let events: Vec<HANDLE> = open.iter().map(|(slot, _, _)| self.slots[*slot].event).collect();
+                let r = unsafe { WaitForMultipleObjects(events.len() as u32, events.as_ptr(), 0, (wait.as_millis() as u32).max(1)) };
+                let i = r.wrapping_sub(WAIT_OBJECT_0) as usize;
+                if i < open.len() {
+                    let (slot, ttl, sent) = open.remove(i);
+                    let ms = ms_since(sent);
+                    let reply = self.answered(slot).map(|host| (host, ms));
+                    self.free.push(slot);
+                    if reply.is_some_and(|(host, _)| host == self.target) {
+                        reached = true;
+                        let grace = Instant::now() + GRACE;
+                        deadline = Some(deadline.map_or(grace, |d| d.min(grace)));
+                    }
+                    out.push((ttl, reply));
+                } else if r == WAIT_FAILED {
+                    break;
+                }
+            }
+            // Still unanswered at round end. Their requests are still pending, so the slots wait in `stale`.
+            for (slot, ttl, _) in open {
+                out.push((ttl, None));
+                self.stale.push(slot);
+            }
+            if let Some(e) = failed
+                && out.is_empty()
+            {
+                return Err(format!("Could not send an ICMP probe ({e})."));
+            }
+            out.sort_by_key(|(ttl, _)| *ttl);
+            Ok(out)
+        }
+    }
 }
 
 #[cfg(test)]

@@ -237,7 +237,7 @@
     live: "Check live feeds takes hosts from today's URLhaus and ThreatView malware feeds, keeps up to 20 that still resolve through an unfiltered resolver, and asks this resolver for them.",
   });
   const traceWhy = $derived(
-    traceCap === 'needs_admin' ? `Needs administrator rights on ${app.env?.platform === 'windows' ? 'Windows' : 'this computer'}` : null,
+    traceCap === 'needs_admin' ? 'Needs administrator rights on this computer' : null,
   );
   const has = (k: CheckKind) => !!results[k][id];
   const text = (k: CheckKind) => (isRunning(k, id) ? verb[k][2] : errorOf(k, id) ? 'Try again' : has(k) ? verb[k][1] : verb[k][0]);

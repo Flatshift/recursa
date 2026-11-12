@@ -2,6 +2,7 @@
   // The route to a resolver: a spine of hops on the left, grouped into the networks that carry them, and every round's
   // round trip on a shared log axis to the right. Ink throughout; only the resolver's answer wears the brand colour.
   import type { Trace, TraceHop } from '../lib/types';
+  import { app } from '../lib/store.svelte';
   import { holder, ms } from '../lib/format';
   import { logScale, logTicks, tickLabel } from '../lib/scale';
   import { reduceMotion, sinFrac } from '../lib/motion';
@@ -261,7 +262,7 @@
   {/key}
   <figcaption>
     {#if summary}<span class="sum">{summary}</span>{/if}
-    <span class="credit">Networks named by Team Cymru. Trace by Trippy.</span>
+    <span class="credit">Networks named by Team Cymru.{#if app.env?.platform !== 'windows'} Trace by Trippy.{/if}</span>
   </figcaption>
 </figure>
 

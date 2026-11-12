@@ -27,6 +27,8 @@
 
   // The Settings window can open before the bootstrap arrives.
   const canLogin = $derived(app.boot?.caps.login_item ?? false);
+  // Where the tray item lives, in the system's own words.
+  const tray = $derived(app.env?.platform === 'windows' ? 'notification area' : app.env?.platform === 'linux' ? 'system tray' : 'menu bar');
   $effect(() => {
     if (canLogin) loginItem.get().then((v) => (login = v), () => (login = null));
   });
@@ -266,9 +268,9 @@
         {#if canLogin}
           <label class="row check">
             <input type="checkbox" checked={!!login} disabled={login == null} onchange={(e) => setLogin((e.currentTarget as HTMLInputElement).checked)} />
-            <span>Open at login, in the menu bar only</span>
+            <span>Open at login, in the {tray} only</span>
           </label>
-          <p class="note">Recursa keeps monitoring from the menu bar when its window is closed.</p>
+          <p class="note">Recursa keeps monitoring from the {tray} when its window is closed.</p>
         {/if}
       {:else if current === 'benchmark'}
         <h2>Benchmark</h2>

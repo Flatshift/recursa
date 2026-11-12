@@ -64,13 +64,62 @@ pub struct MonitorRow {
     pub ok: bool,
 }
 
+/// The data folder's name. On Windows the per-user installer puts the program in `Recursa`, so the data goes under
+/// the bundle identifier, beside the WebView's, where the uninstaller's "Delete the application data" removes it.
+const DATA_DIR: &str = if cfg!(windows) { "net.morisette.recursa" } else { "Recursa" };
+const DB_FILE: &str = "recursa.db";
+
 pub fn default_path() -> PathBuf {
     // Local, not roaming, on Windows: the RPKI cache beside the db runs to gigabytes.
     // The same directory as data_dir() on macOS and Linux.
     // Never the shared temp directory, where another user could create the folder first. Without a home, the
     // current directory, which the user chose.
     let base = dirs::data_local_dir().unwrap_or_default();
-    base.join("Recursa").join("recursa.db")
+    let path = base.join(DATA_DIR).join(DB_FILE);
+    // A database still in the install folder, where builds before 0.5.7 kept it: used there until
+    // `leave_install_folder` can move it.
+    #[cfg(windows)]
+    {
+        let old = base.join("Recursa").join(DB_FILE);
+        if old.exists() && !path.exists() {
+            return old;
+        }
+    }
+    path
+}
+
+/// Move a database that builds before 0.5.7 left in the Windows install folder to the data folder. Call before
+/// opening the default database.
+#[cfg(windows)]
+pub(crate) fn leave_install_folder() {
+    let base = dirs::data_local_dir().unwrap_or_default();
+    move_data(&base.join("Recursa"), &base.join(DATA_DIR));
+}
+
+/// Move the database in `old`, its journal and the RPKI cache to `new`, unless `new` has a database already. All or
+/// nothing for the database and its journal: while another process holds them open the move fails, and they stay
+/// for the next start.
+#[cfg(any(windows, test))]
+fn move_data(old: &Path, new: &Path) {
+    let (from, to) = (old.join(DB_FILE), new.join(DB_FILE));
+    if !from.exists() || to.exists() {
+        return;
+    }
+    make_dir(new);
+    if std::fs::rename(&from, &to).is_err() {
+        return;
+    }
+    let wal = format!("{DB_FILE}-wal");
+    if old.join(&wal).exists() && std::fs::rename(old.join(&wal), new.join(&wal)).is_err() {
+        // A database without its journal would lose the latest writes: put it back.
+        let _ = std::fs::rename(&to, &from);
+        return;
+    }
+    let _ = std::fs::rename(old.join("rpki"), new.join("rpki"));
+    // SQLite rebuilds the journal's index, and the locks are made again beside the database.
+    for name in ["recursa.db-shm", "measure.lock", "recursa.monitor.lock", "recursa.ntp.lock", "recursa.border.lock"] {
+        let _ = std::fs::remove_file(old.join(name));
+    }
 }
 
 /// Create `dir` and its missing parents, private to this user on Unix: it holds run history and settings. The
@@ -1056,6 +1105,32 @@ pub(crate) mod tests {
 
     fn ids(store: &Store) -> Vec<String> {
         store.list_runs(100).into_iter().map(|r| r.id).collect()
+    }
+
+    #[test]
+    fn data_leaves_the_install_folder_once() {
+        let root = std::env::temp_dir().join(format!("recursa-move-{:x}", fastrand::u64(..)));
+        let (old, new) = (root.join("Recursa"), root.join("net.morisette.recursa"));
+        std::fs::create_dir_all(old.join("rpki")).unwrap();
+        for (name, body) in [("recursa.db", "db"), ("recursa.db-wal", "wal"), ("recursa.db-shm", ""), ("measure.lock", "")] {
+            std::fs::write(old.join(name), body).unwrap();
+        }
+        std::fs::write(old.join("rpki").join("cache"), "roas").unwrap();
+        std::fs::write(old.join("recursa.exe"), "program").unwrap();
+
+        move_data(&old, &new);
+        assert_eq!(std::fs::read_to_string(new.join("recursa.db")).unwrap(), "db");
+        assert_eq!(std::fs::read_to_string(new.join("recursa.db-wal")).unwrap(), "wal");
+        assert_eq!(std::fs::read_to_string(new.join("rpki").join("cache")).unwrap(), "roas");
+        let left: Vec<_> = std::fs::read_dir(&old).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(left, ["recursa.exe"], "only the program stays");
+
+        // A database that turns up in the old folder later never replaces the one in use.
+        std::fs::write(old.join("recursa.db"), "stale").unwrap();
+        move_data(&old, &new);
+        assert_eq!(std::fs::read_to_string(new.join("recursa.db")).unwrap(), "db");
+        assert!(old.join("recursa.db").exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

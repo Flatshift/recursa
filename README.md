@@ -109,7 +109,7 @@ crates/engine/src/   the engine (library), shared by both front ends
   net.rs         UDP (kernel stamps), TCP, DoT (rustls), DoH (HTTP/2) transports
   bench.rs       run orchestration: setup, warm-up, interleaved phases, path check, probes, CDN, intel
   caps.rs        what each build can do: the UI reads it, and docs/PLATFORMS.md is generated from it
-  trace.rs       route trace with ICMP probes of rising TTL (Trippy), hops named by network, for the path check and `recursa trace`
+  trace.rs       route trace with ICMP probes of rising TTL (Trippy; IP Helper on Windows), hops named by network, for the path check and `recursa trace`
   probes.rs      capability and blocking probes with evidence
   catalog.rs     resolver catalog: curated, system and custom resolvers in one shape (data/catalog.json)
   names.rs       names for the Cached test: checking, importing and parsing lists
@@ -170,7 +170,7 @@ too. The opened link stops working after two minutes if no page used it.
 ### Data
 
 A SQLite database lives in the OS application-data directory (`~/Library/Application Support/Recursa/recursa.db` on
-macOS), shared by the app and the CLI. Use `--db` to put it somewhere else. On macOS and Linux the folders Recursa
+macOS, `%LOCALAPPDATA%\net.morisette.recursa\recursa.db` on Windows), shared by the app and the CLI. Use `--db` to put it somewhere else. On macOS and Linux the folders Recursa
 creates for it are private to your user (0700), and the default folder is made private if an older version left it
 open. Only one process measures at a time: a run waits briefly for a monitoring cycle in another process and refuses
 if another run is in progress, and only one process records monitoring for a given database.
@@ -184,7 +184,7 @@ if another run is in progress, and only one process records monitoring for a giv
   and restart Recursa. Answers without a stamp are timed in userspace, loopback answers always are, and the
   Method page says which applied and how to change it. The Windows link check times each echo in userspace, and
   reports only how late its own ticks ran, not loopback echoes or interface counters.
-* Tracing a route needs Administrator on Windows and CAP_NET_RAW or root on Linux; macOS runs it as the user.
+* Tracing a route needs CAP_NET_RAW or root on Linux; macOS and Windows run it as the user.
   Without it, the path check times handshakes only.
 * Background monitoring runs while Recursa is running; it isn't installed as a system service.
 

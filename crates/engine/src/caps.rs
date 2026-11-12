@@ -17,7 +17,7 @@ pub struct Caps {
     pub app_menu: bool,
     /// Open at login, into the menu bar or tray, monitoring with no window open.
     pub login_item: bool,
-    /// Trace the route to a resolver with ICMP probes (Trippy).
+    /// Trace the route to a resolver with ICMP probes (Trippy; IP Helper on Windows).
     pub trace_route: bool,
 }
 
@@ -64,7 +64,7 @@ impl Caps {
                 s += if has(&c) { " yes |" } else { " no |" };
             }
         }
-        s + "\n\nTrace route needs Administrator on Windows and CAP_NET_RAW or root on Linux; macOS runs it as the user.\n"
+        s + "\n\nTrace route needs CAP_NET_RAW or root on Linux; macOS and Windows run it as the user.\n"
     }
 }
 

@@ -101,7 +101,7 @@
     >
       {#snippet extra()}
         {#if needsAdmin}
-          <p class="admin"><Icon name="lock" size={13} />Needs administrator rights on {app.env?.platform === 'windows' ? 'Windows' : 'this computer'}. Start Recursa as an administrator to switch it on.</p>
+          <p class="admin"><Icon name="lock" size={13} />Needs administrator rights on this computer. Start Recursa as an administrator to switch it on.</p>
         {/if}
       {/snippet}
       {#snippet hint()}
