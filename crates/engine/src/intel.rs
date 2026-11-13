@@ -161,10 +161,13 @@ impl Intel {
     /// Whether a background download (an RPKI sync) is under way in this process.
     pub fn fetching(&self) -> bool {
         #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
-        if self.rpki.syncing() {
-            return true;
+        {
+            self.rpki.syncing()
         }
-        false
+        #[cfg(not(all(feature = "rpki-local", not(target_os = "ios"))))]
+        {
+            false
+        }
     }
 
     /// Fresh cache hit, else fetch (unless measuring), else stale cache.
