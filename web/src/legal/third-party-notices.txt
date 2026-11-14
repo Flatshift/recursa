@@ -357,7 +357,7 @@ MIT: 411 packages
       Copyright (c) 2017 Pyfisch
   libc 0.2.191
       Copyright (c) The Rust Project Developers
-  libsqlite3-sys 0.39.1
+  libsqlite3-sys 0.40.0
       Copyright (c) 2014 The rusqlite developers
   lock_api 0.4.14
       Copyright (c) 2016 The Rust Project Developers
@@ -506,7 +506,7 @@ MIT: 411 packages
       Copyright (c) 2016-2026 Sean McArthur
   rfd 0.17.2
       Copyright (c) 2022 Bartłomiej Maryńczak
-  rusqlite 0.41.1
+  rusqlite 0.42.0
       Copyright (c) 2014 The rusqlite developers
   Rust standard library
       Copyright (c) The Rust Project Contributors
