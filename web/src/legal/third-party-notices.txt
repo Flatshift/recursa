@@ -11,7 +11,7 @@ Where a package offers a choice of licenses, the one used is named.
 MIT: 383 packages
 -------------------------------------------------------------------------------
 
-  @tauri-apps/api 2.12.4 (npm)
+  @tauri-apps/api 2.12.5 (npm)
       Copyright (c) 2017 - Present Tauri Apps Contributors
   adler2 2.0.1
   aead 0.6.1
@@ -544,7 +544,7 @@ MIT: 383 packages
       Copyright (c) 2015 Danny Guo
       Copyright (c) 2016 Titus Wormer <tituswormer@gmail.com>
       Copyright (c) 2018 Akash Kurdekar
-  svelte 5.57.3 (npm)
+  svelte 5.58.0 (npm)
       Copyright (c) 2016-2025 [Svelte Contributors](https://github.com/sveltejs/svelte/graphs/contributors)
   swift-rs 1.0.9
       Copyright (c) 2023 The swift-rs Developers
