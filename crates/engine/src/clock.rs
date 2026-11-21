@@ -6,6 +6,13 @@
 //! * Windows: `QueryPerformanceCounter` ticks, the domain of `SO_TIMESTAMP` control messages
 //!   (`SIO_TIMESTAMPING`), converted to nanoseconds.
 //! * Elsewhere: nanoseconds since process start (userspace stamps only).
+//!
+//! [`awake_total_ns`] reads two other clocks back to back, one that stops while the system sleeps and one that keeps
+//! running, so a gap between them shows a sleep:
+//! * macOS and iOS: `CLOCK_UPTIME_RAW` (stops) and `CLOCK_MONOTONIC` (runs).
+//! * Linux: `CLOCK_MONOTONIC` (stops) and `CLOCK_BOOTTIME` (runs).
+//! * Windows: `QueryUnbiasedInterruptTime` (stops) and `QueryPerformanceCounter` (runs).
+//! * Elsewhere: [`now_ns`] twice.
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod imp {
@@ -42,6 +49,16 @@ mod imp {
         if n == d { t } else { ((t as u128 * n as u128) / d as u128) as u64 }
     }
 
+    /// `(awake, total)`: `CLOCK_UPTIME_RAW` stops during sleep, `CLOCK_MONOTONIC` keeps running.
+    pub fn awake_total_ns() -> (u64, u64) {
+        fn read(clock: libc::clockid_t) -> u64 {
+            let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+            unsafe { libc::clock_gettime(clock, &mut ts) };
+            ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+        }
+        (read(libc::CLOCK_UPTIME_RAW), read(libc::CLOCK_MONOTONIC))
+    }
+
     pub const SOURCE: &str = "mach_absolute_time / SO_TIMESTAMP_MONOTONIC";
 }
 
@@ -54,6 +71,17 @@ mod imp {
         ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
     }
 
+    fn read(clock: libc::clockid_t) -> u64 {
+        let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        unsafe { libc::clock_gettime(clock, &mut ts) };
+        ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+    }
+
+    /// `(awake, total)`: `CLOCK_MONOTONIC` stops during sleep, `CLOCK_BOOTTIME` keeps running.
+    pub fn awake_total_ns() -> (u64, u64) {
+        (read(libc::CLOCK_MONOTONIC), read(libc::CLOCK_BOOTTIME))
+    }
+
     pub const SOURCE: &str = "CLOCK_REALTIME / SO_TIMESTAMPNS";
 }
 
@@ -61,6 +89,7 @@ mod imp {
 mod imp {
     use std::sync::OnceLock;
     use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+    use windows_sys::Win32::System::WindowsProgramming::QueryUnbiasedInterruptTime;
 
     fn frequency() -> u64 {
         static F: OnceLock<u64> = OnceLock::new();
@@ -85,6 +114,14 @@ mod imp {
         (t / f) * 1_000_000_000 + (t % f) * 1_000_000_000 / f
     }
 
+    /// `(awake, total)`: the unbiased interrupt time stops during sleep, the performance counter keeps running.
+    pub fn awake_total_ns() -> (u64, u64) {
+        let mut t = 0u64;
+        unsafe { QueryUnbiasedInterruptTime(&mut t) };
+        // 100 ns units.
+        (t.saturating_mul(100), now_ns())
+    }
+
     pub const SOURCE: &str = "QueryPerformanceCounter / SO_TIMESTAMP";
 }
 
@@ -97,6 +134,12 @@ mod imp {
     pub fn now_ns() -> u64 {
         static START: OnceLock<Instant> = OnceLock::new();
         START.get_or_init(Instant::now).elapsed().as_nanos() as u64
+    }
+
+    /// No sleep-aware clock here: both readings are the same.
+    pub fn awake_total_ns() -> (u64, u64) {
+        let t = now_ns();
+        (t, t)
     }
 
     pub const SOURCE: &str = "Instant (userspace)";
@@ -136,5 +179,20 @@ pub fn prioritize_thread() {
     {
         use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL};
         unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn awake_and_total_advance_together_without_sleep() {
+        let (a0, t0) = awake_total_ns();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let (a1, t1) = awake_total_ns();
+        assert!(a1 > a0 && t1 > t0, "both clocks advance");
+        let (da, dt) = ((a1 - a0) as i64, (t1 - t0) as i64);
+        assert!((dt - da).abs() < 1_000_000_000, "no sleep gap: awake {da} total {dt}");
     }
 }

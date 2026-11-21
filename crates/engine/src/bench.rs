@@ -1688,6 +1688,7 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
         h.mark("cdn-owners");
         let intel = deps.intel.clone();
         let owners = deps.rt.block_on(async {
+            intel.wait_for_rpki().await;
             let checks = futures_util::future::join_all(jobs.into_iter().map(|(id, ip, eg, answered, resolve)| {
                 let intel = intel.clone();
                 async move {

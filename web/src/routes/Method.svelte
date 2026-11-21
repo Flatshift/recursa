@@ -336,11 +336,12 @@
       <h3>Network intel</h3>
       <ul>
         <li>
-          <b>RPKI:</b> checked on {here}, only if you turn it on in Settings. Recursa downloads the signed route data of the five regional
-          registries over RRDP and validates it, with built-in code that works like
-          <a href="https://www.nlnetlabs.nl/projects/rpki/routinator/" target="_blank" rel="noreferrer">NLnet Labs' Routinator</a>. It keeps a compact
-          table of route origins, and applies RFC 6811 to the resolver's prefix and origin AS. It does not read publication points that offer only
-          rsync. When RPKI is off, the cell shows "Not checked".
+          <b>RPKI:</b> on by default, with an off switch in Settings. Recursa downloads the already-validated route-origin table from
+          two public validators, the rpki-client console (<code>console.rpki-client.org</code>) and RIPE NCC (<code>rpki-validator.ripe.net</code>),
+          about 5 MB each, twice a day and never during a measurement. The two hosts see {here}'s address, not which resolvers you check.
+          Recursa applies RFC 6811 to the resolver's prefix and origin AS (from Team Cymru) against both tables. It shows a result only
+          when both agree and both are under 24 hours old; otherwise the cell shows "Not checked" or "Sources disagree". Neither table is signed, so
+          the trust is TLS plus the two publishers.
         </li>
         <li>
           <b>Route-origin filtering:</b> a live test with <a href="https://cmdns.dns-oarc.net/" target="_blank" rel="noreferrer">Check My DNS by DNS-OARC</a>.
@@ -388,7 +389,9 @@
         Free public resolvers share their capacity. Some say that they will limit a client address that sends too much. Recursa
         sends each resolver one query at a time (sends go out at least 4 ms apart in Accurate mode, 1 ms in Quick), so a run sends a resolver tens
         of queries per second at most, in tests of 3 to 500 queries per resolver (30 by default). Monitoring sends six queries per
-        resolver in each cycle, three to each of its two servers.
+        resolver in each cycle, three to each of its two servers. When resolvers of several operators go unanswered in the same cycle and none answers,
+        the cause is taken to be this network or the path, and the cycle is not counted against any of them. Time this computer was
+        asleep is shown as no checks.
       </p>
       <p>
         <b>What operators publish.</b> Google applies rate limits per client address (an IPv4 address or an IPv6 /64). Its

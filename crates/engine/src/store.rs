@@ -1,8 +1,9 @@
 //! Local persistence: runs, monitoring samples, custom resolvers, settings and the
 //! intel cache. One SQLite file in the OS application-data directory.
 
+use crate::attribution::{Cause, GapCause};
 use crate::border::{Kind, Pair, Sample as BorderSample};
-use crate::monitor::{HOUR_MS, HourRollup, Outage, OutageTracker, RollupBuilder, RollupRow};
+use crate::monitor::{CycleEnd, HOUR_MS, HourRollup, Outage, OutageTracker, RollupBuilder, RollupRow};
 use crate::netmap::attr;
 use rusqlite::types::Type;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, Transaction, params};
@@ -13,16 +14,46 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
 
-const PUT_HOUR: &str = "INSERT OR REPLACE INTO monitor_hour(hour, resolver_id, n, ok, cycles, up, first_ts, last_ts, lat)
-     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)";
-const PUT_OUTAGE: &str = "INSERT OR REPLACE INTO monitor_outage(resolver_id, started, ended, cycles, recovered) VALUES(?1,?2,?3,?4,?5)";
+const PUT_HOUR: &str =
+    "INSERT OR REPLACE INTO monitor_hour(hour, resolver_id, n, ok, cycles, up, first_ts, last_ts, lat, shared, shared_n, unclear, covered)
+     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)";
+const PUT_OUTAGE: &str = "INSERT OR REPLACE INTO monitor_outage(resolver_id, started, ended, cycles, recovered, shared, unclear, cut)
+     VALUES(?1,?2,?3,?4,?5,?6,?7,?8)";
+/// Columns schema version 2 adds to existing tables (new databases have them from `CREATE TABLE`).
+const V2_COLUMNS: [&str; 11] = [
+    "ALTER TABLE monitor ADD COLUMN kind TEXT",
+    "ALTER TABLE monitor ADD COLUMN via TEXT",
+    "ALTER TABLE monitor ADD COLUMN cause TEXT",
+    "ALTER TABLE monitor ADD COLUMN every INTEGER",
+    "ALTER TABLE monitor_hour ADD COLUMN shared INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE monitor_hour ADD COLUMN shared_n INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE monitor_hour ADD COLUMN unclear INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE monitor_hour ADD COLUMN covered INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE monitor_outage ADD COLUMN shared INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE monitor_outage ADD COLUMN unclear INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE monitor_outage ADD COLUMN cut INTEGER NOT NULL DEFAULT 0",
+];
 
 fn put_hour(st: &mut rusqlite::CachedStatement<'_>, r: &HourRollup) -> rusqlite::Result<usize> {
-    st.execute(params![r.hour, r.resolver_id, r.n, r.ok, r.cycles, r.up, r.first, r.last, r.latency_blob()])
+    st.execute(params![
+        r.hour,
+        r.resolver_id,
+        r.n,
+        r.ok,
+        r.cycles,
+        r.up,
+        r.first,
+        r.last,
+        r.latency_blob(),
+        r.shared,
+        r.shared_n,
+        r.unclear,
+        r.covered
+    ])
 }
 
 fn put_outage(st: &mut rusqlite::CachedStatement<'_>, id: &str, o: &Outage) -> rusqlite::Result<usize> {
-    st.execute(params![id, o.start, o.end, o.cycles, o.recovered])
+    st.execute(params![id, o.start, o.end, o.cycles, o.recovered, o.shared, o.unclear, o.cut as i32])
 }
 
 /// A text column without copying it.
@@ -30,9 +61,12 @@ fn text<'a>(r: &'a Row<'_>, i: usize) -> rusqlite::Result<&'a str> {
     r.get_ref(i)?.as_str().map_err(|e| rusqlite::Error::FromSqlConversionFailure(i, Type::Text, e.into()))
 }
 
-/// One raw monitoring sample: (time, resolver, µs if answered, answered).
-fn sample<'a>(r: &'a Row<'_>) -> rusqlite::Result<(i64, &'a str, Option<u32>, bool)> {
-    Ok((r.get(0)?, text(r, 1)?, r.get(2)?, r.get::<_, i32>(3)? != 0))
+/// One raw monitoring sample: (time, resolver, µs if answered, answered, cause of the cycle's failure, interval in force in ms).
+type Sample<'a> = (i64, &'a str, Option<u32>, bool, Option<Cause>, Option<i64>);
+
+fn sample<'a>(r: &'a Row<'_>) -> rusqlite::Result<Sample<'a>> {
+    let cause: Option<String> = r.get(4)?;
+    Ok((r.get(0)?, text(r, 1)?, r.get(2)?, r.get::<_, i32>(3)? != 0, cause.as_deref().and_then(Cause::parse), r.get(5)?))
 }
 
 pub struct Store {
@@ -62,6 +96,14 @@ pub struct MonitorRow {
     pub test: String,
     pub us: Option<u32>,
     pub ok: bool,
+    /// The query's outcome under its serde name, or `noconn` when nothing connected.
+    pub kind: Option<String>,
+    /// The transport: UDP, TCP, DoT or DoH; none when nothing connected.
+    pub via: Option<String>,
+    /// Why the resolver's cycle went unanswered, the same on each of its samples in the cycle.
+    pub cause: Option<Cause>,
+    /// The interval in force, ms.
+    pub every: Option<i64>,
 }
 
 /// The data folder's name. On Windows the per-user installer puts the program in `Recursa`, so the data goes under
@@ -166,7 +208,7 @@ impl Store {
                status TEXT NOT NULL, summary TEXT NOT NULL, body TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS monitor(
                ts INTEGER NOT NULL, resolver_id TEXT NOT NULL, test TEXT NOT NULL,
-               us INTEGER, ok INTEGER NOT NULL);
+               us INTEGER, ok INTEGER NOT NULL, kind TEXT, via TEXT, cause TEXT, every INTEGER);
              CREATE INDEX IF NOT EXISTS monitor_ts ON monitor(ts);
              CREATE INDEX IF NOT EXISTS runs_started ON runs(started_at);
              CREATE TABLE IF NOT EXISTS cache(key TEXT PRIMARY KEY, fetched_at INTEGER NOT NULL, body TEXT NOT NULL);
@@ -176,11 +218,16 @@ impl Store {
                hour INTEGER NOT NULL, resolver_id TEXT NOT NULL,
                n INTEGER NOT NULL, ok INTEGER NOT NULL, cycles INTEGER NOT NULL, up INTEGER NOT NULL,
                first_ts INTEGER NOT NULL, last_ts INTEGER NOT NULL, lat BLOB NOT NULL,
+               shared INTEGER NOT NULL DEFAULT 0, shared_n INTEGER NOT NULL DEFAULT 0, unclear INTEGER NOT NULL DEFAULT 0,
+               covered INTEGER NOT NULL DEFAULT 0,
                PRIMARY KEY(hour, resolver_id)) WITHOUT ROWID;
              CREATE TABLE IF NOT EXISTS monitor_outage(
                resolver_id TEXT NOT NULL, started INTEGER NOT NULL, ended INTEGER NOT NULL,
                cycles INTEGER NOT NULL, recovered INTEGER,
+               shared INTEGER NOT NULL DEFAULT 0, unclear INTEGER NOT NULL DEFAULT 0, cut INTEGER NOT NULL DEFAULT 0,
                PRIMARY KEY(resolver_id, started)) WITHOUT ROWID;
+             CREATE TABLE IF NOT EXISTS monitor_gap(
+               started INTEGER PRIMARY KEY, ended INTEGER NOT NULL, cause TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS ntp_sample(
                ts INTEGER NOT NULL, server TEXT NOT NULL, offset_ms REAL, bound_ms REAL, delay_ms REAL,
                stratum INTEGER, ok INTEGER NOT NULL, kind TEXT, sel TEXT);
@@ -250,14 +297,30 @@ impl Store {
         conn.execute_batch(
             "DROP TABLE IF EXISTS isp_checks;
              DROP INDEX IF EXISTS pfx2as_len_prefix;
-             DROP INDEX IF EXISTS pfx2as6_len_prefix",
+             DROP INDEX IF EXISTS pfx2as6_len_prefix;
+             DELETE FROM settings WHERE key = 'rpki_local'",
         )?;
-        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version < 1
-            && let Err(e) = build_rollups(&mut conn)
-        {
-            // History then fills in from new cycles; the next launch tries again.
-            eprintln!("Couldn't build the monitoring rollups: {e}");
+        let mut version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version < 2 {
+            // Version 2: what each sample records and how each cycle was attributed. Another process may add a column
+            // between the version read and this.
+            for sql in V2_COLUMNS {
+                if let Err(e) = conn.execute_batch(sql)
+                    && !e.to_string().contains("duplicate column")
+                {
+                    return Err(e);
+                }
+            }
+        }
+        if version < 1 {
+            match build_rollups(&mut conn) {
+                Ok(()) => version = 1,
+                // History then fills in from new cycles; the next launch tries again.
+                Err(e) => eprintln!("Couldn't build the monitoring rollups: {e}"),
+            }
+        }
+        if version == 1 {
+            conn.pragma_update(None, "user_version", 2)?;
         }
         let reader = Store::open_reader(&path).ok().map(Mutex::new);
         Ok(Store { conn: Mutex::new(conn), reader, path })
@@ -455,7 +518,8 @@ impl Store {
         let c = self.rd();
         // Primary-key order: no sort.
         let Ok(mut st) = c.prepare(
-            "SELECT hour, resolver_id, n, ok, cycles, up, first_ts, last_ts, lat FROM monitor_hour WHERE hour >= ?1 ORDER BY hour, resolver_id",
+            "SELECT hour, resolver_id, n, ok, cycles, up, first_ts, last_ts, lat, shared, shared_n, unclear, covered
+             FROM monitor_hour WHERE hour >= ?1 ORDER BY hour, resolver_id",
         ) else {
             return;
         };
@@ -472,6 +536,10 @@ impl Store {
                     first: r.get(6)?,
                     last: r.get(7)?,
                     latencies: r.get_ref(8)?.as_blob().map_err(|e| rusqlite::Error::FromSqlConversionFailure(8, Type::Blob, e.into()))?,
+                    shared: r.get(9)?,
+                    shared_n: r.get(10)?,
+                    unclear: r.get(11)?,
+                    covered: r.get(12)?,
                 })
             })();
             if let Ok(row) = row {
@@ -497,15 +565,44 @@ impl Store {
     pub fn monitor_outages(&self, since: i64) -> Vec<(String, Outage)> {
         let c = self.rd();
         let Ok(mut st) = c.prepare(
-            "SELECT resolver_id, started, ended, cycles, recovered FROM monitor_outage WHERE ended >= ?1 ORDER BY resolver_id, started",
+            "SELECT resolver_id, started, ended, cycles, recovered, shared, unclear, cut FROM monitor_outage WHERE ended >= ?1 ORDER BY resolver_id, started",
         ) else {
             return vec![];
         };
         st.query_map(params![since], |r| {
-            Ok((r.get(0)?, Outage { start: r.get(1)?, end: r.get(2)?, cycles: r.get(3)?, recovered: r.get(4)? }))
+            Ok((
+                r.get(0)?,
+                Outage {
+                    start: r.get(1)?,
+                    end: r.get(2)?,
+                    cycles: r.get(3)?,
+                    recovered: r.get(4)?,
+                    shared: r.get(5)?,
+                    unclear: r.get(6)?,
+                    cut: r.get::<_, i32>(7)? != 0,
+                },
+            ))
         })
         .map(|it| it.filter_map(Result::ok).collect())
         .unwrap_or_default()
+    }
+
+    /// Stretches without a counted cycle that ended at or after `since`: (started, ended, cause).
+    pub fn monitor_gaps(&self, since: i64) -> Vec<(i64, i64, String)> {
+        let c = self.rd();
+        let Ok(mut st) = c.prepare("SELECT started, ended, cause FROM monitor_gap WHERE ended >= ?1 ORDER BY started") else {
+            return vec![];
+        };
+        st.query_map(params![since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map(|it| it.filter_map(Result::ok).collect())
+            .unwrap_or_default()
+    }
+
+    /// A stretch (wall-clock ms) in which the monitor wasn't measuring: it ended when the first counted cycle after it ran.
+    pub fn monitor_gap(&self, started: i64, ended: i64, cause: GapCause) {
+        let c = self.conn.lock().unwrap();
+        let _ = c
+            .execute("INSERT OR REPLACE INTO monitor_gap(started, ended, cause) VALUES(?1,?2,?3)", params![started, ended, cause.as_str()]);
     }
 
     #[cfg(test)]
@@ -513,8 +610,8 @@ impl Store {
         let c = self.conn.lock().unwrap();
         for r in rows {
             c.execute(
-                "INSERT INTO monitor(ts, resolver_id, test, us, ok) VALUES(?1,?2,?3,?4,?5)",
-                params![r.ts, r.resolver_id, r.test, r.us, r.ok as i32],
+                "INSERT INTO monitor(ts, resolver_id, test, us, ok, kind, via, cause, every) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                params![r.ts, r.resolver_id, r.test, r.us, r.ok as i32, r.kind, r.via, r.cause.map(Cause::as_str), r.every],
             )
             .unwrap();
         }
@@ -527,11 +624,12 @@ impl Store {
         let _ = c.execute("DELETE FROM monitor WHERE ts < ?1", params![raw_before]);
         let _ = c.execute("DELETE FROM monitor_hour WHERE hour <= ?1", params![before - HOUR_MS]);
         let _ = c.execute("DELETE FROM monitor_outage WHERE ended < ?1", params![before]);
+        let _ = c.execute("DELETE FROM monitor_gap WHERE ended < ?1", params![before]);
     }
 
     pub fn monitor_clear(&self) {
         let c = self.conn.lock().unwrap();
-        let _ = c.execute_batch("DELETE FROM monitor; DELETE FROM monitor_hour; DELETE FROM monitor_outage;");
+        let _ = c.execute_batch("DELETE FROM monitor; DELETE FROM monitor_hour; DELETE FROM monitor_outage; DELETE FROM monitor_gap;");
     }
 }
 
@@ -619,11 +717,12 @@ impl Store {
 pub(crate) const DOWNLOADED: [&str; 11] =
     ["cache", "pfx2as", "pfx2as6", "asrel", "pdb_sync", "pdb_ix", "pdb_ixpfx", "pdb_netixlan", "pdb_fac", "pdb_netfac", "rdap_block"];
 /// The tables Clear All empties as well. Every table but `settings` is in one list or the other.
-pub(crate) const HISTORY: [&str; 10] = [
+pub(crate) const HISTORY: [&str; 11] = [
     "runs",
     "monitor",
     "monitor_hour",
     "monitor_outage",
+    "monitor_gap",
     "ntp_sample",
     "ntp_clock",
     "border_pair",
@@ -977,21 +1076,22 @@ pub struct NtpClockRow {
 
 /// See [`Store::monitor_record`].
 fn record(tx: &Transaction<'_>, rows: &[MonitorRow]) -> rusqlite::Result<()> {
-    let mut insert = tx.prepare_cached("INSERT INTO monitor(ts, resolver_id, test, us, ok) VALUES(?1,?2,?3,?4,?5)")?;
+    let mut insert = tx
+        .prepare_cached("INSERT INTO monitor(ts, resolver_id, test, us, ok, kind, via, cause, every) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)")?;
     for r in rows {
-        insert.execute(params![r.ts, r.resolver_id, r.test, r.us, r.ok as i32])?;
+        insert.execute(params![r.ts, r.resolver_id, r.test, r.us, r.ok as i32, r.kind, r.via, r.cause.map(Cause::as_str), r.every])?;
     }
     // Each hour these samples fall in (normally just the current one), rebuilt whole.
     let hours: BTreeSet<i64> = rows.iter().map(|r| r.ts - r.ts.rem_euclid(HOUR_MS)).collect();
-    let mut read = tx.prepare_cached("SELECT ts, resolver_id, us, ok FROM monitor WHERE ts >= ?1 AND ts < ?2 ORDER BY ts")?;
+    let mut read = tx.prepare_cached("SELECT ts, resolver_id, us, ok, cause, every FROM monitor WHERE ts >= ?1 AND ts < ?2 ORDER BY ts")?;
     let mut put = tx.prepare_cached(PUT_HOUR)?;
     for h in hours {
         let mut done = Vec::new();
-        let mut b = RollupBuilder::new(|r| done.push(r), |_, _, _| {});
+        let mut b = RollupBuilder::new(|r| done.push(r), |_, _| {});
         let mut q = read.query(params![h, h + HOUR_MS])?;
         while let Some(r) = q.next()? {
-            let (ts, id, us, ok) = sample(r)?;
-            b.push(ts, id, us, ok);
+            let (ts, id, us, ok, cause, every) = sample(r)?;
+            b.push(ts, id, us, ok, cause, every);
         }
         b.finish();
         for r in &done {
@@ -999,27 +1099,49 @@ fn record(tx: &Transaction<'_>, rows: &[MonitorRow]) -> rusqlite::Result<()> {
         }
     }
     // Outages: each resolver's cycles in these samples, oldest first, continue its open one.
-    let mut cycles: BTreeMap<(&str, i64), bool> = BTreeMap::new();
+    let mut cycles: BTreeMap<(&str, i64), CycleEnd> = BTreeMap::new();
     for r in rows {
-        *cycles.entry((r.resolver_id.as_str(), r.ts)).or_default() |= r.ok;
+        let c = cycles.entry((r.resolver_id.as_str(), r.ts)).or_insert(CycleEnd { ts: r.ts, answered: false, cause: None, every: None });
+        c.answered |= r.ok;
+        c.cause = c.cause.or(r.cause);
+        c.every = c.every.or(r.every);
     }
+    // A cut outage is closed for good, though it has no recovery.
     let mut open = tx.prepare_cached(
-        "SELECT started, ended, cycles FROM monitor_outage WHERE resolver_id = ?1 AND recovered IS NULL ORDER BY started DESC LIMIT 1",
+        "SELECT started, ended, cycles, shared, unclear FROM monitor_outage
+         WHERE resolver_id = ?1 AND recovered IS NULL AND cut = 0 ORDER BY started DESC LIMIT 1",
     )?;
+    let mut last_every = tx.prepare_cached("SELECT every FROM monitor WHERE ts = ?2 AND resolver_id = ?1 AND every IS NOT NULL LIMIT 1")?;
     let mut put = tx.prepare_cached(PUT_OUTAGE)?;
     let mut current: Option<(&str, OutageTracker)> = None;
-    for ((id, ts), answered) in cycles {
+    for ((id, _), c) in cycles {
         if current.as_ref().is_none_or(|(c, _)| *c != id) {
             if let Some((prev, t)) = current.take()
                 && let Some(o) = t.current()
             {
                 put_outage(&mut put, prev, &o)?;
             }
-            let open = open.query_row(params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
-            current = Some((id, OutageTracker { open }));
+            let open = open
+                .query_row(params![id], |r| {
+                    Ok(Outage {
+                        start: r.get(0)?,
+                        end: r.get(1)?,
+                        cycles: r.get(2)?,
+                        recovered: None,
+                        shared: r.get(3)?,
+                        unclear: r.get(4)?,
+                        cut: false,
+                    })
+                })
+                .optional()?;
+            let every = match &open {
+                Some(o) => last_every.query_row(params![id, o.end], |r| r.get(0)).optional()?,
+                None => None,
+            };
+            current = Some((id, OutageTracker { open, every }));
         }
         let (_, t) = current.as_mut().expect("set above");
-        if let Some(ended) = t.cycle(ts, answered) {
+        if let Some(ended) = t.cycle(c) {
             put_outage(&mut put, id, &ended)?;
         }
     }
@@ -1048,23 +1170,23 @@ fn build_rollups(conn: &mut Connection) -> rusqlite::Result<()> {
                     failed.borrow_mut().get_or_insert(e);
                 }
             },
-            |id, ts, answered| {
+            |id, c| {
                 let i = trackers.iter().position(|(t, _)| t == id).unwrap_or_else(|| {
                     trackers.push((id.to_owned(), OutageTracker::default()));
                     trackers.len() - 1
                 });
-                if let Some(o) = trackers[i].1.cycle(ts, answered)
+                if let Some(o) = trackers[i].1.cycle(c)
                     && let Err(e) = put_outage(&mut outages.borrow_mut(), id, &o)
                 {
                     failed.borrow_mut().get_or_insert(e);
                 }
             },
         );
-        let mut read = tx.prepare("SELECT ts, resolver_id, us, ok FROM monitor ORDER BY ts")?;
+        let mut read = tx.prepare("SELECT ts, resolver_id, us, ok, cause, every FROM monitor ORDER BY ts")?;
         let mut rows = read.query([])?;
         while let Some(r) = rows.next()? {
-            let (ts, id, us, ok) = sample(r)?;
-            b.push(ts, id, us, ok);
+            let (ts, id, us, ok, cause, every) = sample(r)?;
+            b.push(ts, id, us, ok, cause, every);
         }
         b.finish();
         for (id, t) in &trackers {
@@ -1115,13 +1237,13 @@ pub(crate) mod tests {
         for (name, body) in [("recursa.db", "db"), ("recursa.db-wal", "wal"), ("recursa.db-shm", ""), ("measure.lock", "")] {
             std::fs::write(old.join(name), body).unwrap();
         }
-        std::fs::write(old.join("rpki").join("cache"), "roas").unwrap();
+        std::fs::write(old.join("rpki").join("feed-console.bin"), "roas").unwrap();
         std::fs::write(old.join("recursa.exe"), "program").unwrap();
 
         move_data(&old, &new);
         assert_eq!(std::fs::read_to_string(new.join("recursa.db")).unwrap(), "db");
         assert_eq!(std::fs::read_to_string(new.join("recursa.db-wal")).unwrap(), "wal");
-        assert_eq!(std::fs::read_to_string(new.join("rpki").join("cache")).unwrap(), "roas");
+        assert_eq!(std::fs::read_to_string(new.join("rpki").join("feed-console.bin")).unwrap(), "roas");
         let left: Vec<_> = std::fs::read_dir(&old).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(left, ["recursa.exe"], "only the program stays");
 
@@ -1156,6 +1278,19 @@ pub(crate) mod tests {
         let n: i64 =
             store.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = 'isp_checks'", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0);
+        drop(store);
+        remove(&path);
+    }
+
+    #[test]
+    fn opening_drops_the_old_route_origin_setting() {
+        let path = temp_path();
+        let store = Store::open(path.clone()).unwrap();
+        store.put("rpki_local", &true);
+        store.put("rpki_check", &false);
+        drop(store);
+        let store = Store::open(path.clone()).unwrap();
+        assert_eq!((store.get::<bool>("rpki_local"), store.get::<bool>("rpki_check")), (None, Some(false)));
         drop(store);
         remove(&path);
     }
@@ -1280,6 +1415,56 @@ pub(crate) mod tests {
         // Opening again leaves the column and the mark alone.
         let store = Store::open(path.clone()).unwrap();
         assert!(store.list_runs(10)[0].saved);
+        remove(&path);
+    }
+
+    #[test]
+    fn a_version_1_monitoring_database_only_gains_columns() {
+        let path = temp_path();
+        let hour = 1_700_000_000_000 / 3_600_000;
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE monitor(ts INTEGER NOT NULL, resolver_id TEXT NOT NULL, test TEXT NOT NULL, us INTEGER, ok INTEGER NOT NULL);
+                 CREATE TABLE monitor_hour(hour INTEGER NOT NULL, resolver_id TEXT NOT NULL, n INTEGER NOT NULL, ok INTEGER NOT NULL,
+                   cycles INTEGER NOT NULL, up INTEGER NOT NULL, first_ts INTEGER NOT NULL, last_ts INTEGER NOT NULL, lat BLOB NOT NULL,
+                   PRIMARY KEY(hour, resolver_id)) WITHOUT ROWID;
+                 CREATE TABLE monitor_outage(resolver_id TEXT NOT NULL, started INTEGER NOT NULL, ended INTEGER NOT NULL,
+                   cycles INTEGER NOT NULL, recovered INTEGER, PRIMARY KEY(resolver_id, started)) WITHOUT ROWID;
+                 INSERT INTO monitor_hour VALUES(1, 'alpha', 6, 3, 2, 1, 10, 20, x'');
+                 INSERT INTO monitor_outage VALUES('alpha', 10, 20, 2, NULL);
+                 PRAGMA user_version = 1;",
+            )
+            .unwrap();
+        }
+        let store = Store::open(path.clone()).unwrap();
+        let version: i64 = store.conn.lock().unwrap().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, 2);
+        let mut hours = Vec::new();
+        store.monitor_rollups(0, |r| hours.push((r.hour, r.n, r.ok, r.cycles, r.shared, r.shared_n, r.unclear, r.covered)));
+        assert_eq!(hours, [(1, 6, 3, 2, 0, 0, 0, 0)]);
+        let outages = store.monitor_outages(0);
+        assert_eq!(outages.len(), 1);
+        assert_eq!((outages[0].1.cycles, outages[0].1.shared, outages[0].1.unclear, outages[0].1.cut), (2, 0, 0, false));
+        let row = |ts: i64, ok: bool| MonitorRow {
+            ts,
+            resolver_id: "alpha".into(),
+            test: "cached".into(),
+            us: ok.then_some(900),
+            ok,
+            kind: None,
+            via: None,
+            cause: None,
+            every: Some(60_000),
+        };
+        store.monitor_record(&[row(hour * 3_600_000 + 1, true)]);
+        let mut n = 0;
+        store.monitor_rollups(hour, |r| n += r.n);
+        assert_eq!(n, 1);
+        drop(store);
+        // Opening again changes nothing.
+        let store = Store::open(path.clone()).unwrap();
+        assert_eq!(store.monitor_outages(0).len(), 1);
         remove(&path);
     }
 

@@ -1,7 +1,7 @@
 //! Network intelligence from public sources, cached on disk.
 //!
 //! * Team Cymru DNS ([`crate::cymru`]): origin AS, BGP prefix and AS name for an address.
-//! * Route-origin validation on this computer ([`crate::rpki`], opt-in): ROA validity of the Cymru prefix.
+//! * Route-origin validation from two downloaded tables ([`crate::rpki`]): ROA validity of the Cymru prefix.
 //! * Operator status pages: Cloudflare, Quad9, AdGuard and Cisco Umbrella (OpenDNS).
 //! * Threat feeds for filtering probes: URLhaus (through the malware-filter mirror) and ThreatView (malware).
 //!
@@ -33,7 +33,6 @@ pub struct Intel {
     measuring: Arc<AtomicBool>,
     /// The system resolvers, which carry the Team Cymru questions.
     system: Arc<RwLock<Vec<IpAddr>>>,
-    #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
     pub rpki: Arc<crate::rpki::Rpki>,
     /// Bounds concurrent outbound requests so a run's intel phase stays polite.
     permits: Semaphore,
@@ -113,24 +112,13 @@ impl Intel {
     pub fn new(store: Arc<Store>, measuring: Arc<AtomicBool>, system: Arc<RwLock<Vec<IpAddr>>>) -> Self {
         let http = reqwest::Client::builder().user_agent(crate::USER_AGENT).timeout(Duration::from_secs(12)).build().expect("http client");
         let fetches = Arc::new(tokio::sync::RwLock::new(()));
-        #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
         let rpki = crate::rpki::Rpki::new(
             store.path.parent().map(|p| p.to_path_buf()).unwrap_or_default().join("rpki"),
             store.clone(),
             measuring.clone(),
             fetches.clone(),
         );
-        Intel {
-            http,
-            ws: crate::rov::client(),
-            store,
-            measuring,
-            system,
-            #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
-            rpki,
-            permits: Semaphore::new(8),
-            fetches,
-        }
+        Intel { http, ws: crate::rov::client(), store, measuring, system, rpki, permits: Semaphore::new(8), fetches }
     }
 
     async fn get_bytes(&self, url: &str) -> Option<bytes::Bytes> {
@@ -160,14 +148,7 @@ impl Intel {
 
     /// Whether a background download (an RPKI sync) is under way in this process.
     pub fn fetching(&self) -> bool {
-        #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
-        {
-            self.rpki.syncing()
-        }
-        #[cfg(not(all(feature = "rpki-local", not(target_os = "ios"))))]
-        {
-            false
-        }
+        self.rpki.syncing()
     }
 
     /// Fresh cache hit, else fetch (unless measuring), else stale cache.
@@ -222,16 +203,16 @@ impl Intel {
         Some((found.as_ref().map(|o| u64::from(o.asn)), found.map(|o| o.prefix)))
     }
 
-    /// ROA validity of `prefix` announced by AS`asn`, from the local check. Never waits for a sync,
+    /// Gives a first download of the route-origin tables up to 60 seconds, so the lookups after it have them.
+    pub async fn wait_for_rpki(&self) {
+        let rpki = self.rpki.clone();
+        let _ = tokio::task::spawn_blocking(move || rpki.wait_for_tables()).await;
+    }
+
+    /// ROA validity of `prefix` announced by AS`asn`, from the downloaded tables. Never waits for a sync,
     /// and is not cached: it follows the setting and the data as they are now.
     fn rpki(&self, asn: u64, prefix: &str) -> Value {
-        #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
-        return self.rpki.lookup(asn, prefix);
-        #[cfg(not(all(feature = "rpki-local", not(target_os = "ios"))))]
-        {
-            let _ = (asn, prefix);
-            json!({ "status": "not_checked", "state": "off", "reason": "This build doesn’t check route origins.", "roas": [], "validator": null })
-        }
+        self.rpki.lookup(asn, prefix)
     }
 
     /// Origin AS, holder, prefix, ROA validity for one address.

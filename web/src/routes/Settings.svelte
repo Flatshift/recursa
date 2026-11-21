@@ -76,14 +76,18 @@
     }
   }
 
-  // Route-origin (RPKI) check on this computer. Only builds with the feature report `rpki_local`.
+  // Route-origin (RPKI) check: two downloaded tables, on by default.
   let rpki = $state<RpkiStatus | null>(null);
+  // Whether the error shown is this load's own: the poll below must not clear another pane's.
+  let rpkiFailed = false;
   async function loadRpki() {
     try {
       rpki = await api.get<RpkiStatus>('/api/rpki');
-      error = null;
+      if (rpkiFailed) error = null;
+      rpkiFailed = false;
     } catch (e) {
       error = (e as Error).message;
+      rpkiFailed = true;
     }
   }
   async function setRpki(enabled: boolean) {
@@ -103,9 +107,9 @@
     }
   }
   $effect(() => {
-    if (app.env?.rpki_local) loadRpki();
+    loadRpki();
   });
-  // A first sync takes minutes: keep the status line current while one runs.
+  // Keep the status line current while a sync runs.
   const syncing = $derived(rpki?.state === 'syncing');
   $effect(() => {
     if (!syncing) return;
@@ -161,7 +165,7 @@
     { id: 'benchmark', label: 'Benchmark', icon: 'play' },
     { id: 'monitoring', label: 'Monitoring', icon: 'pulse' },
     { id: 'history', label: 'Run history', icon: 'clock' },
-    ...(app.env?.rpki_local ? [{ id: 'routes', label: 'Route origins', icon: 'lock' as const }] : []),
+    { id: 'routes', label: 'Route origins', icon: 'lock' },
     { id: 'data', label: 'Data', icon: 'trash' },
     { id: 'about', label: 'About', icon: 'info' },
   ]);
@@ -360,30 +364,32 @@
         <h2>Route origins</h2>
         <label class="row check">
           <input type="checkbox" checked={!!rpki?.enabled} disabled={!rpki} onchange={(e) => setRpki((e.currentTarget as HTMLInputElement).checked)} />
-          <span>Check route origins (RPKI) on this computer</span>
+          <span>Check route origins (RPKI)</span>
         </label>
         <p class="note">
-          Checks each resolver's network against the routing registries' signed route data (RPKI) here, instead of asking a website.
-          Uses about 2.5 GB of disk. The first download is about 725 MB and takes 5 to 15 minutes, then it refreshes every 12 hours,
-          never during a measurement. Turning it off deletes the data. It uses ARIN's trust anchor, which is covered by ARIN's
-          <a href="https://www.arin.net/resources/manage/rpki/rpa.pdf" target="_blank" rel="noreferrer">Relying Party Agreement</a>.
+          Downloads the validated route-origin table from the rpki-client console and RIPE NCC, about 5 MB each, twice a day, never during
+          a measurement. They see this computer's address, not which resolvers you check. A result is shown only when both agree.
+          Turning it off deletes the tables.
         </p>
         {#if rpki?.enabled}
           <div class="row">
             <span class="note" role="status">
               {#if rpki.state === 'syncing'}
-                {rpki.waiting ? 'Waiting for the measurement to end…' : 'Syncing route-origin data…'}
-                {#if rpki.points}{plural(rpki.points, 'publication point')} read.{/if}
-              {:else if rpki.state === 'ready'}
-                {plural(rpki.vrps, 'route origin')}, synced {ago(rpki.last_sync)}.
+                {rpki.waiting ? 'Waiting for the measurement to end…' : 'Syncing route-origin tables…'}
               {:else}
-                {rpki.error ?? 'Not synced yet.'}
+                {#each rpki.sources as src}
+                  {src.name}:
+                  {#if src.build_time}
+                    {plural(src.vrps, 'route origin')}, built {ago(src.build_time)}.{#if src.error}{' '}The last refresh failed: {src.error}.{/if}
+                  {:else}
+                    {src.error ?? 'not downloaded yet'}.
+                  {/if}{' '}
+                {/each}
               {/if}
               {#if rpki.disk_bytes}{size(rpki.disk_bytes)} on disk.{/if}
             </span>
             <button class="btn sm" disabled={rpki.state === 'syncing'} onclick={syncRpki}>Sync now</button>
           </div>
-          {#if rpki.state === 'ready' && rpki.error}<p class="note">The last refresh failed: {rpki.error}</p>{/if}
         {/if}
       {:else if current === 'data'}
         <h2>Data</h2>
@@ -398,7 +404,7 @@
         <div class="row">
           <p class="note">
             Deletes every run, saved ones too, all monitoring history, peering maps, custom resolvers, downloaded data and settings, so
-            Recursa starts as if just installed.{rpki?.enabled ? ' Route-origin validation is turned off and its data deleted.' : ''}
+            Recursa starts as if just installed.
           </p>
           <button class="btn sm danger" disabled={clearing} onclick={clearAll}>Clear All Data…</button>
         </div>

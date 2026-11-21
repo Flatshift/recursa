@@ -3,8 +3,8 @@
   // hand-off is an edge, not a node, so it carries the label (exchange, direct or via transit), the traces crossing it
   // as width and the round trip it adds as a luminance; under each box is the round trip to its first router, so the
   // steps along a path add up to the traceroute figure. Colour is the kind of network and shape says it again; there is no
-  // red or green. The picture opens at a size its labels can be read at, scrolling sideways once it is wider than the
-  // pane, and zooms from there. Below it, one hairline row per finding says what was found and what it rests on.
+  // red or green. The finished picture is fitted to the pane, and zooms from there. Below it, one hairline row per finding
+  // says what was found and what it rests on.
   import type { MapRun, NetClaim, NetGroup, NetRole } from '../lib/types';
   import { DIAMOND, layout, TREE, type TreeNode } from '../lib/tree';
   import { clouds, destinations, evidenceLabel, evidenceText, linkLabel, linkWay, markOf, siteName, v6Only, type Cloud } from '../lib/netview';
@@ -92,14 +92,19 @@
     );
   };
   const delay = (col: number) => (reduceMotion ? undefined : `${col * 110}ms`);
-  // The map opens at life size so its labels stay readable, growing a little past it on a wide pane and sitting
-  // centred when it cannot; wider than the pane, it scrolls sideways, with a fade at the right edge to say there is
-  // more. Fit shows all of it at whatever size that takes, and the zoom buttons scale it from there.
+  // A finished map, and a stored one reopened, is fitted to the pane so all of it shows, growing a little past life
+  // size on a wide pane. While it builds it stays at life size, so the picture does not shrink under the reader as
+  // columns arrive; wider than the pane, it scrolls sideways, with a fade at the right edge to say there is more. The
+  // zoom buttons scale it from there, and Fit goes back.
   let viewW = $state(0);
   let scrolled = $state(0);
   let zoom = $state<number | null>(null);
   const fit = $derived(viewW > 0 ? Math.min(1.25, (viewW - 24) / tree.width) : 1);
-  const scale = $derived(zoom ?? Math.max(1, fit));
+  const scale = $derived(zoom ?? (running ? Math.max(1, fit) : fit));
+  // A run's end drops any zoom set while it built.
+  $effect(() => {
+    if (!running) zoom = null;
+  });
   const svgW = $derived(Math.round(tree.width * scale));
   const svgH = $derived(Math.round(tree.height * scale));
   const zoomBy = (f: number) => (zoom = Math.min(2, Math.max(0.4, scale * f)));

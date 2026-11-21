@@ -202,7 +202,7 @@ interface IpInfo {
   rpki?: {
     /** valid, invalid_asn, invalid_length, unknown (no ROA covers it), or not_checked (see `state` and `reason`). */
     status: string;
-    state?: 'off' | 'syncing' | 'waiting' | 'error' | 'ready';
+    state?: 'off' | 'syncing' | 'waiting' | 'error' | 'disagree' | 'ready';
     reason?: string;
     roas?: { origin: string; prefix: string; max_length: number; validity: string }[];
     validator?: string | null;
@@ -414,8 +414,6 @@ export interface Env {
   vantage: Vantage | null;
   system: string[];
   db: string;
-  /** Whether this build can check route origins on this computer. */
-  rpki_local?: boolean;
   /** Whether a trace route can run here: as the user on macOS and Windows, with CAP_NET_RAW or root on Linux. */
   trace?: 'ok' | 'needs_admin' | 'unsupported';
 }
@@ -447,7 +445,7 @@ export interface Trace {
   hops: TraceHop[];
 }
 
-/** The local route-origin (RPKI) check, as `GET /api/rpki` reports it. */
+/** The route-origin (RPKI) check, as `GET /api/rpki` reports it. */
 export interface RpkiStatus {
   enabled: boolean;
   state: 'off' | 'syncing' | 'ready' | 'error';
@@ -456,10 +454,21 @@ export interface RpkiStatus {
   last_sync: number | null;
   vrps: number;
   disk_bytes: number;
-  /** Publication points the running sync has read. */
-  points: number;
   error: string | null;
   validator: string;
+  /** The two downloaded tables; `vrps` and `last_sync` above report the first. */
+  sources: RpkiSource[];
+}
+
+export interface RpkiSource {
+  key: 'console' | 'ripe';
+  name: string;
+  engine: string;
+  /** When the source built its table, ms since the epoch. */
+  build_time: number | null;
+  vrps: number;
+  fetched: number | null;
+  error: string | null;
 }
 
 /** How the link to the gateway behaved while a run measured. Times in ms; samples are [ms into the run, µs], 0 µs = lost. */
@@ -559,22 +568,40 @@ export interface MonitorConfig {
   retention_days: number;
 }
 
-/** One history cell: [start, samples, answered, p50 ms, p95 ms, histogram]. The histogram is
- *  `[first bin, counts…]` over eighth-of-a-decade log-ms bins, bin 0 starting at 0.32 ms. */
-export type MonitorCell = [number, number, number, number | null, number | null, number[]];
+/** One history cell: [start, samples, answered, p50 ms, p95 ms, histogram, shared_n, covered]. The histogram is
+ *  `[first bin, counts…]` over eighth-of-a-decade log-ms bins, bin 0 starting at 0.32 ms. `shared_n` counts the
+ *  samples (all unanswered) from cycles where several independent operators failed at once. `covered` is the
+ *  measured ms in the cell, null for data recorded before intervals were stored. Older cells may lack the last two. */
+export type MonitorCell = [number, number, number, number | null, number | null, number[], number?, (number | null)?];
 
-interface MonitorOutage {
+/** `shared` and `unclear` are failed cycles of each cause; the rest were this resolver only. `cut`: checks stopped
+ *  (asleep, quit, paused) before the outage was seen to end, so `recovered` is null and it is not ongoing. */
+export interface MonitorOutage {
   start: number;
   end: number;
   cycles: number;
   recovered: number | null;
+  shared: number;
+  unclear: number;
+  cut: boolean;
 }
+
+/** A stretch with no counted cycle: the machine slept, or Recursa stalled. */
+export type MonitorGap = [number, number, 'sleep' | 'stall'];
 
 export interface MonitorHist {
   resolver_id: string;
   cycles: number;
   uptime: number | null;
   query_success: number | null;
+  /** Cycles with several operators unanswered at once, and cycles of unclear cause. */
+  shared: number;
+  unclear: number;
+  /** 0..1 of the window measured; null when unknown. */
+  coverage: number | null;
+  /** Answered over samples outside shared cycles. */
+  query_success_own: number | null;
+  uptime_range: [number, number] | null;
   p50: number | null;
   p95: number | null;
   first: number | null;
@@ -589,6 +616,9 @@ export interface MonitorHistory {
   since: number;
   cell: number;
   resolvers: MonitorHist[];
+  gaps: MonitorGap[];
+  /** Independent operators monitored now. */
+  independent: number;
 }
 
 export interface MonitorResp {

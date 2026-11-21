@@ -6,6 +6,7 @@
   import type { MonitorCell, MonitorHist, MonitorHistory } from '../lib/types';
   import { logDomain } from '../lib/scale';
   import { ms, pct, plural, timeOfDay, when } from '../lib/format';
+  import { cellClass as classOf, gapCause, ownSuccess } from '../lib/attribution';
 
   export interface Mark {
     t: number;
@@ -77,10 +78,15 @@
   const yOf = (v: number) => Math.min(B, Math.max(0, hiB + 1 - (8 * Math.log10(v) + 4)));
   const gridY = $derived([0.1, 1, 10, 100, 1000, 10000].filter((t) => t >= domain[0] && t <= domain[1]));
 
-  function cellClass(c: MonitorCell | undefined): 'none' | 'up' | 'some' | 'most' | 'down' {
-    if (!c || c[1] === 0) return 'none';
-    const r = c[2] / c[1];
-    return r >= 0.99 ? 'up' : r >= 0.9 ? 'some' : r > 0 ? 'most' : 'down';
+  const cellClass = (c: MonitorCell | undefined, h: MonitorHist) => classOf(c, history.cell, h.first ?? -Infinity, now);
+
+  /** The row's second line: the raw share and how much of the window was measured, only where they say something. */
+  function aside(h: MonitorHist): string[] {
+    const own = ownSuccess(h);
+    const parts: string[] = [];
+    if (h.query_success != null && pct(h.query_success) !== pct(own)) parts.push(`raw ${pct(h.query_success)}`);
+    if (h.coverage != null && h.coverage < 0.995) parts.push(`measured ${Math.round(h.coverage * 100)}% of the time`);
+    return parts;
   }
 
   interface Out {
@@ -90,6 +96,8 @@
     until: number;
     cycles: number;
     recovered: number | null;
+    /** Every cycle fell in a failure several operators shared: not this resolver's outage. */
+    shared: boolean;
   }
   interface Row {
     h: MonitorHist;
@@ -98,7 +106,8 @@
     heat: string[];
     median: string;
     gaps: string;
-    loss: Record<'up' | 'some' | 'most' | 'down', string>;
+    loss: Record<'up' | 'some' | 'most' | 'down' | 'shared', string>;
+    thin: number[];
     outs: Out[];
     marks: (Mark & { x: number })[];
     marginal: string;
@@ -110,7 +119,8 @@
       for (const c of h.buckets) by.set(Math.round(toX(c[0])), c);
       const heat = LEVELS.map(() => '');
       const total = new Map<number, number>();
-      const loss = { up: '', some: '', most: '', down: '' };
+      const loss = { up: '', some: '', most: '', down: '', shared: '' };
+      const thin: number[] = [];
       let median = '';
       let gaps = '';
       let pen = false;
@@ -144,9 +154,13 @@
           median += `${pen ? 'L' : 'M'}${i + 0.5} ${yOf(c[3]).toFixed(3)}`;
           pen = true;
         } else pen = false;
-        const k = cellClass(c);
-        const lost = 1 - c[2] / c[1];
-        const lh = k === 'up' ? 0.14 : Math.min(1, 0.32 + lost * 6);
+        const k = cellClass(c, h);
+        if (k === 'thin') {
+          thin.push(i);
+          continue;
+        }
+        const lost = 1 - c[2] / (c[1] - (c[6] ?? 0) || 1);
+        const lh = k === 'up' ? 0.14 : k === 'shared' ? 0.32 : Math.min(1, 0.32 + lost * 6);
         loss[k as 'up'] += `M${i} ${1 - lh}h1V1h-1z`;
       }
       const tmax = Math.max(1, ...total.values());
@@ -154,7 +168,7 @@
       for (let b = hiB; b >= loB; b--) marginal += `H${((total.get(b) ?? 0) / tmax).toFixed(3)}V${hiB - b + 1}`;
       marginal += 'H0Z';
       const outs = h.outages.map((o) => {
-        const until = o.recovered ?? Math.min(now, o.end + intervalMin * 60_000);
+        const until = o.recovered ?? (o.cut ? o.end + intervalMin * 60_000 : Math.min(now, o.end + intervalMin * 60_000));
         return {
           x0: Math.max(0, toX(o.start)),
           x1: Math.min(nowX, Math.max(toX(o.start), toX(until))),
@@ -162,6 +176,7 @@
           until,
           cycles: o.cycles,
           recovered: o.recovered,
+          shared: o.shared === o.cycles,
         };
       });
       return {
@@ -172,6 +187,7 @@
         median,
         gaps,
         loss,
+        thin,
         outs,
         marks: marks(h.resolver_id)
           .map((m) => ({ ...m, x: toX(m.t) }))
@@ -212,10 +228,16 @@
   }
   function summary(r: Row, i: number): string {
     const c = r.by.get(i);
-    const out = r.outs.find((o) => o.x1 > i && o.x0 < i + 1);
+    const out = r.outs.find((o) => !o.shared && o.x1 > i && o.x0 < i + 1);
     const parts = [span(i)];
-    if (!c || c[1] === 0) parts.push(i < nowX ? 'no checks' : 'not yet');
-    else parts.push(`${c[2]} of ${c[1]} answered`, `median ${ms(c[3])}`, `p95 ${ms(c[4])}`);
+    const gap = gapCause(history.gaps, startOf(i), Math.min(now, startOf(i) + history.cell));
+    const why = gap ? (gap === 'sleep' ? 'no checks: asleep' : 'no checks: Recursa was stalled') : 'no checks';
+    if (!c || c[1] === 0) parts.push(i < nowX ? why : 'not yet');
+    else {
+      if (cellClass(c, r.h) === 'thin' && gap) parts.push(gap === 'sleep' ? 'mostly asleep' : 'Recursa mostly stalled');
+      parts.push(`${c[2]} of ${c[1]} answered`, `median ${ms(c[3])}`, `p95 ${ms(c[4])}`);
+      if (c[6]) parts.push(`${c[6]} not counted: several operators unanswered at once`);
+    }
     if (out) parts.push(`down from ${when(out.start)}, ${plural(out.cycles, 'missed cycle')}`);
     return parts.join(' · ');
   }
@@ -263,8 +285,8 @@
   }
 
   function outLabel(r: Row): string {
-    if (!r.outs.length) return 'No outages';
-    return plural(r.outs.length, 'outage');
+    const own = r.outs.filter((o) => !o.shared).length;
+    return own ? plural(own, 'outage') : 'No outages';
   }
   const pill = $derived(cursor == null ? null : { x: ((cursor + 0.5) / N) * 100, text: span(cursor) });
 </script>
@@ -291,13 +313,14 @@
         class="row"
         role="group"
         tabindex="0"
-        aria-label="{r.name}: {pct(r.h.query_success)} of queries answered, median {ms(r.h.p50)}, p95 {ms(r.h.p95)}, {outLabel(r)}. Left and right arrows read each {cellH === 1 ? 'hour' : `${cellH} hours`}."
+        aria-label="{r.name}: {pct(ownSuccess(r.h))} of queries answered{aside(r.h).length ? ` (${aside(r.h).join(', ')})` : ''}, median {ms(r.h.p50)}, p95 {ms(r.h.p95)}, {outLabel(r)}. Left and right arrows read each {cellH === 1 ? 'hour' : `${cellH} hours`}."
         onkeydown={(e) => key(e, r, idx)}
         onfocus={() => focusRow(r)}
       >
         <div class="name">
           <span class="nm">{r.name}</span>
-          <span class="sub" class:bad={r.outs.length > 0}>{outLabel(r)}</span>
+          <span class="sub" class:bad={r.outs.some((o) => !o.shared)}>{outLabel(r)}</span>
+          {#each aside(r.h) as a}<span class="sub">{a}</span>{/each}
         </div>
         <!-- svelte-ignore a11y_no_static_element_interactions (pointer detail only; the row's label and arrow keys carry it) -->
         <div class="plot" onpointermove={(e) => hover(e, r)} onpointerleave={leave}>
@@ -307,8 +330,8 @@
             {#each ticks as t}<line class="grid day" x1={t.x} x2={t.x} y1="0" y2={B} vector-effect="non-scaling-stroke" />{/each}
             {#each r.heat as d, l}{#if d}<path class="bin" d={d} fill-opacity={LEVELS[l]} />{/if}{/each}
             {#each r.outs as o}
-              <rect class="out" x={o.x0} width={Math.max(0, o.x1 - o.x0)} y="0" height={B} />
-              <line class="out-edge" x1={o.x0} x2={o.x0} y1="0" y2={B} vector-effect="non-scaling-stroke" />
+              <rect class="out" class:shared={o.shared} x={o.x0} width={Math.max(0, o.x1 - o.x0)} y="0" height={B} />
+              <line class="out-edge" class:shared={o.shared} x1={o.x0} x2={o.x0} y1="0" y2={B} vector-effect="non-scaling-stroke" />
             {/each}
             {#if r.median}
               <path class="med-ring" d={r.median} vector-effect="non-scaling-stroke" />
@@ -317,8 +340,9 @@
             {#if nowX < N}<line class="now" x1={nowX} x2={nowX} y1="0" y2={B} vector-effect="non-scaling-stroke" />{/if}
           </svg>
           <svg class="loss" viewBox="0 0 {N} 1" preserveAspectRatio="none" aria-hidden="true">
-            {#each ['up', 'some', 'most', 'down'] as k}{#if r.loss[k as 'up']}<path class={k} d={r.loss[k as 'up']} />{/if}{/each}
+            {#each ['up', 'some', 'most', 'down', 'shared'] as k}{#if r.loss[k as 'up']}<path class={k} d={r.loss[k as 'up']} />{/if}{/each}
           </svg>
+          {#each r.thin as i}<span class="thin" style:left="{(i / N) * 100}%" style:width="{100 / N}%" aria-hidden="true"></span>{/each}
           {#each r.marks as m}<span class="mark" style:left="{(m.x / N) * 100}%" aria-hidden="true"></span>{/each}
           {#if cursor != null}<span class="cur" style:left="{(cursor / N) * 100}%" style:width="max(1px, {100 / N}%)" aria-hidden="true"></span>{/if}
         </div>
@@ -326,7 +350,11 @@
           <svg class="marg" viewBox="0 0 1 {B}" preserveAspectRatio="none"><path d={r.marginal} /></svg>
           {#each gridY as g}<span class="ylab" style:top="{(yOf(g) / B) * 100}%">{g >= 1000 ? `${g / 1000}s` : g}</span>{/each}
         </div>
-        <span class="num" class:bad={(r.h.query_success ?? 1) < 0.99}>{pct(r.h.query_success)}</span>
+        <span
+          class="num"
+          class:bad={(ownSuccess(r.h) ?? 1) < 0.99}
+          title={r.h.uptime_range && r.h.uptime_range[0] !== r.h.uptime_range[1] ? `Up between ${pct(r.h.uptime_range[0])} and ${pct(r.h.uptime_range[1])} of the time` : undefined}
+          >{pct(ownSuccess(r.h))}</span>
         <span class="num">{ms(r.h.p50)}</span>
         <span class="num">{ms(r.h.p95)}</span>
       </div>
@@ -462,6 +490,12 @@
     stroke: var(--critical);
     stroke-width: 1.5;
   }
+  .out.shared {
+    fill: var(--ink-3);
+  }
+  .out-edge.shared {
+    stroke: var(--ink-3);
+  }
   .med-ring,
   .med {
     fill: none;
@@ -495,6 +529,17 @@
   }
   .loss .down {
     fill: var(--critical);
+  }
+  .loss .shared {
+    fill: var(--ink-3);
+  }
+  .thin {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: repeating-linear-gradient(135deg, var(--ink-3) 0 1px, transparent 1px 5px), var(--surface-2);
+    opacity: 0.85;
+    pointer-events: none;
   }
   .mark {
     position: absolute;

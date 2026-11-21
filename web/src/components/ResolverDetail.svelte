@@ -361,7 +361,7 @@
                       <span>No ROA covers {intel.service.prefix} from AS{intel.service.asn ?? '?'}</span>
                     {/each}
                     <span class="muted"
-                      >{intel.service.prefix} as announced by AS{intel.service.asn ?? '?'}, checked on this computer ({intel.service.rpki.validator ?? 'RPKI validator'}), data from {when(
+                      >{intel.service.prefix} as announced by AS{intel.service.asn ?? '?'}, validated by {intel.service.rpki.validator ?? 'rpki-client console and RIPE NCC'}, data from {when(
                         intel.service.rpki.vrp_time,
                       )}</span
                     >

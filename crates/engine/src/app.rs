@@ -39,6 +39,11 @@ pub struct AppState {
     /// What each local system resolver turned out to be: a forwarder (dnsmasq, Pi-hole, the gateway's
     /// DNS proxy) with its description, or none. Filled in by `detect_forwarders`.
     pub forwarders: RwLock<HashMap<IpAddr, Option<String>>>,
+    /// Where each monitored resolver's lookups reach authoritative servers from, by resolver id. Memory only; kept by the
+    /// monitoring loop.
+    pub(crate) monitor_egress: RwLock<HashMap<String, crate::attribution::Egress>>,
+    /// This process's monitoring loop has looked egress up, so the map is what the cycles are judged by.
+    pub(crate) monitor_egress_asked: AtomicBool,
     pub vantage: RwLock<Value>,
     pub interception: RwLock<Value>,
     pub calibration: RwLock<Option<Calibration>>,
@@ -126,7 +131,7 @@ pub struct Export {
 }
 
 /// The built-in catalog, parsed once: [`catalog::builtin`] is pure, so every call would give the same entries.
-fn builtin() -> &'static [Resolver] {
+pub(crate) fn builtin() -> &'static [Resolver] {
     static BUILTIN: OnceLock<Vec<Resolver>> = OnceLock::new();
     BUILTIN.get_or_init(catalog::builtin)
 }
@@ -239,6 +244,8 @@ impl AppState {
             active_run: Mutex::new(None),
             system,
             forwarders: RwLock::new(HashMap::new()),
+            monitor_egress: RwLock::new(HashMap::new()),
+            monitor_egress_asked: AtomicBool::new(false),
             vantage: RwLock::new(Value::Null),
             interception: RwLock::new(Value::Null),
             calibration: RwLock::new(calibrate.then(|| crate::calibrate::run(crate::calibrate::STARTUP_SAMPLES).ok()).flatten()),
@@ -302,6 +309,10 @@ impl AppState {
                 app.cleanup_runs();
             }
             app.detect_network();
+            // The route-origin tables, if missing or too old, start downloading now, so a first run does not wait for
+            // them. Before the monitors, which hold their probes while a download is going.
+            let rpki = app.intel.rpki.clone();
+            let _ = tokio::task::spawn_blocking(move || rpki.prefetch()).await;
             app.track(ntp_monitor::spawn(app.clone()));
             app.track(border::spawn(app.clone()));
             app.track(monitor::spawn(app.clone()));
@@ -375,7 +386,6 @@ impl AppState {
             "system": self.system.read().unwrap().iter().map(|i| i.to_string()).collect::<Vec<_>>(),
             "db": self.store.path.display().to_string(),
             "trace": crate::trace::available(),
-            "rpki_local": cfg!(all(feature = "rpki-local", not(target_os = "ios"))),
         })
     }
 
@@ -742,13 +752,15 @@ impl AppState {
             ("POST", ["resolvers", id, "deep-checks"]) => ok(json!(self.deep_checks(id).await?)),
             ("GET", ["monitor"]) => {
                 let hours = param("hours").and_then(|h| h.parse::<i64>().ok()).unwrap_or(72).clamp(1, 24 * 90);
-                let (since, cell) = monitor::window(hours, bench::now_ms());
+                let until = bench::now_ms();
+                let (since, cell) = monitor::window(hours, until);
                 let config = self.monitor.borrow().clone();
+                let independent = monitor::independent(self, &config);
                 // From the hourly rollups (at most 24 × 2,160 rows).
                 self.monitor_resp(config, Store::monitor_latest, move |store| {
                     let mut b = monitor::HistoryBuilder::new(cell);
                     store.monitor_rollups(since, |r| b.push(&r));
-                    b.finish(hours, since, store.monitor_outages(since))
+                    b.finish(hours, since, until, store.monitor_outages(since), store.monitor_gaps(since), independent)
                 })
                 .await
             }
@@ -846,7 +858,6 @@ impl AppState {
             }
             ("DELETE", ["cache"]) => self.clear_data(false).await,
             ("DELETE", ["data"]) => self.clear_data(true).await,
-            #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
             (_, ["rpki", rest @ ..]) => crate::rpki::call(self, method, rest, body).await,
             _ => Err(ApiError::new(404, "No such endpoint.")),
         }
@@ -877,7 +888,6 @@ impl AppState {
                 // Its setting went with the rows; its files go now, after a clear that could still have failed. Their
                 // bytes aren't counted: nothing shows the answer to Clear All Data, and sizing the folder is a walk of
                 // thousands of files.
-                #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
                 app.intel.rpki.turn_off();
                 // The monitor rows are gone: the loops and the desktop menus hear the defaults, as another process does.
                 app.reload_monitors();
@@ -1626,11 +1636,12 @@ pub(crate) mod tests {
         let c = rusqlite::Connection::open(&a.store.path).unwrap();
         c.execute_batch(
             "INSERT INTO runs(id, started_at, status, summary, body, saved) VALUES('r1', 1, 'done', '{}', '{}', 1);
-             INSERT INTO monitor VALUES(1, 'x', 't', 5, 1);
+             INSERT INTO monitor(ts, resolver_id, test, us, ok) VALUES(1, 'x', 't', 5, 1);
              INSERT INTO cache VALUES('k', 1, '{}');
              INSERT INTO custom VALUES('c', '{}');
-             INSERT INTO monitor_hour VALUES(1, 'x', 1, 1, 1, 1, 1, 1, x'00');
-             INSERT INTO monitor_outage VALUES('x', 1, 2, 1, NULL);
+             INSERT INTO monitor_hour(hour, resolver_id, n, ok, cycles, up, first_ts, last_ts, lat) VALUES(1, 'x', 1, 1, 1, 1, 1, 1, x'00');
+             INSERT INTO monitor_outage(resolver_id, started, ended, cycles, recovered) VALUES('x', 1, 2, 1, NULL);
+             INSERT INTO monitor_gap VALUES(1, 2, 'sleep');
              INSERT INTO ntp_sample(ts, server, ok) VALUES(1, 's', 1);
              INSERT INTO ntp_clock VALUES(1, 0.5, 1.0, 3, 2);
              INSERT INTO border_pair(cdn, target, near, near_ttl, far, far_ttl, kind, found_at) VALUES('c', 't', 'n', 1, 'f', 2, 'k', 1);
@@ -1661,12 +1672,9 @@ pub(crate) mod tests {
         a.store.put("ntp_asked", &json!({ "s": 1 }));
         std::fs::create_dir_all(dir.join("isp")).unwrap();
         std::fs::write(dir.join("isp").join("x.json"), "{}").unwrap();
-        #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
-        {
-            std::fs::create_dir_all(dir.join("rpki")).unwrap();
-            std::fs::write(dir.join("rpki").join("vrps.bin"), "x").unwrap();
-            a.store.put("rpki_local", &true);
-        }
+        std::fs::create_dir_all(dir.join("rpki")).unwrap();
+        std::fs::write(dir.join("rpki").join("feed-console.bin"), "x").unwrap();
+        a.store.put("rpki_check", &true);
         (a, dir)
     }
 
@@ -1703,8 +1711,7 @@ pub(crate) mod tests {
         }
         assert!(a.monitor.borrow().enabled);
         assert!(dir.join("isp").exists());
-        #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
-        assert!(dir.join("rpki").join("vrps.bin").exists() && keys.iter().any(|k| k == "rpki_local"));
+        assert!(dir.join("rpki").join("feed-console.bin").exists() && keys.iter().any(|k| k == "rpki_check"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1728,8 +1735,7 @@ pub(crate) mod tests {
         assert_eq!(*a.border_monitor.borrow(), BorderMonitorConfig::default());
         assert!(a.edges.lock().unwrap().is_none());
         assert!(dir.join("isp").exists());
-        #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
-        assert!(!dir.join("rpki").exists() && !a.intel.rpki.enabled());
+        assert!(!dir.join("rpki").exists() && a.intel.rpki.enabled());
         // Every table is in one of the lists, so a new one can't be missed.
         let c = rusqlite::Connection::open(&a.store.path).unwrap();
         let mut q = c.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").unwrap();

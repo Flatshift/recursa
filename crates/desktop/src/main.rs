@@ -4,7 +4,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    #[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
-    recursa_engine::rpki::child_entry();
     recursa_desktop_lib::run()
 }

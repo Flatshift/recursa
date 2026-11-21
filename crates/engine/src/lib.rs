@@ -10,6 +10,7 @@ pub const BUILD: &str = env!("RECURSA_BUILD");
 pub(crate) const USER_AGENT: &str = concat!("Recursa-DNS-Benchmark/", env!("CARGO_PKG_VERSION"));
 
 pub mod app;
+pub(crate) mod attribution;
 pub mod bench;
 pub mod border;
 pub mod calibrate;
@@ -34,11 +35,11 @@ pub mod netmap;
 pub mod ntp;
 pub(crate) mod ntp_monitor;
 pub mod ntp_report;
+pub mod power;
 pub(crate) mod probes;
 pub(crate) mod regions;
 pub mod resolve;
 pub mod rov;
-#[cfg(all(feature = "rpki-local", not(target_os = "ios")))]
 pub mod rpki;
 pub(crate) mod stats;
 pub(crate) mod store;

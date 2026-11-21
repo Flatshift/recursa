@@ -2,6 +2,13 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.5.8 (2026-11-21)
+
+- Route origins are now checked by default against the tables of two public validators (rpki-client console and RIPE NCC).
+- The built-in route-origin validator is removed and its data deleted.
+- Reliability: a failure seen across several operators at once is no longer counted against any resolver, and time the computer was asleep is marked instead of left blank.
+- Peering: a finished or reopened map is fitted to the window.
+
 ## 0.5.7 (2026-11-12)
 
 - Windows: route traces, the Peering map and the border-link monitor work without Administrator.

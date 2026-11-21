@@ -5,6 +5,7 @@
   import { status, stateLabel, stateGlyph, localNote } from '../lib/status.svelte';
   import { RESOLVER_INTERVAL_MIN, RETENTION_DAYS, resolverMonitor } from '../lib/monitor.svelte';
   import type { MonitorHist } from '../lib/types';
+  import { gapCause, ownSuccess, seenAs } from '../lib/attribution';
   import { ago, day, documented, list, ms, pct, plural, resolverName, when } from '../lib/format';
   import Glyph from '../components/Glyph.svelte';
   import Icon from '../components/Icon.svelte';
@@ -76,27 +77,35 @@
 
   const verdict = $derived.by(() => {
     if (!recorded.length) return null;
-    const down = recorded.filter((h) => h.outages.length);
+    // An outage seen across several operators at once is not the resolver's.
+    const own = (h: MonitorHist) => h.outages.filter((o) => o.shared < o.cycles);
+    const down = recorded.filter((h) => own(h).length);
     const rest = recorded.length - down.length;
     let sentence: string;
-    if (!down.length)
+    if (!down.length && recorded.some((h) => h.outages.length)) sentence = `No resolver you monitor failed on its own in ${rangeText}.`;
+    else if (!down.length)
       sentence = recorded.length === 1 ? `${nameOf(recorded[0].resolver_id)} answered throughout ${rangeText}.` : `Every resolver you monitor answered throughout ${rangeText}.`;
     else if (down.length === 1)
-      sentence = `${nameOf(down[0].resolver_id)} stopped answering ${times(down[0].outages.length)} in ${rangeText}${rest ? `; ${rest === 1 ? 'the other' : 'the others'} never did` : ''}.`;
+      sentence = `${nameOf(down[0].resolver_id)} stopped answering ${times(own(down[0]).length)} in ${rangeText}${rest ? `; ${rest === 1 ? 'the other' : 'the others'} never did` : ''}.`;
     else
       sentence = `${down.length === recorded.length ? 'Every resolver you monitor' : list(down.map((h) => nameOf(h.resolver_id)))} stopped answering at some point in ${rangeText}${rest ? `; ${rest === 1 ? 'the other' : 'the others'} never did` : ''}.`;
 
-    // Cells with no checks before now: Recursa wasn't running (or monitoring was off).
+    // Cells with no checks before now: the computer was asleep, or Recursa wasn't running (or monitoring was off).
     const h = mon.data!.history;
     const elapsed = Math.min(Math.ceil(h.hours / (h.cell / 3_600_000)), Math.ceil((Date.now() - h.since) / h.cell));
-    const seen = new Set(recorded.flatMap((r) => r.buckets.filter((c) => c[1] > 0).map((c) => c[0])));
-    const blankH = Math.round(((elapsed - seen.size) * h.cell) / 3_600_000);
+    const seen = new Set(recorded.flatMap((r) => r.buckets.filter((c) => c[1] > 0).map((c) => Math.round((c[0] - h.since) / h.cell))));
+    const blank = Array.from({ length: elapsed }, (_, i) => i).filter((i) => !seen.has(i)).map((i) => h.since + i * h.cell);
+    const hoursOf = (cells: number) => Math.round((cells * h.cell) / 3_600_000);
+    const blankH = hoursOf(blank.length);
+    const asleepH = hoursOf(blank.filter((t) => gapCause(h.gaps, t, Math.min(Date.now(), t + h.cell)) === 'sleep').length);
+    const blankWhy = !asleepH ? "Recursa wasn't running then" : asleepH === blankH ? 'this computer was asleep' : `this computer was asleep for about ${plural(asleepH, 'hour')}, and Recursa wasn't running for the rest`;
     const cycles = Math.max(...recorded.map((r) => r.cycles));
-    const lossy = recorded.filter((r) => (r.query_success ?? 1) < 0.99 && !r.outages.length);
+    const lossy = recorded.filter((r) => (ownSuccess(r) ?? 1) < 0.99 && !own(r).length);
     const detail = [
       `${plural(recorded.length, 'resolver')} checked from this network in ${plural(cycles, 'cycle')}, now every ${interval} min. A resolver is down for a cycle only when none of its servers answers anything.`,
       lossy.length ? `${list(lossy.map((r) => nameOf(r.resolver_id)))} never went down but dropped more than 1% of queries.` : '',
-      blankH > 0 ? `About ${plural(blankH, 'hour')} ${blankH === 1 ? 'is' : 'are'} blank: Recursa wasn't running then.` : '',
+      recorded.some((r) => own(r).length < r.outages.length) ? 'When several operators stopped answering at once, it is not counted against any of them.' : '',
+      blankH > 0 ? `About ${plural(blankH, 'hour')} ${blankH === 1 ? 'is' : 'are'} blank: ${blankWhy}.` : '',
     ]
       .filter(Boolean)
       .join(' ');
@@ -104,17 +113,17 @@
     const best = <T,>(xs: T[], f: (x: T) => number | null) => xs.filter((x) => f(x) != null).sort((a, b) => f(a)! - f(b)!)[0];
     const picks: { goal: string; name: string; ev: string }[] = [];
     if (recorded.length > 1) {
-      const a = best(recorded, (r) => (r.query_success == null ? null : -r.query_success));
-      if (a) picks.push({ goal: 'Most answered', name: nameOf(a.resolver_id), ev: `${pct(a.query_success)} of queries` });
+      const a = best(recorded, (r) => { const q = ownSuccess(r); return q == null ? null : -q; });
+      if (a) picks.push({ goal: 'Most answered', name: nameOf(a.resolver_id), ev: `${pct(ownSuccess(a))} of queries` });
       const q = best(recorded, (r) => r.p50);
       if (q) picks.push({ goal: 'Quickest typical answer', name: nameOf(q.resolver_id), ev: `median ${ms(q.p50)}` });
       const s = best(recorded, (r) => (r.p50 && r.p95 ? r.p95 / r.p50 : null));
       if (s) picks.push({ goal: 'Steadiest', name: nameOf(s.resolver_id), ev: `95% within ${ms(s.p95)}, median ${ms(s.p50)}` });
-      const longest = outages[0];
+      const longest = outages.find((o) => !o.sharedAll);
       picks.push(
         longest
           ? { goal: 'Longest outage', name: longest.name, ev: `${longest.ongoing ? 'ongoing, ' : ''}up to ${mins(longest.upTo)} from ${when(longest.start)}` }
-          : { goal: 'Outages', name: 'None', ev: `in ${plural(cycles, 'cycle')}` },
+          : { goal: 'Outages', name: outages.length ? 'None of its own' : 'None', ev: `in ${plural(cycles, 'cycle')}` },
       );
     }
     return { sentence, detail, picks };
@@ -132,8 +141,11 @@
           name: nameOf(h.resolver_id),
           start: o.start,
           cycles: o.cycles,
-          ongoing: o.recovered == null,
-          upTo: (o.recovered ?? now) - o.start + interval * 60_000,
+          ongoing: o.recovered == null && !o.cut,
+          cut: o.cut,
+          seen: seenAs(o),
+          sharedAll: o.shared === o.cycles,
+          upTo: (o.recovered ?? (o.cut ? o.end : now)) - o.start + interval * 60_000,
           cell: Math.floor((o.start - mon.data!.history.since) / mon.data!.history.cell),
         })),
       )
@@ -256,8 +268,13 @@
             <span><i class="sw-loss"><b class="w"></b><b class="s"></b><b class="c"></b></i>Unanswered: some, most, all</span>
             <span><i class="sw-out"></i>Down</span>
             <span><i class="sw-gap"></i>No checks</span>
+            <span><i class="sw-shared"></i>Not counted: several operators failed at once</span>
+            <span><i class="sw-thin"></i>Mostly unmeasured</span>
             <span><i class="sw-mark"></i>Operator reported an incident</span>
           </p>
+          {#if mon.data.history.independent < 2}
+            <p class="hint">Monitor resolvers from two or more operators to tell a resolver problem from a network problem.</p>
+          {/if}
         </section>
 
         {#if outages.length}
@@ -265,14 +282,15 @@
             <h2 id="out-h" class="section-title out-h">Outages</h2>
             <table class="outs">
               <thead>
-                <tr><th>Resolver</th><th>Began</th><th class="r">Lasted up to</th><th class="r">Missed cycles</th></tr>
+                <tr><th>Resolver</th><th>Began</th><th>Seen as</th><th class="r">Lasted up to</th><th class="r">Missed cycles</th></tr>
               </thead>
               <tbody>
                 {#each outages as o}
                   <tr onpointerenter={() => (cursor = o.cell)} onpointerleave={() => (cursor = null)}>
-                    <td><Glyph status="fail" size={12} />{o.name}</td>
+                    <td><Glyph status={o.sharedAll ? 'unknown' : 'fail'} size={12} />{o.name}</td>
                     <td>{when(o.start)}</td>
-                    <td class="r">{o.ongoing ? 'ongoing' : mins(o.upTo)}</td>
+                    <td>{o.seen}</td>
+                    <td class="r">{o.ongoing ? 'ongoing' : o.cut ? `at least ${mins(o.upTo)}, checks stopped` : mins(o.upTo)}</td>
                     <td class="r">{o.cycles}</td>
                   </tr>
                 {/each}
@@ -560,6 +578,16 @@
     outline: 1px solid var(--rule);
     outline-offset: -1px;
   }
+  .sw-shared {
+    background: var(--ink-3);
+    height: 4px !important;
+    align-self: end;
+  }
+  .sw-thin {
+    background: repeating-linear-gradient(135deg, var(--ink-3) 0 1px, transparent 1px 4px), var(--surface-2);
+    outline: 1px solid var(--rule);
+    outline-offset: -1px;
+  }
   .sw-mark {
     width: 7px !important;
     height: 7px !important;
@@ -583,9 +611,12 @@
     padding: 0 0 6px;
     border-bottom: 1px solid var(--rule);
   }
+  /* The rule is the row's: the first cell is a flex box, shorter than a row whose other cells wrap. */
+  .outs tbody tr {
+    border-bottom: 1px solid var(--rule);
+  }
   .outs td {
     padding: 7px 0;
-    border-bottom: 1px solid var(--rule);
     font-variant-numeric: tabular-nums;
   }
   .outs td:first-child {
@@ -766,8 +797,8 @@
     font-size: var(--t-xl);
   }
   /* Outages: the missed-cycle count is the same fact as the duration, so the phone drops it. */
-  :global(html.mobile) .outs th:nth-child(4),
-  :global(html.mobile) .outs td:nth-child(4) {
+  :global(html.mobile) .outs th:nth-child(5),
+  :global(html.mobile) .outs td:nth-child(5) {
     display: none;
   }
   :global(html.mobile) .outs td {

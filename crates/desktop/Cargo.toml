@@ -46,5 +46,3 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Wind
 [features]
 # Serve the embedded UI (web/dist) instead of the Vite dev server. `tauri build` turns it on.
 custom-protocol = ["tauri/custom-protocol"]
-default = ["rpki-local"]
-rpki-local = ["recursa-engine/rpki-local"]

@@ -67,10 +67,11 @@ export function roaCell(run: RunState, id: string): Cell {
   const st = s.rpki?.status;
   if (!st) return { status: 'unknown', text: 'No data', prov: 'unknown', evidence: s.error ?? 'No route-origin result for this address' };
   if (st === 'not_checked') {
-    return { status: 'unknown', text: s.rpki?.state === 'syncing' ? 'Syncing…' : 'Not checked', prov: 'unknown', evidence: s.rpki?.reason };
+    const state = s.rpki?.state;
+    return { status: 'unknown', text: state === 'syncing' ? 'Syncing…' : state === 'disagree' ? 'Sources disagree' : 'Not checked', prov: 'unknown', evidence: s.rpki?.reason };
   }
   const roa = s.rpki?.roas?.[0];
-  const ev = `${s.prefix ?? ''} origin AS${s.asn ?? '?'} · ${roa ? `ROA AS${roa.origin} ${roa.prefix} max /${roa.max_length}` : 'no covering ROA'} (checked on this computer, data from ${when(s.rpki?.vrp_time)}; ${s.rpki?.validator ?? 'RPKI validator'})`;
+  const ev = `${s.prefix ?? ''} origin AS${s.asn ?? '?'} · ${roa ? `ROA AS${roa.origin} ${roa.prefix} max /${roa.max_length}` : 'no covering ROA'} (validated by ${s.rpki?.validator ?? 'rpki-client console and RIPE NCC'}, data from ${when(s.rpki?.vrp_time)})`;
   if (st === 'valid') return { status: 'pass', text: 'Valid', prov: 'verified', evidence: ev };
   if (st.startsWith('invalid')) return { status: 'fail', text: 'Invalid', prov: 'verified', evidence: ev };
   return { status: 'partial', text: 'No ROA', prov: 'verified', evidence: ev };
