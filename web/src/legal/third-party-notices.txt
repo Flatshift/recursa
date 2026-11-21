@@ -459,7 +459,7 @@ MIT: 383 packages
       Copyright (c) 2016-2026 Sean McArthur
   rfd 0.17.2
       Copyright (c) 2022 Bartłomiej Maryńczak
-  rusqlite 0.42.0
+  rusqlite 0.43.0
       Copyright (c) 2014 The rusqlite developers
   Rust standard library
       Copyright (c) The Rust Project Contributors
