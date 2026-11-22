@@ -145,7 +145,7 @@
         <li><b>Interleaved rounds.</b> Each round sends one query to each target, in a new random order. Short congestion on your link thus hits resolvers at random, not the one under test at that moment.</li>
         <li><b>Identical work.</b> All resolvers get the same cached names. Uncached and TLD names are new for each query, but come from the same zones, so each one costs the same.</li>
         <li><b>Accurate pacing.</b> One query in flight per resolver, and sends to different resolvers at least 4 ms apart, so queries never wait in a queue on your own link and a slow resolver never holds up the others. Quick mode allows up to eight in flight with 1 ms between sends.</li>
-        <li><b>Network silence.</b> During measured phases, Recursa sends no other network requests, except the gateway ping every 100 ms for the link check. Status pages, Team Cymru lookups, the location database download and threat feeds wait or use their cache.</li>
+        <li><b>Network silence.</b> During measured phases, Recursa sends no other network requests, except the gateway ping every 100 ms for the link check. Status pages, Team Cymru lookups and threat feeds wait or use their cache.</li>
       </ul>
     </section>
 
