@@ -1,7 +1,7 @@
 //! Network intelligence from public sources, cached on disk.
 //!
 //! * Team Cymru DNS ([`crate::cymru`]): origin AS, BGP prefix and AS name for an address.
-//! * Operator status pages: Cloudflare, Quad9, AdGuard and Cisco Umbrella (OpenDNS).
+//! * Operator status pages: Cloudflare, Quad9 and Cisco Umbrella (OpenDNS).
 //! * Threat feeds for filtering probes: URLhaus (through the malware-filter mirror) and ThreatView (malware).
 //!
 //! Nothing here runs while a measured phase is active: callers get the cached copy.
@@ -303,12 +303,10 @@ impl Intel {
     }
 
     async fn fetch_status(&self) -> Option<Value> {
-        let (cf_sum, cf_inc, q9, ag_sum, ag_inc, um_sum, um_inc) = tokio::join!(
+        let (cf_sum, cf_inc, q9, um_sum, um_inc) = tokio::join!(
             self.get_json("https://www.cloudflarestatus.com/api/v2/summary.json"),
             self.get_json("https://www.cloudflarestatus.com/api/v2/incidents.json"),
             self.get_json("https://uptime.quad9.net/index.json"),
-            self.get_json("https://status.adguard.com/api/v2/summary.json"),
-            self.get_json("https://status.adguard.com/api/v2/incidents.json"),
             self.get_json("https://status.umbrella.cisco.com/api/v2/summary.json"),
             self.get_json("https://status.umbrella.cisco.com/api/v2/incidents.json"),
         );
@@ -326,15 +324,6 @@ impl Intel {
                 },
             ),
             better_stack("quad9", "Quad9", "https://uptime.quad9.net", q9),
-            statuspage(
-                "adguard",
-                "AdGuard DNS",
-                "https://status.adguard.com",
-                ag_sum,
-                ag_inc,
-                |c, _| c == "AdGuard DNS",
-                |name| name.contains("DNS"),
-            ),
             statuspage(
                 "umbrella",
                 "Cisco Umbrella / OpenDNS",

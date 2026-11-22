@@ -17,6 +17,7 @@ describe('resolverName', () => {
   it('names a resolver that has left the list, and falls back to the id', () => {
     expect(resolverName([], 'cleanbrowsing-family')).toBe('CleanBrowsing Family');
     expect(resolverName([], 'mullvad')).toBe('Mullvad Unfiltered');
+    expect(resolverName([], 'adguard')).toBe('AdGuard Default');
     expect(resolverName([], 'custom-9')).toBe('custom-9');
   });
 });

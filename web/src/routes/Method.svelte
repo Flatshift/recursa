@@ -379,7 +379,7 @@
           <b>Border links:</b> when the monitor is on, the last router inside your ISP and the first beyond it on the way to each CDN are probed with ICMP every
           few minutes, and the two round trips are kept for weeks, on this computer. The pairs are found again daily by the same trace route.
         </li>
-        <li><b>Status:</b> the Statuspage feeds of Cloudflare, AdGuard and Cisco Umbrella, and the Better Stack feed of Quad9. The page shows which operators have no feed.</li>
+        <li><b>Status:</b> the Statuspage feeds of Cloudflare and Cisco Umbrella, and the Better Stack feed of Quad9. The page shows which operators have no feed.</li>
       </ul>
     </section>
 
@@ -397,7 +397,7 @@
         <b>What operators publish.</b> Google applies rate limits per client address (an IPv4 address or an IPv6 /64). Its
         troubleshooting guide gives 1,000 queries per second as a level that can start throttling. The free service has no SLA.
         Cloudflare gives no number. It says that it can limit security scanning, proxied traffic and a high rate of uncacheable
-        answers (SERVFAIL for one domain, for example). Quad9, OpenDNS, Control D and AdGuard's public servers
+        answers (SERVFAIL for one domain, for example). Quad9, OpenDNS and Control D
         publish nothing that we could find, so Recursa shows no limit for them and does not guess. The free NextDNS plan counts
         queries per profile, and the addresses here have no profile. The Usage limits of each resolver link to the sources.
       </p>

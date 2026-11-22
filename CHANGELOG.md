@@ -2,6 +2,10 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Removed AdGuard DNS from the resolver list and the status feeds to respect its terms of service.
+
 ## 0.5.9 (2026-11-21)
 
 - Removed route-origin (ROA) lookups. They added little to a resolver comparison and depended on tables downloaded from third-party validators. The live route-filtering test is unchanged.

@@ -109,6 +109,9 @@ export function label(provider: string, variant: string): string {
 
 /** Resolvers that have left the list, so a record made with one still reads by name. */
 const RETIRED: Record<string, string> = {
+  adguard: 'AdGuard Default',
+  'adguard-unfiltered': 'AdGuard Unfiltered',
+  'adguard-family': 'AdGuard Family',
   'cleanbrowsing-security': 'CleanBrowsing Security',
   'cleanbrowsing-family': 'CleanBrowsing Family',
   mullvad: 'Mullvad Unfiltered',

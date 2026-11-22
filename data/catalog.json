@@ -84,30 +84,6 @@
     "links": { "home": "https://www.opendns.com/home-internet-security/", "privacy": "https://www.cisco.com/c/en/us/about/legal/privacy-full.html" }
   },
   {
-    "id": "adguard", "provider": "AdGuard", "name": "94.140.14.14", "variant": "Default", "group": "public", "default": true,
-    "ipv4": ["94.140.14.14", "94.140.15.15"], "ipv6": ["2a10:50c0::ad1:ff", "2a10:50c0::ad2:ff"],
-    "dot": "dns.adguard-dns.com", "doh": "https://dns.adguard-dns.com/dns-query", "status_feed": "adguard",
-    "published": { "dnssec": true, "filtering": ["ads", "trackers", "phishing"], "doq": true, "dnscrypt": true,
-      "logging": "Public servers keep no query logs; only anonymised aggregate statistics.", "jurisdiction": "Cyprus" },
-    "links": { "home": "https://adguard-dns.io/en/public-dns.html", "privacy": "https://adguard-dns.io/en/privacy.html" }
-  },
-  {
-    "id": "adguard-unfiltered", "provider": "AdGuard", "name": "94.140.14.140", "variant": "Unfiltered", "group": "public", "default": false,
-    "ipv4": ["94.140.14.140", "94.140.14.141"], "ipv6": ["2a10:50c0::1:ff", "2a10:50c0::2:ff"],
-    "dot": "unfiltered.adguard-dns.com", "doh": "https://unfiltered.adguard-dns.com/dns-query", "status_feed": "adguard",
-    "published": { "dnssec": true, "filtering": [], "doq": true, "dnscrypt": true,
-      "logging": "Public servers keep no query logs.", "jurisdiction": "Cyprus" },
-    "links": { "home": "https://adguard-dns.io/en/public-dns.html", "privacy": "https://adguard-dns.io/en/privacy.html" }
-  },
-  {
-    "id": "adguard-family", "provider": "AdGuard", "name": "94.140.14.15", "variant": "Family", "group": "public", "default": false,
-    "ipv4": ["94.140.14.15", "94.140.15.16"], "ipv6": ["2a10:50c0::bad1:ff", "2a10:50c0::bad2:ff"],
-    "dot": "family.adguard-dns.com", "doh": "https://family.adguard-dns.com/dns-query", "status_feed": "adguard",
-    "published": { "dnssec": true, "filtering": ["ads", "trackers", "phishing", "adult"], "doq": true, "dnscrypt": true,
-      "logging": "Public servers keep no query logs.", "jurisdiction": "Cyprus" },
-    "links": { "home": "https://adguard-dns.io/en/public-dns.html", "privacy": "https://adguard-dns.io/en/privacy.html" }
-  },
-  {
     "id": "controld", "provider": "Control D", "name": "76.76.2.0", "variant": "Unfiltered", "group": "public", "default": true,
     "ipv4": ["76.76.2.0", "76.76.10.0"], "ipv6": ["2606:1a40::", "2606:1a40:1::"],
     "dot": "p0.freedns.controld.com", "doh": "https://freedns.controld.com/p0", "status_feed": null,
