@@ -6,7 +6,7 @@
   import { RESOLVER_INTERVAL_MIN, RETENTION_DAYS, resolverMonitor } from '../lib/monitor.svelte';
   import type { MonitorHist } from '../lib/types';
   import { gapCause, ownSuccess, seenAs } from '../lib/attribution';
-  import { ago, day, documented, list, ms, pct, plural, resolverName, when } from '../lib/format';
+  import { ago, day, documented, list, monitoredCount, ms, pct, plural, resolverName, when } from '../lib/format';
   import Glyph from '../components/Glyph.svelte';
   import Icon from '../components/Icon.svelte';
   import Toolbar from '../components/Toolbar.svelte';
@@ -231,7 +231,7 @@
             </select>
           </label>
           <details class="pickers">
-            <summary><Icon name="chevron-right" size={12} />{plural(mon.cfg.resolvers.length, 'resolver')} {mon.cfg.enabled ? 'monitored' : 'selected'}</summary>
+            <summary><Icon name="chevron-right" size={12} />{plural(monitoredCount(resolvers, mon.cfg.resolvers), 'resolver')} {mon.cfg.enabled ? 'monitored' : 'selected'}</summary>
             <ResolverChips cfg={mon.cfg} {resolvers} disabled={mon.saving} save={mon.save} />
           </details>
           <a class="change" href="/settings#monitoring" onclick={toSettings}><Icon name="gear" size={12} />Change in Settings</a>

@@ -4,9 +4,9 @@
   import { api, confirmAction, mobile, loginItem, shell } from '../lib/api';
   import type { ComponentProps } from 'svelte';
   import { MediaQuery } from 'svelte/reactivity';
-  import type { Housekeeping, MonitorConfig, RpkiStatus } from '../lib/types';
+  import type { Housekeeping, MonitorConfig } from '../lib/types';
   import { RESOLVER_INTERVAL_MIN, RETENTION_DAYS, resolverMonitor } from '../lib/monitor.svelte';
-  import { ago, pct, plural } from '../lib/format';
+  import { monitoredCount, pct, plural } from '../lib/format';
   import { HIT_SHARE, MIX_LABEL, type Mix } from '../lib/verdict';
   import Toolbar from '../components/Toolbar.svelte';
   import Icon from '../components/Icon.svelte';
@@ -76,46 +76,6 @@
     }
   }
 
-  // Route-origin (RPKI) check: two downloaded tables, on by default.
-  let rpki = $state<RpkiStatus | null>(null);
-  // Whether the error shown is this load's own: the poll below must not clear another pane's.
-  let rpkiFailed = false;
-  async function loadRpki() {
-    try {
-      rpki = await api.get<RpkiStatus>('/api/rpki');
-      if (rpkiFailed) error = null;
-      rpkiFailed = false;
-    } catch (e) {
-      error = (e as Error).message;
-      rpkiFailed = true;
-    }
-  }
-  async function setRpki(enabled: boolean) {
-    error = null;
-    try {
-      rpki = await api.put<RpkiStatus>('/api/rpki', { enabled });
-    } catch (e) {
-      error = (e as Error).message;
-    }
-  }
-  async function syncRpki() {
-    error = null;
-    try {
-      rpki = await api.post<RpkiStatus>('/api/rpki/sync');
-    } catch (e) {
-      error = (e as Error).message;
-    }
-  }
-  $effect(() => {
-    loadRpki();
-  });
-  // Keep the status line current while a sync runs.
-  const syncing = $derived(rpki?.state === 'syncing');
-  $effect(() => {
-    if (!syncing) return;
-    const t = setInterval(loadRpki, 3000);
-    return () => clearInterval(t);
-  });
   const size = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`);
 
   // The Data pane: both clears refuse (409) while something is measuring or downloading.
@@ -165,7 +125,6 @@
     { id: 'benchmark', label: 'Benchmark', icon: 'play' },
     { id: 'monitoring', label: 'Monitoring', icon: 'pulse' },
     { id: 'history', label: 'Run history', icon: 'clock' },
-    { id: 'routes', label: 'Route origins', icon: 'lock' },
     { id: 'data', label: 'Data', icon: 'trash' },
     { id: 'about', label: 'About', icon: 'info' },
   ]);
@@ -328,7 +287,7 @@
             <span class="lbl">Resolvers</span>
             <ResolverChips {cfg} resolvers={app.resolvers} disabled={monitor.saving} save={saveMonitor} />
           </div>
-          <p class="note">{plural(cfg.resolvers.length, 'resolver')} {cfg.enabled ? 'monitored' : 'selected'}. Their record is in Reliability.</p>
+          <p class="note">{plural(monitoredCount(app.resolvers, cfg.resolvers), 'resolver')} {cfg.enabled ? 'monitored' : 'selected'}. Their record is in Reliability.</p>
         {:else if !error}
           <p class="note">Loading…</p>
         {/if}
@@ -359,37 +318,6 @@
           </p>
         {:else if !error}
           <p class="note">Loading…</p>
-        {/if}
-      {:else if current === 'routes'}
-        <h2>Route origins</h2>
-        <label class="row check">
-          <input type="checkbox" checked={!!rpki?.enabled} disabled={!rpki} onchange={(e) => setRpki((e.currentTarget as HTMLInputElement).checked)} />
-          <span>Check route origins (RPKI)</span>
-        </label>
-        <p class="note">
-          Downloads the validated route-origin table from the rpki-client console and RIPE NCC, about 5 MB each, twice a day, never during
-          a measurement. They see this computer's address, not which resolvers you check. A result is shown only when both agree.
-          Turning it off deletes the tables.
-        </p>
-        {#if rpki?.enabled}
-          <div class="row">
-            <span class="note" role="status">
-              {#if rpki.state === 'syncing'}
-                {rpki.waiting ? 'Waiting for the measurement to end…' : 'Syncing route-origin tables…'}
-              {:else}
-                {#each rpki.sources as src}
-                  {src.name}:
-                  {#if src.build_time}
-                    {plural(src.vrps, 'route origin')}, built {ago(src.build_time)}.{#if src.error}{' '}The last refresh failed: {src.error}.{/if}
-                  {:else}
-                    {src.error ?? 'not downloaded yet'}.
-                  {/if}{' '}
-                {/each}
-              {/if}
-              {#if rpki.disk_bytes}{size(rpki.disk_bytes)} on disk.{/if}
-            </span>
-            <button class="btn sm" disabled={rpki.state === 'syncing'} onclick={syncRpki}>Sync now</button>
-          </div>
         {/if}
       {:else if current === 'data'}
         <h2>Data</h2>

@@ -1,7 +1,7 @@
 import type { CheckStatus, Resolver, RovCheck, RunState } from './types';
 import { CAP } from './caps';
 import { check } from './verdict';
-import { documented, holder, ms, when } from './format';
+import { documented, holder, ms } from './format';
 
 export interface Cell {
   status: CheckStatus;
@@ -58,23 +58,6 @@ export function liveCell(run: RunState, r: Resolver, category: 'malware' | 'phis
   const pass = c.blocked * 2 >= c.tested;
   const status: CheckStatus = pass ? 'pass' : r.published.filtering.includes(category) ? 'fail' : 'info';
   return { status, text: `${c.blocked}/${c.tested} blocked`, prov: 'verified', evidence: `${c.source}${hit.length ? ` · ${hit.join('; ')}` : ''}` };
-}
-
-export function roaCell(run: RunState, id: string): Cell {
-  const s = run.intel[id]?.service;
-  if (!s) return { status: 'unknown', text: '—', prov: 'unknown' };
-  if (s.private) return { status: 'info', text: 'Private address', prov: 'verified' };
-  const st = s.rpki?.status;
-  if (!st) return { status: 'unknown', text: 'No data', prov: 'unknown', evidence: s.error ?? 'No route-origin result for this address' };
-  if (st === 'not_checked') {
-    const state = s.rpki?.state;
-    return { status: 'unknown', text: state === 'syncing' ? 'Syncing…' : state === 'disagree' ? 'Sources disagree' : 'Not checked', prov: 'unknown', evidence: s.rpki?.reason };
-  }
-  const roa = s.rpki?.roas?.[0];
-  const ev = `${s.prefix ?? ''} origin AS${s.asn ?? '?'} · ${roa ? `ROA AS${roa.origin} ${roa.prefix} max /${roa.max_length}` : 'no covering ROA'} (validated by ${s.rpki?.validator ?? 'rpki-client console and RIPE NCC'}, data from ${when(s.rpki?.vrp_time)})`;
-  if (st === 'valid') return { status: 'pass', text: 'Valid', prov: 'verified', evidence: ev };
-  if (st.startsWith('invalid')) return { status: 'fail', text: 'Invalid', prov: 'verified', evidence: ev };
-  return { status: 'partial', text: 'No ROA', prov: 'verified', evidence: ev };
 }
 
 export function rovCell(run: RunState, id: string): Cell {

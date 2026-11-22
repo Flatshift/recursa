@@ -1,6 +1,7 @@
 //! The edge roll call: which site each CDN serves this connection from, by the CDN's own answer, with the network the
 //! answering address belongs to. One request per CDN over the system resolver; a CDN that doesn't say shows its address
-//! and no site. Nothing is stored: the last roll call is kept in memory.
+//! and no site. Meta gets no request: a lookup of its name, and the reverse name of the address. Nothing is stored: the
+//! last roll call is kept in memory.
 
 use crate::app::AppState;
 use crate::cdn;
@@ -40,7 +41,7 @@ pub struct EdgeSite {
     /// IATA code, upper case.
     pub site: Option<String>,
     pub site_city: Option<String>,
-    /// The address the request connected to.
+    /// The address the request connected to. For Meta, the address its name resolved to.
     pub ip: Option<IpAddr>,
     pub asn: Option<u32>,
     pub error: Option<String>,
@@ -133,7 +134,7 @@ pub(crate) fn great_circle_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 
 /// Per CDN: id, the property asked. The map traces the address the roll call connected to, with ICMP, so the property
 /// has to be answered where that trace ends. Fastly's debug page is. pypi.org isn't: its connections took 56 to 80 ms,
-/// one hop past the 14 ms ingress the trace stops at, and named McAllen or Vancouver.
+/// one hop past the 14 ms ingress the trace stops at, and named McAllen or Vancouver. Meta's name is only looked up.
 const ASKED: [(&str, &str); 6] = [
     ("cloudflare", "speed.cloudflare.com"),
     ("fastly", "www.fastly-debug.com"),
@@ -198,12 +199,29 @@ pub(crate) fn ptr(res: &Resolve, ip: IpAddr) -> Option<String> {
     m.answers.iter().find_map(|r| if let dns::RData::Name(n) = &r.data { Some(n.trim_end_matches('.').to_string()) } else { None })
 }
 
-/// Find each address's network (Cymru), read Meta's reverse name, and look up each site's city. Blocks.
+/// The first address of `host`: IPv4, or IPv6 when it has no IPv4 one.
+fn first_addr(res: &Resolve, host: &str) -> Option<IpAddr> {
+    [dns::TYPE_A, dns::TYPE_AAAA].into_iter().find_map(|t| {
+        res.query(host, t).ok()?.answers.iter().find_map(|r| match r.data {
+            dns::RData::A(a) => Some(IpAddr::V4(a)),
+            dns::RData::Aaaa(a) => Some(IpAddr::V6(a)),
+            _ => None,
+        })
+    })
+}
+
+/// Find each address's network (Cymru), look up Meta's address and reverse name, and look up each site's city. Blocks.
 fn finish(res: &Resolve, you: &mut You, edges: &mut [EdgeSite]) {
     if let (Some(asn), None) = (you.asn, &you.holder) {
         you.holder = cymru::name_of(res, asn).ok().flatten().map(|n| cymru::holder_name(&n));
     }
     for e in edges.iter_mut() {
+        if e.cdn == "meta" {
+            e.ip = ASKED.iter().find(|(id, _)| *id == "meta").and_then(|(_, host)| first_addr(res, host));
+            if e.ip.is_none() {
+                e.error = Some("no answer".into());
+            }
+        }
         let Some(ip) = e.ip else { continue };
         if let Ok(Some(o)) = cymru::origin_of(res, ip) {
             e.asn = Some(o.asn);
@@ -228,7 +246,10 @@ pub async fn roll_call(app: &AppState) -> RollCall {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("http client");
-    let got = futures_util::future::join_all(ASKED.iter().map(|(id, host)| ask(&client, id, host))).await;
+    let client = &client;
+    // Meta gets no request: `finish` looks its name up.
+    let asked = ASKED.iter().map(|(id, host)| async move { if *id == "meta" { Got::default() } else { ask(client, id, host).await } });
+    let got = futures_util::future::join_all(asked).await;
     let mut you = got.iter().find_map(|g| g.you.clone()).unwrap_or_default();
     if you.asn.is_none() {
         let v = app.vantage.read().unwrap();

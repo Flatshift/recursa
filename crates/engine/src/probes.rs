@@ -105,13 +105,13 @@ pub const MALWARE: &[&str] = &[
 pub const PHISHING: &[&str] = &[
     // Cloudflare's test category name (also blocked by DNS4EU).
     "phishing.testcategory.com",
-    // Cisco OpenDNS's phishing test name (also blocked by CleanBrowsing).
+    // Cisco OpenDNS's phishing test name.
     "internetbadguys.com",
 ];
 pub const ADULT: &[&str] = &[
     // Cloudflare's test category names, blocked by 1.1.1.3.
     "nudity.testcategory.com",
-    // Cisco OpenDNS's adult-content test name (FamilyShield; also CleanBrowsing).
+    // Cisco OpenDNS's adult-content test name (FamilyShield).
     "exampleadultsite.com",
 ];
 

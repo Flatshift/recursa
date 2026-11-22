@@ -1,7 +1,6 @@
 //! Network intelligence from public sources, cached on disk.
 //!
 //! * Team Cymru DNS ([`crate::cymru`]): origin AS, BGP prefix and AS name for an address.
-//! * Route-origin validation from two downloaded tables ([`crate::rpki`]): ROA validity of the Cymru prefix.
 //! * Operator status pages: Cloudflare, Quad9, AdGuard and Cisco Umbrella (OpenDNS).
 //! * Threat feeds for filtering probes: URLhaus (through the malware-filter mirror) and ThreatView (malware).
 //!
@@ -33,7 +32,6 @@ pub struct Intel {
     measuring: Arc<AtomicBool>,
     /// The system resolvers, which carry the Team Cymru questions.
     system: Arc<RwLock<Vec<IpAddr>>>,
-    pub rpki: Arc<crate::rpki::Rpki>,
     /// Bounds concurrent outbound requests so a run's intel phase stays polite.
     permits: Semaphore,
     /// Held for reading by each download while it runs and stores its result, and for writing by Settings › Data's
@@ -112,13 +110,7 @@ impl Intel {
     pub fn new(store: Arc<Store>, measuring: Arc<AtomicBool>, system: Arc<RwLock<Vec<IpAddr>>>) -> Self {
         let http = reqwest::Client::builder().user_agent(crate::USER_AGENT).timeout(Duration::from_secs(12)).build().expect("http client");
         let fetches = Arc::new(tokio::sync::RwLock::new(()));
-        let rpki = crate::rpki::Rpki::new(
-            store.path.parent().map(|p| p.to_path_buf()).unwrap_or_default().join("rpki"),
-            store.clone(),
-            measuring.clone(),
-            fetches.clone(),
-        );
-        Intel { http, ws: crate::rov::client(), store, measuring, system, rpki, permits: Semaphore::new(8), fetches }
+        Intel { http, ws: crate::rov::client(), store, measuring, system, permits: Semaphore::new(8), fetches }
     }
 
     async fn get_bytes(&self, url: &str) -> Option<bytes::Bytes> {
@@ -146,11 +138,6 @@ impl Intel {
         String::from_utf8(self.get_bytes(url).await?.to_vec()).ok()
     }
 
-    /// Whether a background download (an RPKI sync) is under way in this process.
-    pub fn fetching(&self) -> bool {
-        self.rpki.syncing()
-    }
-
     /// Fresh cache hit, else fetch (unless measuring), else stale cache.
     async fn cached<F>(&self, key: &str, max_age: i64, fetch: F) -> Option<(Value, i64)>
     where
@@ -172,7 +159,8 @@ impl Intel {
 
     pub async fn threat_feed(&self) -> Feed {
         let malware = self
-            .cached("feed:malware", HOUR, async {
+            // Kept for a week: the hosts are test names, and the live check drops the ones that are gone.
+            .cached("feed:malware", 7 * 24 * HOUR, async {
                 // URLhaus's online hosts through the malware-filter mirror (its second host if the first is down), plus
                 // ThreatView's high-confidence URLs.
                 let urlhaus = async {
@@ -203,47 +191,15 @@ impl Intel {
         Some((found.as_ref().map(|o| u64::from(o.asn)), found.map(|o| o.prefix)))
     }
 
-    /// Gives a first download of the route-origin tables up to 60 seconds, so the lookups after it have them.
-    pub async fn wait_for_rpki(&self) {
-        let rpki = self.rpki.clone();
-        let _ = tokio::task::spawn_blocking(move || rpki.wait_for_tables()).await;
-    }
-
-    /// ROA validity of `prefix` announced by AS`asn`, from the downloaded tables. Never waits for a sync,
-    /// and is not cached: it follows the setting and the data as they are now.
-    fn rpki(&self, asn: u64, prefix: &str) -> Value {
-        self.rpki.lookup(asn, prefix)
-    }
-
-    /// Origin AS, holder, prefix, ROA validity for one address.
+    /// `asn_of`, or the address alone when the lookup failed.
     async fn ip_info(&self, ip: IpAddr) -> Value {
-        let key = format!("ip:{ip}");
-        let got = self
-            .cached(&key, 24 * HOUR, async {
-                let (asn, prefix) = self.origin(ip).await?;
-                let holder = match asn {
-                    Some(asn) => self.holder(asn).await,
-                    None => Value::Null,
-                };
-                Some(json!({ "ip": ip.to_string(), "asn": asn, "prefix": prefix, "holder": holder }))
-            })
-            .await;
-        match got {
-            Some((mut v, at)) => {
-                v["fetched_at"] = json!(at);
-                // Added after the cache, so it follows the setting and the latest data; it also replaces
-                // what older cache entries held.
-                v["rpki"] = match (v["asn"].as_u64(), v["prefix"].as_str()) {
-                    (Some(asn), Some(p)) => self.rpki(asn, p),
-                    _ => Value::Null,
-                };
-                v
-            }
-            None => json!({ "ip": ip.to_string(), "error": "Team Cymru unreachable" }),
+        match self.asn_of(ip).await {
+            Value::Null => json!({ "ip": ip.to_string() }),
+            v => v,
         }
     }
 
-    /// Origin AS and holder only: CDN edges and resolver egress don't need RPKI data.
+    /// Origin AS, holder and prefix for one address. Null when the lookup failed and nothing is cached.
     pub async fn asn_of(&self, ip: IpAddr) -> Value {
         let key = format!("asn:{ip}");
         self.cached(&key, 24 * HOUR, async {
@@ -278,13 +234,7 @@ impl Intel {
             None => Value::Null,
         };
         let egress = match egress.and_then(|e| e.parse::<IpAddr>().ok()) {
-            Some(ip) => {
-                let mut info = self.asn_of(ip).await;
-                if info.is_null() {
-                    info = json!({ "ip": ip.to_string() });
-                }
-                info
-            }
+            Some(ip) => self.ip_info(ip).await,
             None => Value::Null,
         };
         json!({ "service": service, "egress": egress })

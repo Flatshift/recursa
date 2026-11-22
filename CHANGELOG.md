@@ -2,6 +2,14 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.5.9 (2026-11-21)
+
+- Route-origin (ROA) lookups are removed, with their Settings pane and downloaded tables. The live route-filtering test stays.
+- CleanBrowsing is removed from the resolver list.
+- The Peering map finds Meta's serving site from a lookup and its reverse name, with no request to www.facebook.com. The Method page lists the hosts asked for serving sites.
+- The live threat feeds are downloaded at most once in 7 days, not hourly.
+- The monitored-resolver count no longer includes resolvers that have left the list.
+
 ## 0.5.8 (2026-11-21)
 
 - Route origins are now checked by default against the tables of two public validators (rpki-client console and RIPE NCC).

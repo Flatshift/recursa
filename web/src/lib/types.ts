@@ -199,19 +199,7 @@ interface IpInfo {
   asn?: number | null;
   prefix?: string | null;
   holder?: string | null;
-  rpki?: {
-    /** valid, invalid_asn, invalid_length, unknown (no ROA covers it), or not_checked (see `state` and `reason`). */
-    status: string;
-    state?: 'off' | 'syncing' | 'waiting' | 'error' | 'disagree' | 'ready';
-    reason?: string;
-    roas?: { origin: string; prefix: string; max_length: number; validity: string }[];
-    validator?: string | null;
-    /** When the route-origin data was synced, ms since the epoch. */
-    vrp_time?: number;
-  } | null;
   private?: boolean;
-  error?: string;
-  fetched_at?: number;
 }
 
 /** One Check My DNS test: whether a lookup for a name served only from an RPKI-invalid route reached DNS-OARC's server. */
@@ -443,32 +431,6 @@ export interface Trace {
   reached: boolean;
   /** Dense: one hop per TTL from 1 to the last that answered (or the target). */
   hops: TraceHop[];
-}
-
-/** The route-origin (RPKI) check, as `GET /api/rpki` reports it. */
-export interface RpkiStatus {
-  enabled: boolean;
-  state: 'off' | 'syncing' | 'ready' | 'error';
-  /** On, but nothing has synced yet and nothing is running (a measurement is in progress). */
-  waiting: boolean;
-  last_sync: number | null;
-  vrps: number;
-  disk_bytes: number;
-  error: string | null;
-  validator: string;
-  /** The two downloaded tables; `vrps` and `last_sync` above report the first. */
-  sources: RpkiSource[];
-}
-
-export interface RpkiSource {
-  key: 'console' | 'ripe';
-  name: string;
-  engine: string;
-  /** When the source built its table, ms since the epoch. */
-  build_time: number | null;
-  vrps: number;
-  fetched: number | null;
-  error: string | null;
 }
 
 /** How the link to the gateway behaved while a run measured. Times in ms; samples are [ms into the run, µs], 0 µs = lost. */

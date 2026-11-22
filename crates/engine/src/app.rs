@@ -309,10 +309,6 @@ impl AppState {
                 app.cleanup_runs();
             }
             app.detect_network();
-            // The route-origin tables, if missing or too old, start downloading now, so a first run does not wait for
-            // them. Before the monitors, which hold their probes while a download is going.
-            let rpki = app.intel.rpki.clone();
-            let _ = tokio::task::spawn_blocking(move || rpki.prefetch()).await;
             app.track(ntp_monitor::spawn(app.clone()));
             app.track(border::spawn(app.clone()));
             app.track(monitor::spawn(app.clone()));
@@ -324,10 +320,9 @@ impl AppState {
         }));
     }
 
-    /// A download of ours is going: a route-origin sync or one of the map's tables. The probes wait it out, since it
-    /// would skew them.
+    /// A download of ours is going: one of the map's tables. The probes wait it out, since it would skew them.
     pub fn downloading(&self) -> bool {
-        self.intel.fetching() || self.netmap.fetching.load(Ordering::SeqCst) || self.netmap.fetching_pfx2as.load(Ordering::SeqCst)
+        self.netmap.fetching.load(Ordering::SeqCst) || self.netmap.fetching_pfx2as.load(Ordering::SeqCst)
     }
 
     pub fn resolvers(&self) -> Vec<Resolver> {
@@ -858,7 +853,6 @@ impl AppState {
             }
             ("DELETE", ["cache"]) => self.clear_data(false).await,
             ("DELETE", ["data"]) => self.clear_data(true).await,
-            (_, ["rpki", rest @ ..]) => crate::rpki::call(self, method, rest, body).await,
             _ => Err(ApiError::new(404, "No such endpoint.")),
         }
     }
@@ -885,10 +879,6 @@ impl AppState {
             // rate/deny kiss-of-death are left alone for an hour/a week): a promise to third parties, not user data.
             app.store.clear(all, &forgotten_settings(), "ntp_asked").map_err(|e| format!("Couldn't clear the data: {e}"))?;
             if all {
-                // Its setting went with the rows; its files go now, after a clear that could still have failed. Their
-                // bytes aren't counted: nothing shows the answer to Clear All Data, and sizing the folder is a walk of
-                // thousands of files.
-                app.intel.rpki.turn_off();
                 // The monitor rows are gone: the loops and the desktop menus hear the defaults, as another process does.
                 app.reload_monitors();
                 app.reload_ntp_monitor();
@@ -1628,7 +1618,7 @@ pub(crate) mod tests {
     use crate::store::{DOWNLOADED, HISTORY};
 
     /// An app on a database in its own directory, with one row in every table, the settings the Data pane touches, an
-    /// `isp` folder (not Recursa's, outside the default data folder) and (where built) fake route-origin files.
+    /// `isp` folder (not Recursa's, outside the default data folder).
     fn seeded() -> (Arc<AppState>, PathBuf) {
         crate::install_crypto_provider();
         let dir = std::env::temp_dir().join(format!("recursa-data-test-{:x}", fastrand::u64(..)));
@@ -1672,9 +1662,6 @@ pub(crate) mod tests {
         a.store.put("ntp_asked", &json!({ "s": 1 }));
         std::fs::create_dir_all(dir.join("isp")).unwrap();
         std::fs::write(dir.join("isp").join("x.json"), "{}").unwrap();
-        std::fs::create_dir_all(dir.join("rpki")).unwrap();
-        std::fs::write(dir.join("rpki").join("feed-console.bin"), "x").unwrap();
-        a.store.put("rpki_check", &true);
         (a, dir)
     }
 
@@ -1711,7 +1698,6 @@ pub(crate) mod tests {
         }
         assert!(a.monitor.borrow().enabled);
         assert!(dir.join("isp").exists());
-        assert!(dir.join("rpki").join("feed-console.bin").exists() && keys.iter().any(|k| k == "rpki_check"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1735,7 +1721,6 @@ pub(crate) mod tests {
         assert_eq!(*a.border_monitor.borrow(), BorderMonitorConfig::default());
         assert!(a.edges.lock().unwrap().is_none());
         assert!(dir.join("isp").exists());
-        assert!(!dir.join("rpki").exists() && a.intel.rpki.enabled());
         // Every table is in one of the lists, so a new one can't be missed.
         let c = rusqlite::Connection::open(&a.store.path).unwrap();
         let mut q = c.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").unwrap();
@@ -1768,7 +1753,7 @@ pub(crate) mod tests {
         assert_eq!(a.call("DELETE", "/api/cache", Value::Null).await.unwrap_err().status, 409);
         assert!(!a.netmap.fetching.load(Ordering::SeqCst), "the refused clear let the other flag go");
         a.netmap.fetching_pfx2as.store(false, Ordering::SeqCst);
-        // A feed or status fetch, or a route-origin sync, in flight: the same answer.
+        // A feed or status fetch in flight: the same answer.
         let fetch = a.intel.fetches.clone().try_read_owned().unwrap();
         assert_eq!(a.call("DELETE", "/api/cache", Value::Null).await.unwrap_err().status, 409);
         assert!(!a.netmap.fetching.load(Ordering::SeqCst) && !a.netmap.fetching_pfx2as.load(Ordering::SeqCst));

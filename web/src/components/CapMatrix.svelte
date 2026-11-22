@@ -14,7 +14,7 @@
   import { mobile } from '../lib/api';
   import type { Resolver, RunState } from '../lib/types';
   import type { Row, Verdict } from '../lib/verdict';
-  import { capCell, cdnCell, egressCell, isBlank, liveCell, roaCell, rovCell, type Cell as C } from '../lib/cells';
+  import { capCell, cdnCell, egressCell, isBlank, liveCell, rovCell, type Cell as C } from '../lib/cells';
   import { CAP, CAP_KEYS, LIVE_CAPS } from '../lib/caps';
   import { label } from '../lib/format';
   import Cell from './Cell.svelte';
@@ -69,7 +69,6 @@
       'Routing',
       [
         { key: 'cdn', label: 'CDN edges', title: 'Median extra round trip to CDN edges compared with the best any resolver found.', cell: (r) => cdnCell(run, r.id) },
-        { key: 'roa', label: 'RPKI route origin', title: 'Whether the resolver’s address block is covered by a valid RPKI route origin authorization.', cell: (r) => roaCell(run, r.id) },
         { key: 'rov', label: 'Invalid routes filtered', title: 'Whether a lookup from this resolver can be lured to an RPKI-invalid route, tested live over IPv4 and IPv6 with Check My DNS by DNS-OARC. Filtering anywhere on the resolver’s path counts.', cell: (r) => rovCell(run, r.id) },
         { key: 'egress', label: 'Egress network', title: 'The network the resolver’s queries leave from for the Internet, from its egress address.', cell: (r) => egressCell(run, r.id) },
       ],
@@ -80,7 +79,7 @@
   // While the run works, a cell its check hasn't reached yet is a skeleton: the probes fill a resolver's column, the CDN
   // mapping and the network intel fill the routing rows. Lines stay apart until the end, so nothing collapses mid-run.
   const running = $derived(run.status === 'running');
-  const INTEL = new Set(['roa', 'rov', 'egress']);
+  const INTEL = new Set(['rov', 'egress']);
   const waits = (key: string, r: Resolver) =>
     running &&
     (key === 'cdn'

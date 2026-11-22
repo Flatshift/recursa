@@ -207,7 +207,7 @@ pub fn show_settings(app: &AppHandle, section: Option<&str>) {
         .resizable(true)
         .minimizable(false)
         .maximizable(false)
-        // Its outside links (the GPL, the RPKI agreement) open in the default browser, as the main window's do.
+        // Its outside links (the GPL) open in the default browser, as the main window's do.
         .on_navigation(keep_inside(app))
         .on_new_window(new_window_to_browser)
         .build();

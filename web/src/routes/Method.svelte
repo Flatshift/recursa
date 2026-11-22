@@ -336,14 +336,6 @@
       <h3>Network intel</h3>
       <ul>
         <li>
-          <b>RPKI:</b> on by default, with an off switch in Settings. Recursa downloads the already-validated route-origin table from
-          two public validators, the rpki-client console (<code>console.rpki-client.org</code>) and RIPE NCC (<code>rpki-validator.ripe.net</code>),
-          about 5 MB each, twice a day and never during a measurement. The two hosts see {here}'s address, not which resolvers you check.
-          Recursa applies RFC 6811 to the resolver's prefix and origin AS (from Team Cymru) against both tables. It shows a result only
-          when both agree and both are under 24 hours old; otherwise the cell shows "Not checked" or "Sources disagree". Neither table is signed, so
-          the trust is TLS plus the two publishers.
-        </li>
-        <li>
           <b>Route-origin filtering:</b> a live test with <a href="https://cmdns.dns-oarc.net/" target="_blank" rel="noreferrer">Check My DNS by DNS-OARC</a>.
           Recursa asks each resolver for a one-time name that is served only from an RPKI-invalid route, over IPv4 and over IPv6, and DNS-OARC reports
           whether the query reached its server. DNS-OARC sees this computer's address and the resolver's outbound address. A resolver that never answers
@@ -364,6 +356,14 @@
           has an IPv6 route; a route that crosses the same networks as the IPv4 one is listed but not drawn. Links are named transit, peering or customer from
           <a href="https://www.caida.org/catalog/datasets/as-relationships/" target="_blank" rel="noreferrer">CAIDA's AS relationships</a>, fetched monthly.
           By default no router address is sent to any service. The last map run is kept on this computer; a new run replaces it.
+        </li>
+        <li>
+          <b>Serving sites:</b> before a map run, and when the border links are found, Recursa makes one request each to speed.cloudflare.com,
+          www.fastly-debug.com, d1.awsstatic.com, redirector.googlevideo.com and www.microsoft.com, and reads the site code the CDN gives in its answer:
+          a header from Cloudflare, Fastly and CloudFront, the first line of Google's mapping report. Akamai gives none, so only its address is shown.
+          Meta gets no request: Recursa looks up www.facebook.com and reads the site from the reverse name of the address. These addresses are the ones
+          the map traces to. Cloudflare's answer also gives your network's number and an approximate city and position, used to name your network and to check
+          the routers' city hints; the address in it is never read.
         </li>
         <li>
           <b>Exchanges and facilities:</b> only if you allow it, the map syncs <a href="https://www.peeringdb.com" target="_blank" rel="noreferrer">PeeringDB</a>'s
@@ -397,7 +397,7 @@
         <b>What operators publish.</b> Google applies rate limits per client address (an IPv4 address or an IPv6 /64). Its
         troubleshooting guide gives 1,000 queries per second as a level that can start throttling. The free service has no SLA.
         Cloudflare gives no number. It says that it can limit security scanning, proxied traffic and a high rate of uncacheable
-        answers (SERVFAIL for one domain, for example). Quad9, OpenDNS, CleanBrowsing, Control D and AdGuard's public servers
+        answers (SERVFAIL for one domain, for example). Quad9, OpenDNS, Control D and AdGuard's public servers
         publish nothing that we could find, so Recursa shows no limit for them and does not guess. The free NextDNS plan counts
         queries per profile, and the addresses here have no profile. The Usage limits of each resolver link to the sources.
       </p>
@@ -542,7 +542,7 @@
         CDN edges that they return, the time servers you choose on the Time page (UDP 123, and TCP 4460 for the NTS check), and the
         public sources above. During a run it also pings your default gateway. In a resolver's Inspector, or for
         the resolvers selected in the list, Sample 18 queries sends 18 normal queries to each resolver, one time; Check live feeds, only when you start it,
-        downloads the URLhaus feed (from the malware-filter mirror) and ThreatView's high-confidence URL feed, looks up to 60 of their hosts through Google or Cloudflare to find live ones
+        downloads the URLhaus feed (from the malware-filter mirror) and ThreatView's high-confidence URL feed (at most once in 7 days), looks up to 60 of their hosts through Google or Cloudflare to find live ones
         (once per 30 minutes, since checks in that window share one sample), and asks the resolver for up to 20. The Live threat test in setup does the same once for a run, then asks every selected resolver for the same hosts. Check behaviour,
         also only when you start it, sends about 90 queries for test names (the root zone's key set, localtest.me, akahelp.net,
         extended-dns-errors.com, cloudflare.com) to the resolver over UDP, TCP, DoT and DoH where it offers them, plus three UDP queries to the

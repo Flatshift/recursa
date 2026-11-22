@@ -112,7 +112,7 @@ const DATA_DIR: &str = if cfg!(windows) { "net.morisette.recursa" } else { "Recu
 const DB_FILE: &str = "recursa.db";
 
 pub fn default_path() -> PathBuf {
-    // Local, not roaming, on Windows: the RPKI cache beside the db runs to gigabytes.
+    // Local, not roaming, on Windows.
     // The same directory as data_dir() on macOS and Linux.
     // Never the shared temp directory, where another user could create the folder first. Without a home, the
     // current directory, which the user chose.
@@ -138,7 +138,7 @@ pub(crate) fn leave_install_folder() {
     move_data(&base.join("Recursa"), &base.join(DATA_DIR));
 }
 
-/// Move the database in `old`, its journal and the RPKI cache to `new`, unless `new` has a database already. All or
+/// Move the database in `old` and its journal to `new`, unless `new` has a database already. All or
 /// nothing for the database and its journal: while another process holds them open the move fails, and they stay
 /// for the next start.
 #[cfg(any(windows, test))]
@@ -157,11 +157,27 @@ fn move_data(old: &Path, new: &Path) {
         let _ = std::fs::rename(&to, &from);
         return;
     }
-    let _ = std::fs::rename(old.join("rpki"), new.join("rpki"));
+    remove_route_origin_files(old, true);
     // SQLite rebuilds the journal's index, and the locks are made again beside the database.
     for name in ["recursa.db-shm", "measure.lock", "recursa.monitor.lock", "recursa.ntp.lock", "recursa.border.lock"] {
         let _ = std::fs::remove_file(old.join(name));
     }
+}
+
+/// Delete what older builds kept in `dir`'s `rpki` folder: the route-origin tables and, with `cache`, the
+/// validator's cache from before those. By name, and the folder only once it is empty: with `--db` the folder
+/// beside the database may be someone else's, so the cache, a whole folder, goes only where `dir` is surely ours.
+fn remove_route_origin_files(dir: &Path, cache: bool) {
+    let dir = dir.join("rpki");
+    if cache {
+        let _ = std::fs::remove_dir_all(dir.join("validator"));
+    }
+    for f in
+        ["feed-console.bin", "feed-console.bin.tmp", "feed-ripe.bin", "feed-ripe.bin.tmp", "vrps.bin", "vrps.bin.tmp", "routinator.conf"]
+    {
+        let _ = std::fs::remove_file(dir.join(f));
+    }
+    let _ = std::fs::remove_dir(&dir);
 }
 
 /// Create `dir` and its missing parents, private to this user on Unix: it holds run history and settings. The
@@ -186,6 +202,13 @@ impl Store {
     pub fn open(path: PathBuf) -> rusqlite::Result<Self> {
         if let Some(dir) = path.parent() {
             make_dir(dir);
+            // The validator's cache is large: off this thread, and only from the default folder.
+            if default_path().parent() == Some(dir) && dir.join("rpki").join("validator").exists() {
+                let dir = dir.to_path_buf();
+                std::thread::spawn(move || remove_route_origin_files(&dir, true));
+            } else {
+                remove_route_origin_files(dir, false);
+            }
         }
         let conn = Connection::open(&path)?;
         // Older builds kept the prefix tables unkeyed, with a separate index; drop those so the schema below makes
@@ -298,7 +321,8 @@ impl Store {
             "DROP TABLE IF EXISTS isp_checks;
              DROP INDEX IF EXISTS pfx2as_len_prefix;
              DROP INDEX IF EXISTS pfx2as6_len_prefix;
-             DELETE FROM settings WHERE key = 'rpki_local'",
+             DELETE FROM settings WHERE key IN ('rpki_local', 'rpki_check', 'rpki_feed_state');
+             DELETE FROM cache WHERE key GLOB 'ip:*'",
         )?;
         let mut version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version < 2 {
@@ -1243,7 +1267,7 @@ pub(crate) mod tests {
         move_data(&old, &new);
         assert_eq!(std::fs::read_to_string(new.join("recursa.db")).unwrap(), "db");
         assert_eq!(std::fs::read_to_string(new.join("recursa.db-wal")).unwrap(), "wal");
-        assert_eq!(std::fs::read_to_string(new.join("rpki").join("feed-console.bin")).unwrap(), "roas");
+        assert!(!new.join("rpki").exists());
         let left: Vec<_> = std::fs::read_dir(&old).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(left, ["recursa.exe"], "only the program stays");
 
@@ -1288,11 +1312,41 @@ pub(crate) mod tests {
         let store = Store::open(path.clone()).unwrap();
         store.put("rpki_local", &true);
         store.put("rpki_check", &false);
+        store.put("rpki_feed_state", &"x");
+        store.cache_put("ip:192.0.2.1", &serde_json::json!({}));
+        store.cache_put("asn:192.0.2.1", &serde_json::json!({}));
         drop(store);
         let store = Store::open(path.clone()).unwrap();
-        assert_eq!((store.get::<bool>("rpki_local"), store.get::<bool>("rpki_check")), (None, Some(false)));
+        assert_eq!(
+            (store.get::<bool>("rpki_local"), store.get::<bool>("rpki_check"), store.get::<String>("rpki_feed_state")),
+            (None, None, None)
+        );
+        assert!(store.cache_get_any("ip:192.0.2.1").is_none() && store.cache_get_any("asn:192.0.2.1").is_some());
         drop(store);
         remove(&path);
+    }
+
+    #[test]
+    fn opening_removes_the_route_origin_files_beside_the_database() {
+        let dir = std::env::temp_dir().join(format!("recursa-rpki-{:x}", fastrand::u64(..)));
+        std::fs::create_dir_all(dir.join("rpki")).unwrap();
+        std::fs::write(dir.join("rpki").join("feed-console.bin"), "roas").unwrap();
+        drop(Store::open(dir.join("recursa.db")).unwrap());
+        assert!(!dir.join("rpki").exists());
+        // A file that was never ours keeps the folder, and so does a `validator` folder beside a database that
+        // isn't in the default place.
+        std::fs::create_dir_all(dir.join("rpki").join("validator").join("rrdp")).unwrap();
+        std::fs::write(dir.join("rpki").join("feed-ripe.bin"), "roas").unwrap();
+        std::fs::write(dir.join("rpki").join("notes.txt"), "mine").unwrap();
+        drop(Store::open(dir.join("recursa.db")).unwrap());
+        let mut left: Vec<_> = std::fs::read_dir(dir.join("rpki")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        left.sort();
+        assert_eq!(left, ["notes.txt", "validator"]);
+        // The cache goes where the folder is ours.
+        remove_route_origin_files(&dir, true);
+        assert!(!dir.join("rpki").join("validator").exists());
+        assert!(dir.join("rpki").join("notes.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

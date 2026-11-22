@@ -107,10 +107,28 @@ export function label(provider: string, variant: string): string {
   return variant ? `${provider} ${variant}` : provider;
 }
 
+/** Resolvers that have left the list, so a record made with one still reads by name. */
+const RETIRED: Record<string, string> = {
+  'cleanbrowsing-security': 'CleanBrowsing Security',
+  'cleanbrowsing-family': 'CleanBrowsing Family',
+  mullvad: 'Mullvad Unfiltered',
+  'mullvad-base': 'Mullvad Ads + trackers + malware',
+};
+
 /** A resolver's name from its id, in the given list; the id itself if the list doesn't have it. */
 export function resolverName(resolvers: Resolver[], id: string): string {
   const r = resolvers.find((x) => x.id === id);
-  return r ? label(r.provider, r.variant) : id;
+  return r ? label(r.provider, r.variant) : (RETIRED[id] ?? id);
+}
+
+/** The ids a monitor's list can hold for this resolver: its own and those of the custom entries folded into it. */
+export function monitorIds(r: Resolver): string[] {
+  return [r.id, r.custom_id, ...(r.aliases ?? [])].filter((c): c is string => !!c);
+}
+
+/** How many of these resolvers a monitor's id list covers, a folded custom entry counting as its row. Ids the list no longer has don't count. */
+export function monitoredCount(resolvers: Resolver[], ids: string[]): number {
+  return resolvers.filter((r) => monitorIds(r).some((c) => ids.includes(c))).length;
 }
 
 /** Scores and short latencies: one decimal under 10, whole numbers above. */

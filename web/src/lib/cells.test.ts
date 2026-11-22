@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { answered, roaCell, rovCell } from './cells';
+import { answered, rovCell } from './cells';
 import type { RovCheck, RunState } from './types';
 
 const chk = (status: RovCheck['status'], detail = 'd'): RovCheck => ({ status, detail, beacon: 'cmdns3-sjc.dns-oarc.net' });
@@ -52,21 +52,5 @@ describe('rovCell', () => {
   it('is partial when only one family is filtered', () => {
     expect(rovCell(runWith({ v4: chk('unfiltered'), v6: chk('filtered') }), 'r')).toMatchObject({ status: 'partial', text: 'IPv6 only' });
     expect(rovCell(runWith({ v4: chk('filtered'), v6: chk('unfiltered') }), 'r')).toMatchObject({ status: 'partial', text: 'IPv4 only' });
-  });
-});
-
-describe('roaCell', () => {
-  const run = (rpki: object) => ({ intel: { r: { service: { prefix: '192.0.2.0/24', asn: 64496, rpki } } } }) as unknown as RunState;
-  it('names both validators in the evidence', () => {
-    const c = roaCell(run({ status: 'valid', state: 'ready', roas: [], validator: 'rpki-client console and RIPE NCC', vrp_time: 0 }), 'r');
-    expect(c.text).toBe('Valid');
-    expect(c.evidence).toContain('validated by rpki-client console and RIPE NCC, data from');
-    expect(c.evidence).not.toContain('this computer');
-  });
-  it('shows Sources disagree with the reason', () => {
-    const reason = 'The two sources disagree: rpki-client console says valid, RIPE NCC says unknown.';
-    const c = roaCell(run({ status: 'not_checked', state: 'disagree', reason, roas: [], validator: null }), 'r');
-    expect(c.text).toBe('Sources disagree');
-    expect(c.evidence).toBe(reason);
   });
 });

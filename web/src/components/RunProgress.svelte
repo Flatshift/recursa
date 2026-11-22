@@ -31,10 +31,10 @@
     path: 'Five rounds of TCP handshakes find each resolver’s network distance and catch port 53 interception',
     probes: 'Asking each resolver what it does: DNSSEC, ECS, QNAME minimisation, blocking',
     cdn: 'Looking up CDN hostnames through every resolver, then timing each edge it sent you to',
-    intel: 'Looking up each resolver’s network: RPKI, ROV, where its queries leave, and naming the CDN edges meanwhile',
+    intel: 'Looking up each resolver’s network, route filtering, where its queries leave, and naming the CDN edges meanwhile',
     live: 'Looking up live malware hosts through every resolver',
   };
-  const work = $derived(run.phase === 'intel' && !run.config.cdn ? 'Looking up each resolver’s network: RPKI, ROV and where its queries leave' : (WORK[run.phase] ?? ''));
+  const work = $derived(run.phase === 'intel' && !run.config.cdn ? 'Looking up each resolver’s network, route filtering and where its queries leave' : (WORK[run.phase] ?? ''));
   // Seconds in the phase tick for the check that reports only at the end, so a silent phase still visibly moves.
   let since = $state(Date.now());
   let now = $state(Date.now());

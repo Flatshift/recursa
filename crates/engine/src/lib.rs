@@ -40,7 +40,6 @@ pub(crate) mod probes;
 pub(crate) mod regions;
 pub mod resolve;
 pub mod rov;
-pub mod rpki;
 pub(crate) mod stats;
 pub(crate) mod store;
 pub mod sysdns;

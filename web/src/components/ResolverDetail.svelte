@@ -21,7 +21,7 @@
   import type { Row } from '../lib/verdict';
   import { HIT_SHARE, RELIABLE, TESTS, expectsBlock, verdict } from '../lib/verdict';
   import { CAPS, PUBLISHED_ONLY, type CapGroup } from '../lib/caps';
-  import { capCell, cdnCell, roaCell, rovCell } from '../lib/cells';
+  import { capCell, cdnCell, rovCell } from '../lib/cells';
   import { TRANSPORT_LABEL, day, holder, label, list, ms, pct, timeOfDay, when } from '../lib/format';
   import { TEST_LABEL } from '../lib/phases';
   import { status, stateLabel, stateGlyph, localNote } from '../lib/status.svelte';
@@ -72,9 +72,9 @@
   const intel = $derived(runState?.intel[id] ?? null);
   const path = $derived(runState?.paths?.[id] ?? null);
   const cdn = $derived(runState?.cdn?.resolvers[id] ?? null);
-  // The registry facts (egress, service network, RPKI, CDN mapping) get their own group under the wire facts and path.
+  // The registry facts (egress, service network, CDN mapping) get their own group under the wire facts and path.
   const routing = $derived(
-    !!(intel?.egress || probe?.egress.length || (intel?.service && !intel.service.private) || intel?.service?.rpki || intel?.rov || cdn),
+    !!(intel?.egress || probe?.egress.length || (intel?.service && !intel.service.private) || intel?.rov || cdn),
   );
   const feed = $derived(status.feedFor(resolver.status_feed));
   const incidents = $derived(status.incidentsFor(id));
@@ -140,7 +140,7 @@
     return parts.join(' · ') || (runState ? 'Not probed in this run' : 'Not probed yet');
   });
   const whereBad = $derived(
-    mine.some((r) => r.intercepted) || (!!runState && (roaCell(runState, id).status === 'fail' || rovCell(runState, id).status === 'fail')),
+    mine.some((r) => r.intercepted) || (!!runState && rovCell(runState, id).status === 'fail'),
   );
   const latSum = $derived.by(() => {
     const r = mine[0];
@@ -346,29 +346,6 @@
                 <span class="muted">· AS{intel.service.asn ?? '?'} {holder(intel.service.holder)}</span>
               </dd>
             </div>
-            <div>
-              <dt>RPKI route origin</dt>
-              <dd>
-                <Cell c={roaCell(runState, id)} />
-                {#if intel.service.rpki?.status === 'not_checked'}
-                  <span class="muted">{intel.service.rpki.reason}</span>
-                {:else if intel.service.rpki && intel.service.prefix}
-                  <!-- Show the object itself, so the verdict can be checked rather than trusted. -->
-                  <span class="roa">
-                    {#each intel.service.rpki.roas ?? [] as roa}
-                      <span class="mono">ROA AS{roa.origin} · {roa.prefix} · max /{roa.max_length}</span>
-                    {:else}
-                      <span>No ROA covers {intel.service.prefix} from AS{intel.service.asn ?? '?'}</span>
-                    {/each}
-                    <span class="muted"
-                      >{intel.service.prefix} as announced by AS{intel.service.asn ?? '?'}, validated by {intel.service.rpki.validator ?? 'rpki-client console and RIPE NCC'}, data from {when(
-                        intel.service.rpki.vrp_time,
-                      )}</span
-                    >
-                  </span>
-                {/if}
-              </dd>
-            </div>
             <div><dt>Invalid routes filtered</dt><dd><Cell c={rovCell(runState, id)} /></dd></div>
           {/if}
           {#if cdn}
@@ -381,11 +358,9 @@
             </div>
           {/if}
         </dl>
-        {#if intel?.service?.rpki || intel?.rov}
+        {#if intel?.rov}
           <p class="why">
-            A valid ROA means networks that check RPKI will reject anyone else announcing this resolver's addresses. Route-origin filtering
-            on the resolver's path means its lookups can't be lured to a hijacked authoritative server. Both limit hijacks like
-            the one that cut off 1.1.1.1 for 300 networks in June 2024.
+            Route-origin filtering on the resolver's path means its lookups can't be lured to a hijacked authoritative server.
           </p>
         {/if}
       </div>
@@ -817,12 +792,6 @@
     color: var(--ink-2);
     font-size: var(--t-sm);
     font-weight: 640;
-  }
-  .roa {
-    display: grid;
-    gap: 2px;
-    margin-top: 4px;
-    font-size: var(--t-xs);
   }
   .facts {
     margin: 0;

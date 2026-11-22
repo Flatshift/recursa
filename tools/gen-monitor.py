@@ -14,9 +14,9 @@ CREATE TABLE IF NOT EXISTS cache(key TEXT PRIMARY KEY, fetched_at INTEGER NOT NU
 CREATE TABLE IF NOT EXISTS custom(id TEXT PRIMARY KEY, body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, body TEXT NOT NULL);
 """)
-ids = ["cloudflare","google","quad9","opendns","adguard","controld","nextdns","dns4eu","he","ultradns","level3","mullvad",
+ids = ["cloudflare","google","quad9","opendns","adguard","controld","nextdns","dns4eu","he","ultradns","level3",
        "cloudflare-security","cloudflare-family","quad9-ecs","quad9-unsecured","opendns-family","adguard-unfiltered",
-       "adguard-family","cleanbrowsing-security","cleanbrowsing-family","controld-malware","controld-ads","system-0"][:nres]
+       "adguard-family","controld-malware","controld-ads","system-0"][:nres]
 now = int(time.time() * 1000)
 start = now - days * 86_400_000
 rows = []

@@ -1,8 +1,10 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import type { MonitorConfig, Resolver } from '../lib/types';
+  import { monitorIds } from '../lib/format';
 
-  /** The resolvers the background monitor checks, a chip each; a click saves the config with that one toggled. */
+  /** The resolvers the background monitor checks, a chip each; a click saves the config with that one toggled. A
+   *  legacy resolver gets a chip only while it is monitored, so it can be turned off. */
   let {
     cfg,
     resolvers,
@@ -12,17 +14,20 @@
 </script>
 
 <div class="chips">
-  {#each resolvers.filter((r) => r.group !== 'legacy') as r (r.id)}
-    {@const on = cfg.resolvers.includes(r.id)}
-    <button
-      type="button"
-      class="chip"
-      class:on
-      aria-pressed={on}
-      {disabled}
-      onclick={() => save({ ...cfg, resolvers: on ? cfg.resolvers.filter((x) => x !== r.id) : [...cfg.resolvers, r.id] })}
-      >{#if on}<Icon name="check" size={11} />{/if}{r.provider} {r.variant}</button
-    >
+  {#each resolvers as r (r.id)}
+    {@const mine = monitorIds(r)}
+    {@const on = mine.some((c) => cfg.resolvers.includes(c))}
+    {#if on || r.group !== 'legacy'}
+      <button
+        type="button"
+        class="chip"
+        class:on
+        aria-pressed={on}
+        {disabled}
+        onclick={() => save({ ...cfg, resolvers: on ? cfg.resolvers.filter((x) => !mine.includes(x)) : [...cfg.resolvers, r.id] })}
+        >{#if on}<Icon name="check" size={11} />{/if}{r.provider} {r.variant}</button
+      >
+    {/if}
   {/each}
 </div>
 
