@@ -38,6 +38,7 @@ Or build it yourself (Rust 1.90+, Node 22.12+, Python 3):
 | Area | How |
 |---|---|
 | **Latency** | Cached, uncached (random names under unsigned wildcard zones, so the resolver must recurse) and TLD (random `.com` NXDOMAIN) lookups over UDP, TCP, DoT and DoH. Every resolver gets one query per round in shuffled order. |
+| **Extended test** | A long comparison of two to four resolvers: 5,000 names, one every 300 ms for about 25 minutes, each name sent to every resolver in random order. The names are a bundled list of common names plus less common ones from the Tranco top-1M list, downloaded when the run starts and kept for 30 days (a bundled list built from Wikidata stands in when the download fails). Resolvers are ranked on the median, with the gap to the lowest and a range that holds about 9 times in 10, and the result says lowest median, practical tie or too close to call. A chart shows the run over time; a sleep or a dropped link is shown and left out of the figures. |
 | **Timing precision** | UDP receive stamps come from the kernel (`SO_TIMESTAMP_MONOTONIC` on macOS, `SO_TIMESTAMPNS` on Linux, `SIO_TIMESTAMPING` on Windows 10 2004 and later) on dedicated, prioritized measurement threads (user-interactive QoS on macOS, time-critical priority on Windows). Queries are encoded before the send stamp. A loopback self-calibration publishes the instrument's own floor (≈ 45–50 µs on an M4 Max). |
 | **Interception** | Two independent signals. A TCP handshake to each resolver gives the true path RTT, and no genuine answer can beat it. The IP TTL of every UDP answer gives the router hops it crossed, and a public resolver 0–1 hops away is a device on your LAN (DNAT rules, or AP features such as UniFi DNS Assistance). Flagged targets are measured but not ranked, and their probes switch to encrypted DNS. A standalone check runs at startup with **Re-check**, or run `recursa check`. |
 | **Path** | Each run times a TCP handshake to every resolver and traces the route to it with ICMP probes of rising TTL, naming the network each hop belongs to. The run's Path tab shows both; `recursa trace` traces one resolver from the terminal. |
@@ -62,6 +63,7 @@ recursa --no-open --port 8080             # serve without opening a browser
 recursa run --samples 30                  # benchmark the default set in the terminal
 recursa run --resolvers quad9,cloudflare,google --transports udp,dot,doh
 recursa run --quick                       # up to 8 queries in flight to different resolvers
+recursa run --extended --resolvers quad9,cloudflare,google   # 25-minute comparison of two to four resolvers
 recursa run --latency-only                # skip capability probes and CDN mapping
 recursa run --json > result.json          # full result as JSON
 recursa run --cached-names example.com,wikipedia.org   # your own names for the Cached test
@@ -205,6 +207,13 @@ Some files keep their own licenses: the Recursive font in `web/src/fonts/` is un
 ([OFL.txt](web/src/fonts/OFL.txt)). The licenses of the libraries built into the app and the CLI are collected in
 `web/src/legal/third-party-notices.txt` (regenerate with `python3 -I tools/notices.py`), which ships in both and opens
 from Settings › About.
+
+The Extended test's names come from three sources. `data/names-pool.txt` is built from Wikidata official-website
+values (CC0) with `tools/build-names.py`. The Tranco list (Le Pochat, Van Goethem, Tajalizadehkhoob, Korczyński and
+Joosen, "Tranco: A Research-Oriented Top Sites Ranking Hardened Against Manipulation", NDSS 2019,
+<https://tranco-list.eu>) is downloaded at run time and not redistributed; each result shows the ID of the list it
+used. Names are reduced to registrable domains with the Public Suffix List (MPL-2.0). Names under a few country
+domains that filters and networks often block, such as .ru and .cn, are left out of every list.
 
 The GPL covers the code. It grants no rights to the Recursa name or the Recursa icon: see
 [TRADEMARKS.md](TRADEMARKS.md). Contributions are welcome under the terms in [CONTRIBUTING.md](CONTRIBUTING.md).

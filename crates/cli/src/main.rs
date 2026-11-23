@@ -53,9 +53,15 @@ enum Cmd {
         /// Comma-separated transports: udp,tcp,dot,doh
         #[arg(long, value_delimiter = ',', default_value = "udp")]
         transports: Vec<String>,
-        /// Queries per test per target.
-        #[arg(long, default_value_t = 30)]
-        samples: u32,
+        /// Queries per test per target (30), or lookups per resolver with --extended (5000).
+        #[arg(long)]
+        samples: Option<u32>,
+        /// Compare two to four resolvers on the same names, one lookup every 300 ms, for about 25 minutes.
+        #[arg(long)]
+        extended: bool,
+        /// Ask one resolver twice, as A and B, to see how far two runs of the same resolver differ.
+        #[arg(long, hide = true)]
+        aa: bool,
         /// Up to 8 queries in flight to different resolvers.
         #[arg(long)]
         quick: bool,
@@ -331,7 +337,18 @@ async fn main() {
             }
             app.close();
         }
-        Some(Cmd::Run { ref resolvers, ref transports, samples, quick, latency_only, json, ref cached_names, ref cached_names_file }) => {
+        Some(Cmd::Run {
+            ref resolvers,
+            ref transports,
+            samples,
+            extended,
+            aa,
+            quick,
+            latency_only,
+            json,
+            ref cached_names,
+            ref cached_names_file,
+        }) => {
             // Bad arguments fail before anything touches the database or the network.
             let mut parsed: Vec<net::Transport> = Vec::new();
             for t in transports.iter().map(|t| t.trim().to_ascii_lowercase()).filter(|t| !t.is_empty()) {
@@ -373,8 +390,15 @@ async fn main() {
             if !parsed.is_empty() {
                 cfg.transports = parsed;
             }
-            cfg.samples = samples;
-            cfg.mode = if quick { bench::Mode::Quick } else { bench::Mode::Accurate };
+            cfg.samples = samples.unwrap_or(if extended { 5000 } else { 30 });
+            cfg.mode = if extended {
+                bench::Mode::Extended
+            } else if quick {
+                bench::Mode::Quick
+            } else {
+                bench::Mode::Accurate
+            };
+            cfg.aa = aa;
             cfg.probes = !latency_only;
             cfg.cdn = !latency_only;
             if !names.is_empty() {
@@ -406,6 +430,8 @@ async fn main() {
             let s = h.state().clone();
             if json {
                 println!("{}", serde_json::to_string_pretty(&s).unwrap());
+            } else if let Some(e) = &s.extended {
+                print_extended(&s, e);
             } else {
                 print_table(&s);
             }
@@ -532,6 +558,30 @@ fn print_ntp(results: &[recursa_engine::ntp::ServerResult], consensus: Option<&r
         for a in &c.advice.avoid {
             println!("Leave out {}: {}.", host_of(results, &a.id), a.why);
         }
+    }
+}
+
+fn print_extended(s: &bench::RunState, e: &recursa_engine::extended::ExtendedState) {
+    let name = |t: usize| format!("{} {}", s.targets[t].provider, s.targets[t].variant).trim().to_string();
+    println!("\n{}", e.verdict(&s.targets));
+    println!("\n{:<30} {:>8} {:>8} {:>8} {:>14} {:>7}  {:<22} call", "resolver", "median", "p90", "p95", "lost", "loss", "vs lead");
+    let ms = |v: Option<f64>| v.map_or("—".to_string(), |v| format!("{v:.1}"));
+    for r in &e.result.rows {
+        let vs = r.vs.as_ref().map_or(String::new(), |v| format!("{:+.1} ({:+.1} to {:+.1})", v.diff, v.lo, v.hi));
+        println!(
+            "{:<30} {:>8} {:>8} {:>8} {:>14} {:>6.2}%  {:<22} {}",
+            name(r.t),
+            ms(r.p50),
+            ms(r.p90),
+            ms(r.p95),
+            format!("{} of {}", r.lost, r.sent),
+            r.loss_pct,
+            vs,
+            r.call.unwrap_or("")
+        );
+    }
+    for n in &s.notes {
+        println!("\n{}", n.text);
     }
 }
 

@@ -39,6 +39,7 @@
     ['timing', 'Timing'],
     ['fairness', 'Fairness'],
     ['tests', 'The three tests'],
+    ['extended', 'Extended test'],
     ['forwarders', 'Your router or Pi-hole'],
     ['interception', 'Interception check'],
     ['probes', 'Capability probes'],
@@ -212,6 +213,37 @@
         the speed score. Timeouts add their cost, and so does the CDN edge penalty, 3 round trips on the half of lookups that open a
         new connection; without CDN mapping the number is DNS only. The Best from here pick ranks by it and may name a tie. At the
         Lab mix without the correction and the CDN term it is the speed score.
+      </p>
+    </section>
+
+    <section id="extended">
+      <h3>Extended test</h3>
+      <p>
+        Quick and Accurate rank resolvers for this moment. Extended settles a close call between two to four of them. It sends every
+        resolver the same 5,000 lookups, one name every 300 ms, in a random order each time, over plain UDP on IPv4. A run takes about 25
+        minutes, and Recursa keeps the computer awake while it runs. A lookup with no answer after 2 s counts as lost, and ranks as slower
+        than any answer.
+      </p>
+      <p>
+        The names are 500 common ones that ship with Recursa, each asked three times, so the resolver holds them after the first ask,
+        and 3,500 less common sites sampled from the Tranco list. Recursa downloads that list when the run starts, or uses the copy it
+        kept from an earlier run. Without either, it uses its own list, and the run says so. The list ID and date, and the random
+        seed that fixes the names and their order, are in the result. The less common names are not screened for content. Names under a
+        few country domains that filters and networks often block, such as .ru and .cn, are left out of every list, so a blocked name
+        is not read as a lost one.
+      </p>
+      <p>
+        The run is cut into bins of 15 s, 50 queries to each resolver in every bin, so you can see whether a gap held the whole time.
+        A bin in which every resolver lost half or more of its queries points at your link and is left out of every figure. When most
+        of a run is left out, it makes no call. Time while the computer sleeps is a hole in the record, and nothing is counted for it.
+      </p>
+      <p>
+        The comparison is the gap between two medians. Its range comes from the gap in ten equal stretches of the run, and holds about 9
+        times in 10 (adjusted when more than two resolvers are compared). A gap counts as real when its whole range is above the margin,
+        the larger of 2 ms and 5% of the lowest median, and as a practical tie when its whole range is inside it. Anything else is too
+        close to call. With fewer than 500 counted lookups, or a run stopped early, the run shows the figures and makes no call. A name
+        that one resolver blocked and the others answered is left out of that resolver’s timing, and a name that no resolver answered is
+        dropped; the result counts both.
       </p>
     </section>
 
@@ -546,7 +578,9 @@
         (once per 30 minutes, since checks in that window share one sample), and asks the resolver for up to 20. The Live threat test in setup does the same once for a run, then asks every selected resolver for the same hosts. Check behaviour,
         also only when you start it, sends about 90 queries for test names (the root zone's key set, localtest.me, akahelp.net,
         extended-dns-errors.com, cloudflare.com) to the resolver over UDP, TCP, DoT and DoH where it offers them, plus three UDP queries to the
-        name servers of localtest.me and akahelp.net, to read the TTLs those zones publish. Results stay in a local database:
+        name servers of localtest.me and akahelp.net, to read the TTLs those zones publish. The Extended test, when a run starts, connects to <code>tranco-list.eu</code> over HTTPS
+        through your computer’s own DNS, reads the ID of the current Tranco list and downloads its top million sites (at most once in 30
+        days; later runs use the copy it kept), then looks the sampled names up through the resolvers you chose. Results stay in a local database:
       </p>
       <p class="mono path">{env?.db ?? '—'}</p>
     </section>

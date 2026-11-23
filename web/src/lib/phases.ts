@@ -25,6 +25,7 @@ interface Phase {
 const PHASES: Phase[] = [
   { id: 'setup', name: 'Setup', lead: true },
   { id: 'warmup', name: 'Warm-up', lead: true },
+  { id: 'extended', name: 'Extended' },
   { id: 'cached', name: TEST_LABEL.cached },
   { id: 'uncached', name: TEST_LABEL.uncached },
   { id: 'tld', name: TEST_LABEL.tld },
@@ -44,7 +45,11 @@ export const isCheck = (id: string): boolean => !!PHASES.find((p) => p.id === id
 export const checksOf = (c: { probes: boolean; cdn: boolean; live: boolean }): string[] => PHASES.filter((p) => p.check && (!p.opt || c[p.opt])).map((p) => p.id);
 
 /** Every phase this run goes through, in order. */
-export const phasesOf = (c: { tests: string[]; probes: boolean; cdn: boolean; live: boolean }): string[] => [...PHASES.filter((p) => p.lead).map((p) => p.id), ...c.tests, ...checksOf(c)];
+export const phasesOf = (c: { tests: string[]; probes: boolean; cdn: boolean; live: boolean; mode?: string }): string[] => {
+  const lead = PHASES.filter((p) => p.lead).map((p) => p.id);
+  // An Extended run is one long round and no checks after it.
+  return c.mode === 'extended' ? [...lead, 'extended'] : [...lead, ...c.tests, ...checksOf(c)];
+};
 
 /** The view a phase fills. */
 export const phaseTab = (id: string): RunView | undefined => PHASES.find((p) => p.id === id)?.tab;

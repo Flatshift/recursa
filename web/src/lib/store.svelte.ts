@@ -105,6 +105,8 @@ class AppState {
   #viewChosen = false;
   #openSeq = 0;
   draft = $state<RunConfig | null>(null);
+  /** The resolvers chosen for the Extended test, from the shortlist; also what Run again repeats. */
+  extPick = $state<string[]>([]);
   toast = $state<{ text: string; tone: 'info' | 'error' } | null>(null);
   /** Bumped when monitoring changes outside the UI (the desktop menu-bar item). */
   monitorRev = $state(0);
@@ -261,6 +263,8 @@ class AppState {
             resolvers: [...new Set(saved.resolvers.map((id) => folded.get(id) ?? id))].filter((id) => ids.has(id)),
           }
         : $state.snapshot(this.boot.defaults);
+      // A draft saved with a mode this version doesn't know opens as Accurate.
+      if (!['accurate', 'quick', 'extended'].includes(this.draft.mode)) this.draft.mode = 'accurate';
       this.#onRoute();
       if (!this.#envSettled(this.boot.env)) this.#pollEnv();
       if (this.boot.active_run && this.route.name === 'bench') this.navigate(`/run/${this.boot.active_run}`);
@@ -362,7 +366,7 @@ class AppState {
   }
 
   async startRun() {
-    if (!this.draft) return;
+    if (!this.draft || (this.draft.mode === 'extended' && this.extPick.length < 2)) return;
     if (this.draft.live) {
       const n = this.draft.resolvers.length;
       const through = n === 1 ? 'the selected resolver' : `each of the ${n} selected resolvers`;
@@ -371,7 +375,9 @@ class AppState {
     }
     this.saveDraft();
     try {
-      const { id } = await api.post<{ id: string }>('/api/runs', this.draft);
+      // Extended asks two to four finalists, over UDP on IPv4, and none of the other checks.
+      const body: RunConfig = this.draft.mode === 'extended' ? { ...this.draft, resolvers: this.extPick, samples: 5000, transports: ['udp'], family: 'v4', tests: [], probes: false, cdn: false, live: false } : this.draft;
+      const { id } = await api.post<{ id: string }>('/api/runs', body);
       this.run = null;
       this.navigate(`/run/${id}`);
     } catch (e) {
@@ -524,8 +530,16 @@ class AppState {
       case 'targets':
         next.targets = ev.targets;
         break;
+      case 'extended_start':
+        next.extended = ev.extended;
+        break;
+      case 'extended':
+        // The new bins are appended; the gaps and the running figures are replaced whole.
+        next.extended = cur.extended ? { ...cur.extended, bins: cur.extended.bins.concat(ev.bins), gaps: ev.gaps, result: ev.result } : cur.extended;
+        break;
       case 'samples':
-        next.samples = cur.samples.concat(ev.samples);
+        // An Extended run's 20,000 samples are not read while it runs; the finished run carries them all.
+        if (cur.config.mode !== 'extended') next.samples = cur.samples.concat(ev.samples);
         next.done = ev.done;
         next.total = ev.total;
         break;

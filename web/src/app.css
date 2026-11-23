@@ -55,6 +55,11 @@
   --s-uncached: #eb6834;
   --s-tld: #1baf7a;
   --s-neutral: oklch(0.62 0.008 285);
+  /* One colour per resolver in the over-time chart; its marker shape (circle, square, triangle, diamond) and name are the second cue. */
+  --r-1: #048ff4;
+  --r-2: #226929;
+  --r-3: #db5392;
+  --r-4: #6a34ab;
 
   /* Status: glyph colors only; meaning always also carried by shape and text. */
   --good: #0ca30c;
@@ -143,6 +148,10 @@
     --s-uncached: #d95926;
     --s-tld: #199e70;
     --s-neutral: oklch(0.6 0.008 285);
+    --r-1: #1795fa;
+    --r-2: #1b7e2a;
+    --r-3: #e25a98;
+    --r-4: #7b47bf;
     --warning: #fab219;
     --warn-soft: oklch(0.3 0.05 80);
     --w-amber: #f2b33a;
@@ -187,6 +196,10 @@
   --s-uncached: #d95926;
   --s-tld: #199e70;
   --s-neutral: oklch(0.6 0.008 285);
+  --r-1: #1795fa;
+  --r-2: #1b7e2a;
+  --r-3: #e25a98;
+  --r-4: #7b47bf;
   --warning: #fab219;
   --warn-soft: oklch(0.3 0.05 80);
   --w-amber: #f2b33a;

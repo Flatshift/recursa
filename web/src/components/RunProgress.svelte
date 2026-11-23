@@ -25,6 +25,7 @@
   const WORK: Record<string, string> = {
     setup: 'Checking your network and reaching each resolver',
     warmup: 'A few unrecorded queries prime each resolver’s cache and path',
+    extended: 'Asking the same names of every resolver in turn, a little at a time, for a long stretch',
     cached: 'Timing names each resolver already holds',
     uncached: 'Timing names no resolver can have cached',
     tld: 'Timing names that send each resolver to the TLD servers',

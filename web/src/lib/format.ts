@@ -70,8 +70,10 @@ export function duration(msTotal: number): string {
 export function runEstimateMs(
   targets: number,
   resolvers: number,
-  c: { tests: unknown[]; samples: number; mode: 'accurate' | 'quick'; probes: boolean; cdn: boolean; live: boolean },
+  c: { tests: unknown[]; samples: number; mode: 'accurate' | 'quick' | 'extended'; probes: boolean; cdn: boolean; live: boolean },
 ): number {
+  // Extended asks 50 names per resolver every 15 seconds, so the length follows the count of 15-second bins.
+  if (c.mode === 'extended') return Math.ceil(c.samples / 50) * 15000 + 5000;
   const queries = targets * (c.tests.length * c.samples + 11);
   let msTotal: number;
   if (c.mode === 'accurate') {

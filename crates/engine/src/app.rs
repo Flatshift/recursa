@@ -545,7 +545,7 @@ impl AppState {
         if cfg.resolvers.is_empty() {
             return Err(ApiError::new(400, "Pick at least one resolver."));
         }
-        if cfg.tests.is_empty() {
+        if cfg.tests.is_empty() && cfg.mode != bench::Mode::Extended {
             return Err(ApiError::new(400, "Pick at least one test."));
         }
         cfg.cached_names = if cfg.cached_names.is_empty() {
@@ -560,6 +560,9 @@ impl AppState {
         if !unknown.is_empty() {
             return Err(ApiError::new(400, format!("Unknown resolver: {}.", unknown.join(", "))));
         }
+        if cfg.mode == bench::Mode::Extended {
+            crate::extended::check(&cfg, &resolvers).map_err(|e| ApiError::new(400, e))?;
+        }
         // The run's thread sets `measuring` itself, only while it times.
         let (claim, measure) = self.claim_run().await?;
         let app = self.clone();
@@ -570,6 +573,7 @@ impl AppState {
             env: self.env(),
             client_v6: self.client_v6(),
             measuring: self.measuring.clone(),
+            store: self.store.clone(),
             run_active: self.run_active.clone(),
             on_finish: Box::new(move |s| {
                 let body = serde_json::to_string(s).unwrap_or_default();
@@ -1210,7 +1214,9 @@ impl AppState {
         let samples = v["samples"].as_array().unwrap_or(&empty);
         let q = |x: &Value| crate::ntp_report::csv_field(x.as_str().unwrap_or(""));
         let mut out = String::with_capacity(64 + samples.len() * 96);
-        out.push_str("resolver_id,provider,variant,transport,family,ip,test,round,outcome,rtt_ms,at_ms,excused\n");
+        let ext = v["extended"].is_object();
+        out.push_str("resolver_id,provider,variant,transport,family,ip,test,round,outcome,rtt_ms,at_ms,excused");
+        out.push_str(if ext { ",name,position\n" } else { "\n" });
         for s in samples {
             let Some(t) = s["t"].as_u64().and_then(|i| targets.get(i as usize)) else { continue };
             let us = s["us"].as_u64().unwrap_or(0);
@@ -1230,6 +1236,14 @@ impl AppState {
                 s["at"],
                 u8::from(s["x"].as_bool().unwrap_or(false))
             ));
+            if ext {
+                // The name asked in this slot, and where this resolver stood in the slot's order.
+                let slot = s["i"].as_u64().unwrap_or(0) as usize;
+                let name = v["extended"]["plan"]["names"][slot].as_str().unwrap_or("");
+                let pos = v["extended"]["order"][slot].as_array().and_then(|o| o.iter().position(|x| x.as_u64() == s["t"].as_u64()));
+                out.pop();
+                out.push_str(&format!(",{},{}\n", crate::ntp_report::csv_field(name), pos.map_or(String::new(), |p| p.to_string())));
+            }
         }
         Some(Export { filename: format!("recursa-{id}.csv"), mime: "text/csv; charset=utf-8", body: out })
     }

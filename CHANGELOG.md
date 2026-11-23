@@ -4,6 +4,8 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 
 ## Unreleased
 
+- Added the Extended test: a 25-minute comparison of two to four resolvers on 5,000 names, with a verdict and a chart of the run over time (`recursa run --extended`).
+- Reliability charts now show each resolver's median and spread over time.
 - Removed AdGuard DNS from the resolver list and the status feeds to respect its terms of service.
 
 ## 0.5.9 (2026-11-21)

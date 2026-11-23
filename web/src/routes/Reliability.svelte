@@ -5,7 +5,8 @@
   import { status, stateLabel, stateGlyph, localNote } from '../lib/status.svelte';
   import { RESOLVER_INTERVAL_MIN, RETENTION_DAYS, resolverMonitor } from '../lib/monitor.svelte';
   import type { MonitorHist } from '../lib/types';
-  import { gapCause, ownSuccess, seenAs } from '../lib/attribution';
+  import { cellClass, gapCause, ownSuccess, seenAs } from '../lib/attribution';
+  import type { OverTimeCell, OverTimeGap, OverTimeMark, OverTimeOutage, OverTimeSeries } from '../lib/overtime';
   import { ago, day, documented, list, monitoredCount, ms, pct, plural, resolverName, when } from '../lib/format';
   import Glyph from '../components/Glyph.svelte';
   import Icon from '../components/Icon.svelte';
@@ -13,7 +14,7 @@
   import Info from '../components/Info.svelte';
   import Picks from '../components/Picks.svelte';
   import ResolverChips from '../components/ResolverChips.svelte';
-  import Record, { type Mark } from '../components/Record.svelte';
+  import OverTime from '../components/OverTime.svelte';
 
   const RANGES: [number, string, string][] = [
     [24, '24 h', 'the last 24 hours'],
@@ -59,13 +60,69 @@
   );
 
   // What each operator published about a resolver: curated incidents, plus its live feed's.
-  function marks(id: string): Mark[] {
-    const out: Mark[] = status.incidentsFor(id).map((i) => ({ t: new Date(i.start ?? i.date).getTime(), title: i.title }));
+  function marks(id: string): { t: number; title: string }[] {
+    const out = status.incidentsFor(id).map((i) => ({ t: new Date(i.start ?? i.date).getTime(), title: i.title }));
     const feed = resolvers.find((r) => r.id === id)?.status_feed;
     for (const f of feeds)
       if (f.feed === feed) for (const i of f.incidents) if (i.started) out.push({ t: new Date(i.started).getTime(), title: i.title });
     return out;
   }
+
+  // ---- The record, as the over-time chart takes it: one cell per column of the window, up to now. ----
+  const GAP_LABEL = { sleep: 'Computer asleep', stall: 'Recursa stalled' };
+  const record = $derived.by(() => {
+    const h = mon.data?.history;
+    if (!h) return null;
+    const now = Date.now();
+    const cellH = h.cell / 3_600_000;
+    const slots = Math.min(Math.ceil(h.hours / cellH), Math.ceil((now - h.since) / h.cell));
+    const startOf = (i: number) => h.since + i * h.cell;
+    const outLabel = (r: MonitorHist) => {
+      const own = r.outages.filter((o) => o.shared < o.cycles).length;
+      return own ? plural(own, 'outage') : 'No outages';
+    };
+    const series: OverTimeSeries[] = h.resolvers.map((r) => {
+      const by = new Map(r.buckets.map((c) => [Math.round((c[0] - h.since) / h.cell), c]));
+      const cells = Array.from({ length: slots }, (_, i): OverTimeCell | null => {
+        const c = by.get(i);
+        if (!c || c[1] === 0) return null;
+        const cls = cellClass(c, h.cell, r.first ?? -Infinity, now);
+        const gap = cls === 'thin' ? gapCause(h.gaps, startOf(i), Math.min(now, startOf(i) + h.cell)) : null;
+        const note = [gap && (gap === 'sleep' ? 'mostly asleep' : 'Recursa mostly stalled'), c[6] ? `${c[6]} not counted: several operators unanswered at once` : null].filter(Boolean).join(' · ');
+        return { t0: startOf(i), t1: startOf(i) + h.cell, p5: c[8] ?? null, p25: c[9] ?? null, p50: c[3], p75: c[10] ?? null, p95: c[4], sent: c[1], lost: c[1] - c[2], cls: cls === 'none' ? undefined : cls, note: note || undefined };
+      });
+      const own = ownSuccess(r);
+      const sub = [
+        `${pct(own)} answered`,
+        `median ${ms(r.p50)}`,
+        `p95 ${ms(r.p95)}`,
+        outLabel(r),
+        r.query_success != null && pct(r.query_success) !== pct(own) ? `raw ${pct(r.query_success)}` : '',
+        r.coverage != null && r.coverage < 0.995 ? `measured ${Math.round(r.coverage * 100)}% of the time` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      return { id: r.resolver_id, name: nameOf(r.resolver_id), sub, cells };
+    });
+    // Columns where no resolver has a check: named for what the machine was doing.
+    const gaps: OverTimeGap[] = [];
+    for (let i = 0; i < slots; i++) {
+      if (series.some((s) => s.cells[i])) continue;
+      const cause = gapCause(h.gaps, startOf(i), Math.min(now, startOf(i) + h.cell));
+      const label = cause ? GAP_LABEL[cause] : 'No checks';
+      const last = gaps[gaps.length - 1];
+      if (last && last.t1 === startOf(i) && last.label === label) last.t1 = startOf(i + 1);
+      else gaps.push({ t0: startOf(i), t1: startOf(i + 1), kind: cause ?? 'none', label });
+    }
+    const outs: OverTimeOutage[] = h.resolvers.flatMap((r) =>
+      r.outages.map((o) => {
+        const until = o.recovered ?? (o.cut ? o.end + interval * 60_000 : Math.min(now, o.end + interval * 60_000));
+        return { id: r.resolver_id, t0: o.start, t1: Math.max(o.start, until), shared: o.shared === o.cycles, label: `down from ${when(o.start)}, ${plural(o.cycles, 'missed cycle')}` };
+      }),
+    );
+    const flags: OverTimeMark[] = h.resolvers.flatMap((r) => marks(r.resolver_id).map((m) => ({ id: r.resolver_id, ...m })));
+    return { series, gaps, outs, flags, unit: cellH === 1 ? 'hour' : `${cellH}-hour block` };
+  });
 
   // ---- The verdict: what the record says, in one sentence, then the evidence. ----
   const interval = $derived(mon.cfg?.interval_min ?? mon.data?.config.interval_min ?? 5);
@@ -251,23 +308,24 @@
                   neither server answers anything. Monitoring pauses during manual runs.
                 </p>
                 <p>
-                  Each column is {mon.data.history.cell === 3_600_000 ? 'an hour' : `${mon.data.history.cell / 3_600_000} hours`}. Its shading is
-                  where that time's answers landed on the log scale at the right, darkest where most did, so a resolver that answers
-                  from cache and from the internet shows two bands. The line is the median; the bars beneath are the share left
-                  unanswered.
+                  Each column is {mon.data.history.cell === 3_600_000 ? 'an hour' : `${mon.data.history.cell / 3_600_000} hours`}. The top panel
+                  draws every resolver's median on one log scale. Each resolver's own panel shows its median, the middle half of its
+                  answers (darker band) and nine in ten (lighter band); the bars beneath are the share left unanswered.
                 </p>
                 {#if app.env?.interception?.verdict === 'intercepted'}<p>While port 53 is intercepted on this network, resolvers that offer DoT or DoH are monitored over encrypted DNS instead, which has one endpoint.</p>{/if}
               </Info>
             </div>
             <button class="btn ghost sm" onclick={mon.clearHistory}><Icon name="trash" size={13} />Clear history</button>
           </div>
-          <Record history={mon.data.history} intervalMin={interval} {nameOf} {marks} bind:cursor />
+          {#if record}
+            <OverTime series={record.series} gaps={record.gaps} marks={record.flags} outages={record.outs} unit={record.unit} formatTime={when} bind:cursor />
+          {/if}
           <p class="legend" aria-hidden="true">
-            <span><i class="sw-heat"></i>Where answers landed</span>
             <span><i class="sw-med"></i>Median</span>
+            <span><i class="sw-band"></i>Middle half, nine in ten</span>
             <span><i class="sw-loss"><b class="w"></b><b class="s"></b><b class="c"></b></i>Unanswered: some, most, all</span>
             <span><i class="sw-out"></i>Down</span>
-            <span><i class="sw-gap"></i>No checks</span>
+            <span><i class="sw-gap"></i>No checks, asleep or stalled</span>
             <span><i class="sw-shared"></i>Not counted: several operators failed at once</span>
             <span><i class="sw-thin"></i>Mostly unmeasured</span>
             <span><i class="sw-mark"></i>Operator reported an incident</span>
@@ -537,12 +595,12 @@
     width: 14px;
     height: 10px;
   }
-  .sw-heat {
+  .sw-band {
     background: linear-gradient(
-      to top,
-      color-mix(in oklch, var(--ink) 10%, transparent) 0 33%,
-      color-mix(in oklch, var(--ink) 46%, transparent) 33% 66%,
-      color-mix(in oklch, var(--ink) 80%, transparent) 66%
+      to bottom,
+      color-mix(in oklch, var(--ink) 13%, transparent) 0 25%,
+      color-mix(in oklch, var(--ink) 26%, transparent) 25% 75%,
+      color-mix(in oklch, var(--ink) 13%, transparent) 75%
     );
   }
   .sw-med {
@@ -574,7 +632,7 @@
     box-shadow: inset 1.5px 0 0 var(--critical);
   }
   .sw-gap {
-    background: var(--surface-2);
+    background: repeating-linear-gradient(135deg, var(--ink-3) 0 1px, transparent 1px 4px), var(--surface-2);
     outline: 1px solid var(--rule);
     outline-offset: -1px;
   }

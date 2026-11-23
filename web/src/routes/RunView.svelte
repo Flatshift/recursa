@@ -5,14 +5,16 @@
   import { shortcut } from '../lib/keys';
   import { HIT_SHARE, blendRows, buildRows, rank, verdict, type Row, type SortKey } from '../lib/verdict';
   import type { RunState, TestKind, Transport } from '../lib/types';
-  import { TEST_HINT, TRANSPORT_LABEL, duration, label, ms, plural, checkMs, resolverCount, runEstimateMs, when } from '../lib/format';
+  import { TEST_HINT, TRANSPORT_LABEL, duration, label, ms, plural, checkMs, resolverCount, runEstimateMs, timeOfDay, when } from '../lib/format';
   import { menu } from '../lib/menu.svelte';
   import { reduceMotion } from '../lib/motion';
   import { TEST_LABEL, isCheck, phaseTab } from '../lib/phases';
+  import { gapSeconds, minutesLeft, minutesOf, sentOf } from '../lib/extended';
   import { status } from '../lib/status.svelte';
   import { onResolverContext } from '../lib/resolverMenu';
   import Toolbar from '../components/Toolbar.svelte';
   import RunProgress from '../components/RunProgress.svelte';
+  import ExtendedRun from '../components/ExtendedRun.svelte';
   import Verdict from '../components/Verdict.svelte';
   import RankList from '../components/RankList.svelte';
   import Ladder from '../components/Ladder.svelte';
@@ -32,7 +34,9 @@
 
   const run = $derived(app.run);
   const running = $derived(run?.status === 'running');
-  const live = $derived(run ? buildRows(run, app.boot?.resolvers ?? [], HIT_SHARE[app.mix]) : []);
+  // An Extended run has its own screens, and none of the tabs.
+  const ext = $derived(run?.config.mode === 'extended');
+  const live = $derived(run && !ext ? buildRows(run, app.boot?.resolvers ?? [], HIT_SHARE[app.mix]) : []);
   // While measuring, every view takes a fresh copy of the rows at most every 2 s, so they settle instead of
   // jittering, and the order and the numbers always come from the same copy.
   const SNAP_MS = 2000;
@@ -90,7 +94,7 @@
 
   const ordered = $derived(rank(shown, sortKey, test));
 
-  const v = $derived(run && !running ? verdict(run, rows, HIT_SHARE[app.mix]) : null);
+  const v = $derived(run && !running && !ext ? verdict(run, rows, HIT_SHARE[app.mix]) : null);
   let capView = $state<CapView>('all');
 
   // Screen readers hear the result when a run finishes while it is open, not when an old run is opened.
@@ -184,9 +188,28 @@
     if (left >= later || !timeouts) return `${duration(spent)}, about ${duration(Math.max(left, later))} left`;
     return `${duration(spent)}, longer than estimated: ${plural(timeouts, 'query', 'queries')} waited out the timeout`;
   }
-  const title = $derived(!run ? 'Results' : running ? 'Measuring' : run.status === 'cancelled' ? 'Run stopped' : 'Results');
+  const title = $derived(!run ? 'Results' : ext ? 'Extended test' : running ? 'Measuring' : run.status === 'cancelled' ? 'Run stopped' : 'Results');
   const subtitle = $derived(
-    run
+    run && ext
+      ? !run.extended
+        ? running
+          ? 'Running · getting ready'
+          : 'Stopped before the first lookup'
+        : running
+        ? `Running · ${sentOf(run.extended).toLocaleString()} of ${run.extended.total.toLocaleString()} lookups · about ${minutesLeft(run.extended)} min left`
+        : [
+            plural(resolverCount(run.targets), 'resolver'),
+            run.status === 'cancelled'
+              ? `${sentOf(run.extended).toLocaleString()} of ${run.extended.total.toLocaleString()} lookups each`
+              : `${run.extended.total.toLocaleString()} lookups each`,
+            run.status === 'cancelled' ? '' : `${minutesOf(run.extended.total, run.extended.gap_ms)} min of queries`,
+            `${when(run.started_at)}${run.finished_at ? ` to ${timeOfDay(run.finished_at)}` : ''}`,
+            gapSeconds(run.extended.gaps, 'sleep') ? `asleep ${duration(gapSeconds(run.extended.gaps, 'sleep') * 1000)}` : '',
+            run.status === 'cancelled' ? 'not final' : '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+      : run
       ? [
           when(run.started_at),
           plural(resolverCount(run.targets), 'resolver'),
@@ -238,6 +261,13 @@
     if (app.runView === 'latency' && n >= 1 && n <= tabs.length) test = tabs[n - 1];
   }
   const open = (id: string) => (app.inspect = id);
+  // Run again: the same finalists, started at once.
+  function again() {
+    if (!run || !app.draft) return;
+    app.extPick = [...run.config.resolvers];
+    app.draft.mode = 'extended';
+    app.startRun();
+  }
 
   // The run's row in history, for its saved mark.
   const row = $derived(run ? (app.boot?.runs.find((r) => r.id === run.id) ?? null) : null);
@@ -303,7 +333,7 @@
 <div class="view-root">
   <Toolbar {title} {subtitle}>
     {#snippet center()}
-      {#if run && !mobile}
+      {#if run && !mobile && !ext}
         <div class="segmented views" role="tablist" aria-label="Results view">
           {#each RUN_VIEWS as view, i}
             <button
@@ -326,7 +356,7 @@
     {/snippet}
     {#snippet actions()}
       {#if run && running}
-        <button class="btn" onclick={() => app.cancelRun()}><Icon name="stop" size={11} />Stop</button>
+        <button class="btn" class:primary={ext} onclick={() => app.cancelRun()}><Icon name="stop" size={11} />{ext ? 'Stop and keep results so far' : 'Stop'}</button>
       {:else if run && mobile}
         <button class="tb-icon" aria-label="Run actions" onclick={(e) => runMenu(e, run.id)}><Icon name="more" size={18} /></button>
       {:else if run}
@@ -342,14 +372,19 @@
           >
         {/if}
         <button class="tb-icon" aria-label="Run actions" title="Export or delete this run" onclick={(e) => runMenu(e, run.id)}><Icon name="more" size={16} /></button>
-        <button
-          class="tb-icon"
-          aria-label={app.inspect ? 'Hide inspector' : 'Show inspector'}
-          aria-pressed={!!app.inspect}
-          title="{app.inspect ? 'Hide' : 'Show'} inspector ({shortcut('alt+cmd+I')})"
-          onclick={() => app.toggleInspector()}><Icon name="inspector" size={16} /></button
-        >
-        <button class="btn primary" onclick={() => app.navigate('/')}>New run</button>
+        {#if ext}
+          {#if app.boot?.caps.export}<button class="btn" onclick={() => app.exportRun('csv')}>Export CSV</button>{/if}
+          <button class="btn" onclick={again}>Run again</button>
+        {:else}
+          <button
+            class="tb-icon"
+            aria-label={app.inspect ? 'Hide inspector' : 'Show inspector'}
+            aria-pressed={!!app.inspect}
+            title="{app.inspect ? 'Hide' : 'Show'} inspector ({shortcut('alt+cmd+I')})"
+            onclick={() => app.toggleInspector()}><Icon name="inspector" size={16} /></button
+          >
+          <button class="btn primary" onclick={() => app.navigate('/')}>New run</button>
+        {/if}
       {/if}
     {/snippet}
   </Toolbar>
@@ -357,7 +392,7 @@
   {#if run}
     <div class="view-body" bind:clientWidth={bodyW}>
       <div class="col">
-        {#if mobile}
+        {#if mobile && !ext}
           <div class="viewstrip" role="tablist" aria-label="Results view">
             {#each PHONE_VIEWS as view}
               <button role="tab" class="vtab" class:on={app.runView === view} aria-selected={app.runView === view} aria-controls="run-panel" onclick={() => app.setRunView(view)}
@@ -366,9 +401,17 @@
             {/each}
           </div>
         {/if}
-        <RunProgress {run} />
+        {#if !ext || run.phase !== 'extended'}<RunProgress {run} />{/if}
         <p class="visually-hidden" aria-live="polite">{announce}</p>
-        {#if split && inspected}
+        {#if ext}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <div class="content scroll" id="run-panel" tabindex="0" role="region" aria-label="Extended test">
+            <ExtendedRun {run} />
+            {#if mobile && !running}
+              <div class="extacts"><button class="btn" onclick={again}>Run again</button></div>
+            {/if}
+          </div>
+        {:else if split && inspected}
           <div class="split">
             <Shortlist groups={[['', picks]]} selected={app.inspect} back="All results" collapsed={narrow} onselect={open} onback={() => (app.inspect = null)} />
             {#key inspected.id}
@@ -590,6 +633,9 @@
     font-size: var(--t-xs);
   }
   /* Phone: five views (Numbers folds into Overview) as a strip of tabs under the bar, all in view at once. */
+  .extacts {
+    padding: 12px 0 24px;
+  }
   .viewstrip {
     flex: none;
     display: flex;

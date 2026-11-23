@@ -17,6 +17,7 @@ futures-util.workspace = true
 h2.workspace = true
 http.workspace = true
 libc.workspace = true
+psl.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true
 rustls.workspace = true

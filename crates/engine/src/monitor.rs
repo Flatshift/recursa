@@ -590,11 +590,23 @@ pub struct ResolverHistory {
     pub outages: Vec<Outage>,
 }
 
-/// One strip cell, sent as `[start, samples, answered, p50 ms, p95 ms, histogram, shared samples, measured ms]` to
-/// keep a month of cells for two dozen resolvers small. See [`histogram`]. The measured time is none when part of the
-/// cell was recorded before intervals were kept.
+/// One strip cell, sent as `[start, samples, answered, p50 ms, p95 ms, histogram, shared samples, measured ms,
+/// p5 ms, p25 ms, p75 ms]` to keep a month of cells for two dozen resolvers small. See [`histogram`]. The measured time
+/// is none when part of the cell was recorded before intervals were kept.
 #[derive(Debug, Serialize)]
-pub struct Cell(pub i64, pub u32, pub u32, pub Option<f64>, pub Option<f64>, pub Vec<u32>, pub u32, pub Option<i64>);
+pub struct Cell(
+    pub i64,
+    pub u32,
+    pub u32,
+    pub Option<f64>,
+    pub Option<f64>,
+    pub Vec<u32>,
+    pub u32,
+    pub Option<i64>,
+    pub Option<f64>,
+    pub Option<f64>,
+    pub Option<f64>,
+);
 
 /// Latency histogram bins: an eighth of a decade each on a log-ms axis, bin 0 starting at
 /// 0.32 ms. The last bin, from 1.78 s, runs to the 2 s timeout.
@@ -674,7 +686,8 @@ impl Acc {
         // Sorted in place: the window's percentiles don't care about order.
         let lat = &mut self.latencies[c.from..];
         lat.sort_unstable();
-        self.cells.push(Cell(c.t, c.n, c.ok, pct(lat, 0.5), pct(lat, 0.95), histogram(lat), c.shared_n, c.covered));
+        let (p5, p25, p75) = (pct(lat, 0.05), pct(lat, 0.25), pct(lat, 0.75));
+        self.cells.push(Cell(c.t, c.n, c.ok, pct(lat, 0.5), pct(lat, 0.95), histogram(lat), c.shared_n, c.covered, p5, p25, p75));
     }
 }
 
@@ -850,7 +863,7 @@ mod tests {
                             _ => Vec::new(),
                         };
                         let covered: i64 = hour_cov.range(t..t + cell).map(|(_, v)| *v).sum();
-                        json!([t, n, ok, pct(&v, 0.5), pct(&v, 0.95), hist, shared_n, covered])
+                        json!([t, n, ok, pct(&v, 0.5), pct(&v, 0.95), hist, shared_n, covered, pct(&v, 0.05), pct(&v, 0.25), pct(&v, 0.75)])
                     })
                     .collect();
                 let all_plain: Vec<&MonitorRow> = all.to_vec();
@@ -1225,6 +1238,9 @@ mod tests {
         assert_eq!(a["coverage"], (4 * EVERY) as f64 / (HOUR_MS - 1) as f64);
         assert_eq!(a["buckets"][0][6], 3);
         assert_eq!(a["buckets"][0][7], 4 * EVERY);
+        // The one answered cycle was 9 ms throughout: every percentile is 9.
+        assert_eq!(a["buckets"][0].as_array().unwrap().len(), 11);
+        assert_eq!(a["buckets"][0].as_array().unwrap()[8..], [json!(9.0), json!(9.0), json!(9.0)]);
         drop(store);
         remove(path);
     }

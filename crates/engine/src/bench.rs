@@ -105,6 +105,8 @@ pub enum Mode {
     #[default]
     Accurate,
     Quick,
+    /// Two to four resolvers asked one name every 300 ms for about 25 minutes (see [`crate::extended`]).
+    Extended,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,7 +149,7 @@ fn default_tests() -> Vec<TestKind> {
 fn default_samples() -> u32 {
     30
 }
-const QUERY_TIMEOUT_MS: u64 = 2000;
+pub(crate) const QUERY_TIMEOUT_MS: u64 = 2000;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunConfig {
@@ -176,6 +178,9 @@ pub struct RunConfig {
     /// is left out and said so. A run made before this existed used the default list.
     #[serde(default = "crate::names::defaults")]
     pub cached_names: Vec<String>,
+    /// Extended only: the one resolver given is opened twice, as targets A and B, to check the test against itself.
+    #[serde(default)]
+    pub aa: bool,
 }
 
 impl RunConfig {
@@ -192,6 +197,7 @@ impl RunConfig {
             cdn: true,
             live: false,
             cached_names: crate::names::defaults(),
+            aa: false,
         }
     }
 }
@@ -304,7 +310,7 @@ impl TargetInfo {
         }
     }
 
-    fn fail(&mut self, state: &str, reason: impl Into<String>) {
+    pub(crate) fn fail(&mut self, state: &str, reason: impl Into<String>) {
         self.state = state.into();
         self.reason = Some(reason.into());
     }
@@ -418,6 +424,9 @@ pub struct RunState {
     /// When each phase began, in ms since the run started: where a run's time went. Absent in older runs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub timings: Vec<(String, i64)>,
+    /// The Extended test's schedule, bins and result. Absent in other runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extended: Option<crate::extended::ExtendedState>,
     pub seq: u64,
 }
 
@@ -438,24 +447,24 @@ impl RunHandle {
     /// Mutate state and broadcast the resulting event atomically. Snapshots are taken
     /// under the same lock, so a subscriber sees each change exactly once: either in
     /// the snapshot or as an event with a higher `seq`.
-    fn publish(&self, f: impl FnOnce(&mut RunState) -> Value) {
+    pub(crate) fn publish(&self, f: impl FnOnce(&mut RunState) -> Value) {
         let mut s = self.state();
         let mut v = f(&mut s);
         s.seq += 1;
         v["seq"] = json!(s.seq);
         let _ = self.tx.send(v.to_string().into());
     }
-    fn with<R>(&self, f: impl FnOnce(&mut RunState) -> R) -> R {
+    pub(crate) fn with<R>(&self, f: impl FnOnce(&mut RunState) -> R) -> R {
         f(&mut self.state())
     }
-    fn cancelled(&self) -> bool {
+    pub(crate) fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
     }
     /// Note when a step began, for `timings`.
-    fn mark(&self, step: &str) {
+    pub(crate) fn mark(&self, step: &str) {
         self.with(|s| s.timings.push((step.into(), now_ms() - s.started_at)));
     }
-    fn phase(&self, phase: &str, total: u32) {
+    pub(crate) fn phase(&self, phase: &str, total: u32) {
         self.mark(phase);
         self.publish(|s| {
             s.phase = phase.into();
@@ -464,17 +473,17 @@ impl RunHandle {
             json!({"type": "phase", "phase": phase, "total": total})
         });
     }
-    fn emit_targets(&self) {
+    pub(crate) fn emit_targets(&self) {
         self.publish(|s| json!({"type": "targets", "targets": s.targets}));
     }
-    fn note(&self, level: &'static str, text: String, resolver_id: Option<String>) {
+    pub(crate) fn note(&self, level: &'static str, text: String, resolver_id: Option<String>) {
         let n = Note { level, text, resolver_id };
         self.publish(|s| {
             s.notes.push(n.clone());
             json!({"type": "note", "note": n})
         });
     }
-    fn set_target(&self, idx: usize, f: impl FnOnce(&mut TargetInfo)) {
+    pub(crate) fn set_target(&self, idx: usize, f: impl FnOnce(&mut TargetInfo)) {
         self.with(|s| f(&mut s.targets[idx]));
     }
     /// Subscribe and take a consistent snapshot in one step.
@@ -494,6 +503,7 @@ pub struct Deps {
     pub client_v6: bool,
     pub measuring: Arc<AtomicBool>,
     pub run_active: Arc<AtomicBool>,
+    pub store: Arc<crate::store::Store>,
     pub on_finish: Box<dyn FnOnce(&RunState) + Send>,
 }
 
@@ -506,7 +516,16 @@ fn new_id() -> String {
 }
 
 pub(crate) fn spawn(mut cfg: RunConfig, mut deps: Deps) -> Arc<RunHandle> {
-    cfg.samples = cfg.samples.clamp(3, 500);
+    if cfg.mode == Mode::Extended {
+        // Lookups per resolver, a whole number of bins; one transport and one family.
+        cfg.samples = cfg.samples.clamp(500, 5000) / 50 * 50;
+        cfg.transports.truncate(1);
+        if cfg.family == Family::Both {
+            cfg.family = Family::V4;
+        }
+    } else {
+        cfg.samples = cfg.samples.clamp(3, 500);
+    }
     cfg.tests.sort();
     cfg.tests.dedup();
     // Each transport once, in the order given ([udp, tcp, udp] would measure UDP twice).
@@ -542,6 +561,7 @@ pub(crate) fn spawn(mut cfg: RunConfig, mut deps: Deps) -> Arc<RunHandle> {
         routes: BTreeMap::new(),
         rates: BTreeMap::new(),
         timings: vec![],
+        extended: None,
         seq: 0,
     };
     let h = Arc::new(RunHandle { id, cancel: AtomicBool::new(false), state: Mutex::new(state), tx });
@@ -666,7 +686,7 @@ fn planned_for(plan: &[(TargetInfo, Option<Endpoint>)], resolver_id: &str) -> Ve
     plan.iter().filter(|(t, _)| t.resolver_id == resolver_id).filter_map(|(_, e)| e.clone()).collect()
 }
 
-fn offers(r: &Resolver, t: Transport) -> bool {
+pub(crate) fn offers(r: &Resolver, t: Transport) -> bool {
     match t {
         Transport::Udp | Transport::Tcp => r.udp,
         Transport::Dot => r.dot.is_some(),
@@ -674,7 +694,7 @@ fn offers(r: &Resolver, t: Transport) -> bool {
     }
 }
 
-fn expand(
+pub(crate) fn expand(
     set: Setup,
     cfg: &RunConfig,
     selected: &[Resolver],
@@ -775,7 +795,12 @@ fn prepare_filter_sets(set: Setup, cfg: &RunConfig, h: &RunHandle) -> probes::Fi
 }
 
 /// Open every planned target's transport in parallel (handshakes are timed separately).
-fn open_targets(set: Setup, h: &RunHandle, plan: &[(TargetInfo, Option<Endpoint>)], timeout: Duration) -> Vec<Option<Box<dyn Exchanger>>> {
+pub(crate) fn open_targets(
+    set: Setup,
+    h: &RunHandle,
+    plan: &[(TargetInfo, Option<Endpoint>)],
+    timeout: Duration,
+) -> Vec<Option<Box<dyn Exchanger>>> {
     let opened: Vec<Option<Result<Box<dyn Exchanger>, XErr>>> = std::thread::scope(|sc| {
         let handles: Vec<_> = plan
             .iter()
@@ -867,20 +892,20 @@ fn ask(x: &mut dyn Exchanger, name: &str, qtype: u16, rd: bool, timeout: Duratio
 /// The setup checks before the measured phases: when they stop, and whether they may use plain DNS. A run on
 /// encrypted transports only sends none, so a resolver without a DoT or DoH endpoint is simply not asked.
 #[derive(Clone, Copy)]
-struct Setup {
+pub(crate) struct Setup {
     until: Instant,
-    plain: bool,
+    pub(crate) plain: bool,
 }
 
 /// The longest the setup checks may take in all; what is unfinished then is taken as it stands.
 const SETUP_BUDGET: Duration = Duration::from_secs(40);
 
 impl Setup {
-    fn new(cfg: &RunConfig) -> Self {
+    pub(crate) fn new(cfg: &RunConfig) -> Self {
         Setup { until: Instant::now() + SETUP_BUDGET, plain: cfg.transports.iter().any(|t| matches!(t, Transport::Udp | Transport::Tcp)) }
     }
 
-    fn over(&self, h: &RunHandle) -> bool {
+    pub(crate) fn over(&self, h: &RunHandle) -> bool {
         h.cancelled() || Instant::now() >= self.until
     }
 
@@ -1534,6 +1559,9 @@ fn warm_up(set: Setup, h: &RunHandle, xs: &mut [Option<Box<dyn Exchanger>>], tim
 }
 
 fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
+    if cfg.mode == Mode::Extended {
+        return crate::extended::run(h, cfg, selected, deps);
+    }
     let timeout = Duration::from_millis(QUERY_TIMEOUT_MS);
     let t0 = Instant::now();
 
@@ -1568,7 +1596,7 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
     // ---- Measured phases.
     let gap = match cfg.mode {
         Mode::Accurate => ACCURATE_GAP,
-        Mode::Quick => Duration::from_millis(1),
+        Mode::Quick | Mode::Extended => Duration::from_millis(1),
     };
     for &test in &cfg.tests {
         if h.cancelled() {
@@ -2801,6 +2829,9 @@ fn fnv1a(s: &str) -> u32 {
 
 /// Small summary stored alongside each run for the history list and the CLI.
 pub(crate) fn summary(s: &RunState) -> Value {
+    if let Some(e) = &s.extended {
+        return crate::extended::summary(s, e);
+    }
     // The fastest pick, and the next resolver when this run can't tell the two apart.
     let label = |t: &TargetInfo| format!("{} {}", t.provider, t.variant).trim().to_string();
     let picks: Vec<Ranked> = ranked(s).into_iter().filter(|r| r.eligible() && !is_baseline(s, r.target)).collect();
@@ -2973,6 +3004,7 @@ mod tests {
             routes: BTreeMap::new(),
             rates: BTreeMap::new(),
             timings: vec![],
+            extended: None,
             seq: 0,
         }
     }
@@ -3203,6 +3235,7 @@ mod tests {
             routes: BTreeMap::new(),
             rates: BTreeMap::new(),
             timings: vec![],
+            extended: None,
             seq: 0,
         };
         // The router or Pi-hole is the fastest, and stays in the ranking, but isn't the best pick;
@@ -3254,6 +3287,7 @@ mod tests {
             routes: BTreeMap::new(),
             rates: BTreeMap::new(),
             timings: vec![],
+            extended: None,
             seq: 0,
         };
         assert_eq!(ranked(&s)[0].target.resolver_id, "controld");
@@ -3319,6 +3353,7 @@ mod tests {
             routes: BTreeMap::new(),
             rates: BTreeMap::new(),
             timings: vec![],
+            extended: None,
             seq: 0,
         };
         assert!(tied(&s, &s.targets[0], &s.targets[1]));

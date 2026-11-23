@@ -152,11 +152,13 @@
           <span class="rt">
             {#if live}<span class="dot" aria-hidden="true"></span>{/if}
             <span>{shortWhen(r.started_at)}</span>
-            {#if mobile && !live && r.summary.best}<span class="num score chip" title="Speed score">{ms(r.summary.best.composite_ms)}</span>{/if}
+            {#if mobile && !live && r.summary.best && r.summary.mode !== 'extended'}<span class="num score chip" title="Speed score">{ms(r.summary.best.composite_ms)}</span>{/if}
           </span>
           <span class="rb">
             {#if live}
               <span class="live">Measuring…</span>
+            {:else if r.summary.mode === 'extended'}
+              <span class="who" title={r.summary.verdict}>Extended · {r.summary.best ? r.summary.best.label + (r.summary.best.tied_with ? ` or ${r.summary.best.tied_with}` : '') : r.status === 'cancelled' ? 'Stopped' : 'No verdict'}</span>
             {:else if r.summary.best?.tied_with}
               <span class="who" title="Tied for fastest: too close for this run to call">{r.summary.best.label} or {r.summary.best.tied_with}</span>
             {:else if r.summary.best}

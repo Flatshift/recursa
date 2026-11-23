@@ -133,10 +133,92 @@ fn start() {
     unsafe { PowerRegisterSuspendResumeNotification(DEVICE_NOTIFY_CALLBACK, params as *mut _ as _, &mut handle) };
 }
 
+/// Keeps the computer from going to sleep on its own while held (a closed lid still sleeps it). Dropped on the thread
+/// that took it: Windows ties the request to the thread. Nowhere else does it do anything.
+pub struct KeepAwake {
+    #[cfg(target_os = "macos")]
+    id: u32,
+    _same_thread: std::marker::PhantomData<*const ()>,
+}
+
+#[cfg(target_os = "macos")]
+mod hold {
+    use std::ffi::{c_char, c_void};
+
+    #[link(name = "IOKit", kind = "framework")]
+    unsafe extern "C" {
+        fn IOPMAssertionCreateWithName(kind: *const c_void, level: u32, name: *const c_void, id: *mut u32) -> i32;
+        fn IOPMAssertionRelease(id: u32) -> i32;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFStringCreateWithCString(alloc: *const c_void, text: *const c_char, encoding: u32) -> *const c_void;
+        fn CFRelease(cf: *const c_void);
+    }
+
+    const UTF8: u32 = 0x0800_0100;
+    const LEVEL_ON: u32 = 255;
+
+    /// The assertion's id, or 0 if the system refused.
+    pub fn take() -> u32 {
+        let mut id = 0u32;
+        unsafe {
+            let kind = CFStringCreateWithCString(std::ptr::null(), c"PreventUserIdleSystemSleep".as_ptr(), UTF8);
+            let name = CFStringCreateWithCString(std::ptr::null(), c"Recursa Extended test".as_ptr(), UTF8);
+            if !kind.is_null() && !name.is_null() && IOPMAssertionCreateWithName(kind, LEVEL_ON, name, &mut id) != 0 {
+                id = 0;
+            }
+            for s in [kind, name].into_iter().filter(|s| !s.is_null()) {
+                CFRelease(s);
+            }
+        }
+        id
+    }
+
+    pub fn release(id: u32) {
+        if id != 0 {
+            unsafe { IOPMAssertionRelease(id) };
+        }
+    }
+}
+
+impl KeepAwake {
+    pub fn hold() -> Self {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState};
+            unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) };
+        }
+        KeepAwake {
+            #[cfg(target_os = "macos")]
+            id: hold::take(),
+            _same_thread: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for KeepAwake {
+    fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        hold::release(self.id);
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::Power::{ES_CONTINUOUS, SetThreadExecutionState};
+            unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
+
+    #[test]
+    fn holding_and_dropping_is_harmless() {
+        drop(KeepAwake::hold());
+    }
 
     #[test]
     fn watch_is_idempotent() {

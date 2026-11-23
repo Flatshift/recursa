@@ -11,6 +11,7 @@
   import { latestChecks } from '../lib/measured';
   import Icon from './Icon.svelte';
   import Toolbar from './Toolbar.svelte';
+  import SetupExtended from './SetupExtended.svelte';
 
   const draft = $derived(app.draft!);
   const resolvers = $derived(app.resolvers);
@@ -47,6 +48,7 @@
   });
 
   const selected = $derived(new Set(draft.resolvers));
+  const extended = $derived(draft.mode === 'extended');
   function toggle(id: string) {
     draft.resolvers = selected.has(id) ? draft.resolvers.filter((x) => x !== id) : [...draft.resolvers, id];
   }
@@ -108,7 +110,9 @@
   }
   const chosenNames = $derived(chosen.map((r) => label(r.provider, r.variant)).join(' · '));
   const planLine = $derived(
-    [
+    extended
+      ? ['Extended test']
+      : [
       draft.tests.map((k) => TEST_LABEL[k]).join(', ') || 'No tests',
       ...(draft.cdn ? ['CDN mapping'] : []),
       ...(draft.probes ? ['probes'] : []),
@@ -130,6 +134,8 @@
   // One line per provider that publishes limits, among the resolvers picked.
   const limited = $derived([...new Map(chosen.filter((r) => r.limits).map((r) => [r.provider, r])).values()]);
   const estimate = $derived.by(() => {
+    // Extended sends 5,000 lookups to each finalist, over UDP on IPv4.
+    if (extended) return { targets: app.extPick.length, queries: 5000 * app.extPick.length, ms: runEstimateMs(app.extPick.length, app.extPick.length, { ...draft, samples: 5000 }) };
     let targets = 0;
     for (const r of chosen) {
       const fam = draft.family === 'both' ? 2 : 1;
@@ -143,9 +149,13 @@
 
   const v6ok = $derived(app.env?.vantage?.ipv6_reachable ?? false);
   const noNames = $derived(draft.tests.includes('cached') && !draft.cached_names?.length);
-  const canStart = $derived(draft.resolvers.length > 0 && draft.tests.length > 0 && draft.transports.length > 0 && estimate.targets > 0 && !noNames);
+  const canStart = $derived(extended ? app.extPick.length >= 2 : draft.resolvers.length > 0 && draft.tests.length > 0 && draft.transports.length > 0 && estimate.targets > 0 && !noNames);
   const blocker = $derived(
-    !draft.resolvers.length
+    extended
+      ? app.extPick.length < 2
+        ? 'Tick at least two resolvers to compare.'
+        : null
+      : !draft.resolvers.length
       ? 'Pick at least one resolver.'
       : !draft.tests.length
         ? 'Pick at least one test.'
@@ -237,6 +247,9 @@
   <div class="view-body">
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <section class="pick content scroll" aria-labelledby="pick-h" oncontextmenu={onResolverContext}>
+      {#if extended}
+      <SetupExtended />
+      {:else}
       <header class="pick-head">
         <h2 id="pick-h" class="section-title">Resolvers <span class="count num">{draft.resolvers.length}</span></h2>
         {#if mobile && draft.resolvers.length > 0}
@@ -364,6 +377,7 @@
         {/if}
       </div>
       {/if}
+      {/if}
     </section>
 
     {#if mobile}
@@ -407,6 +421,7 @@
 </div>
 
 {#snippet planBody()}
+        {#if !extended}
         <fieldset>
           <legend>Transports</legend>
           <div class="seg">
@@ -459,6 +474,7 @@
           </label>
         </fieldset>
 
+        {/if}
         <fieldset>
           <legend>Pacing</legend>
           <div class="seg wide" role="radiogroup">
@@ -470,13 +486,20 @@
               <input type="radio" name="mode" value="quick" aria-label="Quick pacing" bind:group={draft.mode} />
               <span>Quick</span>
             </label>
+            <label class="segbtn">
+              <input type="radio" name="mode" value="extended" aria-label="Extended pacing" bind:group={draft.mode} />
+              <span>Extended</span>
+            </label>
           </div>
           <p class="hint">
             {draft.mode === 'accurate'
               ? 'One query in flight per resolver, sends 4 ms apart, so queries never queue on your link.'
-              : 'Up to 8 queries in flight to different resolvers. Faster, slightly noisier.'}
+              : draft.mode === 'quick'
+                ? 'Up to 8 queries in flight to different resolvers. Faster, slightly noisier.'
+                : 'One name every 300 ms to each resolver, for about 25 minutes. For settling a close call between two to four resolvers.'}
           </p>
         </fieldset>
+        {#if !extended}
 
         {#if limited.length}
           <div class="limits" role="note">
@@ -523,6 +546,7 @@
             {/if}
           </div>
         </fieldset>
+        {/if}
         <p class="hint start-hint">{#each shortcutParts('cmd+Enter') as k, i}{i ? ' ' : ''}<kbd>{k}</kbd>{/each} starts the benchmark.</p>
 {/snippet}
 

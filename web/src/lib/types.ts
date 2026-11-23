@@ -337,7 +337,7 @@ export interface RunConfig {
   family: 'v4' | 'v6' | 'both';
   tests: TestKind[];
   samples: number;
-  mode: 'accurate' | 'quick';
+  mode: 'accurate' | 'quick' | 'extended';
   probes: boolean;
   filters: { threats: boolean; ads: boolean; adult: boolean };
   cdn: boolean;
@@ -345,6 +345,96 @@ export interface RunConfig {
   live: boolean;
   /** The names the Cached test asks, in rotation. */
   cached_names: string[];
+}
+
+/** Where the Extended test's names came from. */
+export interface ExtNames {
+  source: 'tranco' | 'tranco-cached' | 'bundled';
+  list_id: string;
+  list_date: string;
+  seed: number;
+  /** Common names (each asked three times), and less common ones. */
+  common: number;
+  tail: number;
+}
+
+/** One resolver's lookups in one 15-second bin. Percentiles are null when nothing answered. */
+export interface ExtBinCell {
+  sent: number;
+  lost: number;
+  p5: number | null;
+  p25: number | null;
+  p50: number | null;
+  p75: number | null;
+  p95: number | null;
+}
+
+/** `at` and `end` are ms since the run started on the wall clock; `r` is by target index. */
+export interface ExtBin {
+  at: number;
+  end: number;
+  /** Every resolver lost half or more, so the bin is in no figure. */
+  removed: boolean;
+  r: ExtBinCell[];
+}
+
+/** The gap to the lowest median, with its range. */
+export interface ExtVs {
+  diff: number;
+  lo: number;
+  hi: number;
+}
+
+export type ExtCall = 'lead' | 'tie' | 'slower' | 'unclear';
+
+export interface ExtRow {
+  /** Target index. */
+  t: number;
+  sent: number;
+  lost: number;
+  loss_pct: number;
+  blocked: number;
+  p50: number | null;
+  p90: number | null;
+  p95: number | null;
+  vs: ExtVs | null;
+  call: ExtCall | null;
+}
+
+export interface ExtGroup {
+  key: string;
+  count: number;
+  r: { p50: number | null; lost: number }[];
+}
+
+export interface ExtResult {
+  final: boolean;
+  no_verdict: boolean;
+  margin: number;
+  loss_flag: boolean;
+  removed_s: number;
+  dropped_names: number;
+  /** Best first. */
+  rows: ExtRow[];
+  /** Share (0 to 1) of counted queries answered within each threshold in `x` (ms), by target index. */
+  ecdf: { x: number[]; r: number[][] };
+  groups: ExtGroup[];
+}
+
+/** `[start_ms, end_ms, cause]`: a stretch with nothing sent. */
+export type ExtGap = [number, number, 'sleep' | 'stall'];
+
+/** The Extended test's part of a run; present only for Extended runs. */
+export interface ExtendedState {
+  total: number;
+  per_bin: number;
+  bin_s: number;
+  gap_ms: number;
+  timeout_ms: number;
+  names: ExtNames;
+  bins: ExtBin[];
+  gaps: ExtGap[];
+  result: ExtResult;
 }
 
 interface Calibration {
@@ -497,6 +587,8 @@ export interface RunState {
   routes?: Record<string, Trace>;
   /** The most queries per second Recursa sent to each resolver in any one second. */
   rates?: Record<string, number>;
+  /** Extended runs only. */
+  extended?: ExtendedState;
   seq: number;
 }
 
@@ -508,6 +600,9 @@ export interface RunRow {
   /** Kept by hand: skipped by Clear all runs and by automatic cleanup. */
   saved: boolean;
   summary: {
+    /** `extended` for Extended runs, which have a `verdict` line and no tests; absent otherwise. */
+    mode?: string;
+    verdict?: string;
     /** The fastest pick; `tied_with` names the next resolver when the run can't tell them apart (older runs were picked with the CDN cost included and have none). */
     best?: { resolver_id: string; label: string; transport: Transport; composite_ms: number; success: number; tied_with?: string | null } | null;
     resolvers?: number;
@@ -530,11 +625,12 @@ export interface MonitorConfig {
   retention_days: number;
 }
 
-/** One history cell: [start, samples, answered, p50 ms, p95 ms, histogram, shared_n, covered]. The histogram is
+/** One history cell: [start, samples, answered, p50 ms, p95 ms, histogram, shared_n, covered, p5 ms, p25 ms, p75 ms]. The histogram is
  *  `[first bin, counts…]` over eighth-of-a-decade log-ms bins, bin 0 starting at 0.32 ms. `shared_n` counts the
  *  samples (all unanswered) from cycles where several independent operators failed at once. `covered` is the
- *  measured ms in the cell, null for data recorded before intervals were stored. Older cells may lack the last two. */
-export type MonitorCell = [number, number, number, number | null, number | null, number[], number?, (number | null)?];
+ *  measured ms in the cell, null for data recorded before intervals were stored. The percentiles are exact, from the cell's
+ *  sorted latencies, null when nothing answered. */
+export type MonitorCell = [number, number, number, number | null, number | null, number[], number?, (number | null)?, (number | null)?, (number | null)?, (number | null)?];
 
 /** `shared` and `unclear` are failed cycles of each cause; the rest were this resolver only. `cut`: checks stopped
  *  (asleep, quit, paused) before the outage was seen to end, so `recovered` is null and it is not ongoing. */
