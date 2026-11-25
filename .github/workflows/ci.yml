@@ -88,7 +88,7 @@ jobs:
         working-directory: web
         run: |
           npm ci
-          npx svelte-check --tsconfig ./tsconfig.json
+          npx svelte-check --tsconfig ./tsconfig.json --tsgo
           npm test
           npm run build
       # Dependabot bumps the lockfiles without regenerating the notices, so on its pull requests the step commits the

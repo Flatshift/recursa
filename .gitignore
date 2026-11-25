@@ -1,6 +1,8 @@
 /target
 /web/node_modules
 /web/dist
+# Transpiled components svelte-check --tsgo writes
+/web/.svelte-check
 *.db
 *.db-wal
 *.db-shm
