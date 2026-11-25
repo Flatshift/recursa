@@ -22,6 +22,10 @@ use std::time::{Duration, Instant};
 /// Slots in a bin, and the seconds a bin takes.
 const PER_BIN: usize = 50;
 const BIN_S: u32 = 15;
+/// Slots between live chart updates, the last bin partly filled.
+const EMIT_EVERY: usize = 10;
+/// Bins in one cold bin.
+const COLD_BINS: usize = 5;
 /// One slot, in ms.
 const GAP_MS: u64 = 300;
 /// Connections per resolver.
@@ -32,6 +36,8 @@ const LOST_MS: f64 = 2000.0;
 const BATCHES: usize = 10;
 /// Fewer kept slots than this say too little to give a range or a call.
 const MIN_SLOTS: usize = 500;
+/// Fewer kept once-asked slots than this say too little for a cold ranking's range or call.
+const MIN_COLD_SLOTS: usize = 100;
 /// Two-sided 95% Student t for nine degrees of freedom, Bonferroni-adjusted for 1, 2 and 3 comparisons.
 const T9: [f64; 3] = [2.262, 2.685, 2.933];
 /// Sent before the measured phase on every connection: a name no run is about.
@@ -48,14 +54,18 @@ const GROUPS: [&str; 6] = ["common_first", "common_later", "tail", "tail_com", "
 /// Where the names came from.
 #[derive(Clone, Debug, Serialize)]
 pub struct NamesUsed {
-    /// `tranco`, `tranco-cached` or `bundled`.
+    /// Always `bundled`.
     pub source: &'static str,
     pub list_id: String,
     pub list_date: String,
     pub seed: u64,
-    /// Common names asked (each three times), and tail names.
+    /// Common names asked (each eight times), and tail names.
     pub common: u32,
     pub tail: u32,
+    /// The registry (`arin`, `ripe`, …) that serves the user's country, when the country was known, and how many of
+    /// the tail names came from its countries.
+    pub region: Option<&'static str>,
+    pub regional: u32,
 }
 
 /// One resolver's lookups in one bin: those counted, and the times of those answered.
@@ -70,7 +80,7 @@ pub struct BinCell {
     pub p95: Option<f64>,
 }
 
-/// A bin of 50 slots. `at` and `end` are ms since the run started, on the wall clock.
+/// A bin of 50 slots. `at` and `end` are ms since the run started, on a clock that keeps running through sleep.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Bin {
     pub at: i64,
@@ -79,6 +89,9 @@ pub struct Bin {
     pub removed: bool,
     /// By target index.
     pub r: Vec<BinCell>,
+    /// By target index, the later asks of common names alone. Empty on a cold bin.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rep: Vec<BinCell>,
 }
 
 /// The gap to the lead, with its range.
@@ -140,6 +153,9 @@ pub struct ExtResult {
     pub dropped_names: u32,
     /// Best first.
     pub rows: Vec<Row>,
+    /// The ranking over the once-asked (tail) names alone, best first; `blocked` is 0.
+    pub cold: Vec<Row>,
+    pub cold_margin: f64,
     pub ecdf: Ecdf,
     pub groups: Vec<Group>,
 }
@@ -153,6 +169,8 @@ pub struct ExtendedState {
     pub total: u32,
     pub per_bin: u32,
     pub bin_s: u32,
+    /// Seconds in a cold bin.
+    pub cold_bin_s: u32,
     pub gap_ms: u32,
     pub timeout_ms: u32,
     pub names: NamesUsed,
@@ -160,6 +178,8 @@ pub struct ExtendedState {
     /// Per slot, the targets in the order they were asked.
     pub order: Vec<Vec<u8>>,
     pub bins: Vec<Bin>,
+    /// The once-asked lookups in wider bins, each `COLD_BINS` bins of `bins` long.
+    pub cold_bins: Vec<Bin>,
     pub gaps: Vec<GapSpan>,
     pub result: ExtResult,
 }
@@ -227,6 +247,7 @@ pub(crate) struct Input<'a> {
 
 pub(crate) struct Analysis {
     pub bins: Vec<Bin>,
+    pub cold_bins: Vec<Bin>,
     pub result: ExtResult,
     /// Targets that answered tail names faster when another resolver had just been asked them.
     pub shared_cache: Vec<usize>,
@@ -273,22 +294,81 @@ fn median_of(v: &[f64]) -> Option<f64> {
 /// Which of [`GROUPS`] slot `q` belongs to: its own kind, and for a tail name its TLD group as well.
 fn kinds(plan: &Plan, q: usize) -> [&'static str; 2] {
     match plan.touch[q] {
-        0 => {
-            let tld = plan.names[q].rsplit('.').next().unwrap_or("");
-            [
-                "tail",
-                if tld == "com" {
-                    "tail_com"
-                } else if tld.len() == 2 {
-                    "tail_cc"
-                } else {
-                    "tail_generic"
-                },
-            ]
-        }
+        0 => ["tail", ["tail_com", "tail_generic", "tail_cc"][namelist::class(&plan.names[q])]],
         1 => ["common_first", ""],
         _ => ["common_later", ""],
     }
+}
+
+/// The ranking of the live targets over `by` (each target's counted times by bin) in the kept bins, best first, and the
+/// margin below which a gap counts as a tie. With `enough`, each row behind the lead gets its gap with a range, and with
+/// `call` the rows get their calls as well.
+fn rank(live: &[usize], by: &[Vec<Vec<Option<f64>>>], kept: &[usize], blocked: &[u32], enough: bool, call: bool) -> (Vec<Row>, f64) {
+    let vals = |t: usize, bs: &[usize]| ranked(bs.iter().flat_map(|&b| by[t][b].iter()));
+    let mut rows: Vec<Row> = live
+        .iter()
+        .map(|&t| {
+            let all = vals(t, kept);
+            let sent = all.len() as u32;
+            let gone = kept.iter().map(|&b| by[t][b].iter().filter(|m| m.is_none()).count() as u32).sum::<u32>();
+            let q = |p: f64| (!all.is_empty()).then(|| stats::round1(stats::quantile(&all, p)));
+            Row {
+                t,
+                sent,
+                lost: gone,
+                loss_pct: if sent == 0 { 0.0 } else { round2(gone as f64 / sent as f64 * 100.0) },
+                blocked: blocked[t],
+                p50: q(0.5),
+                p90: q(0.9),
+                p95: q(0.95),
+                vs: None,
+                call: None,
+            }
+        })
+        .collect();
+    rows.sort_by(|a, b| a.p50.unwrap_or(f64::MAX).total_cmp(&b.p50.unwrap_or(f64::MAX)).then(a.lost.cmp(&b.lost)).then(a.t.cmp(&b.t)));
+    let margin = rows.first().and_then(|r| r.p50).map_or(3.0, |p| f64::max(3.0, stats::round1(0.05 * p)));
+
+    // The gap to the lead: the kept bins cut into ten stretches of consecutive bins, the gap of medians taken again with each
+    // stretch left out in turn, and a t-interval from the spread of those ten around the gap of the whole.
+    let cut = |k: usize| k * kept.len() / BATCHES;
+    let comparisons = rows.len().saturating_sub(1).clamp(1, 3);
+    let gap = |a: usize, b: usize| -> Option<(f64, f64, f64)> {
+        if kept.len() < BATCHES {
+            return None;
+        }
+        let diff = stats::round1(median_of(&vals(b, kept))? - median_of(&vals(a, kept))?);
+        let g: Option<Vec<f64>> = (0..BATCHES)
+            .map(|k| {
+                let bs = [&kept[..cut(k)], &kept[cut(k + 1)..]].concat();
+                // Unrounded: medians rounded to a tenth can leave all ten gaps equal, and the range with no width.
+                let mid = |t: usize| Some(vals(t, &bs)).filter(|v| !v.is_empty()).map(|v| stats::quantile(&v, 0.5));
+                Some(mid(b)? - mid(a)?)
+            })
+            .collect();
+        let g = g?;
+        let mean = g.iter().sum::<f64>() / BATCHES as f64;
+        let se = (g.iter().map(|x| (x - mean).powi(2)).sum::<f64>() * (BATCHES - 1) as f64 / BATCHES as f64).sqrt();
+        let half = T9[comparisons - 1] * se;
+        Some((diff, diff - half, diff + half))
+    };
+    if let Some(lead) = rows.first().map(|r| r.t).filter(|_| enough) {
+        rows[0].call = call.then_some("lead");
+        for r in rows.iter_mut().skip(1) {
+            let Some((diff, lo, hi)) = gap(lead, r.t) else { continue };
+            r.vs = Some(Vs { diff, lo: round2(lo), hi: round2(hi) });
+            r.call = call.then(|| {
+                if lo > margin {
+                    "slower"
+                } else if hi < margin && lo > -margin {
+                    "tie"
+                } else {
+                    "unclear"
+                }
+            });
+        }
+    }
+    (rows, margin)
 }
 
 pub(crate) fn analyze(inp: &Input) -> Analysis {
@@ -314,7 +394,8 @@ pub(crate) fn analyze(inp: &Input) -> Analysis {
     let removed_n = removed.iter().filter(|r| **r).count();
 
     // In the kept bins: a name nobody answered is dropped for all, and a name one resolver answered with a block or an
-    // error that another didn't is out of that resolver's timing.
+    // error that another didn't is out of that resolver's timing. This is kept by name, not by ask: a common name is
+    // asked several times, and one such answer takes all of them out for that resolver.
     let mut seen: HashMap<&str, Seen> = HashMap::new();
     for q in (0..done).filter(|q| !removed[q / PER_BIN]) {
         for &t in &live {
@@ -349,97 +430,68 @@ pub(crate) fn analyze(inp: &Input) -> Analysis {
         by[c.t][c.bin].push(c.ms);
     }
 
+    // The counted queries of the repeat asks (`touch >= 2`) and of all but the first asks, by target, then bin.
+    let mut by_rep: Vec<Vec<Vec<Option<f64>>>> = vec![vec![Vec::new(); nbins]; n];
+    let mut head: Vec<Vec<Vec<Option<f64>>>> = vec![vec![Vec::new(); nbins]; n];
+    for c in &counted {
+        let touch = inp.plan.touch[c.q];
+        if touch >= 2 {
+            by_rep[c.t][c.bin].push(c.ms);
+        }
+        if touch != 1 {
+            head[c.t][c.bin].push(c.ms);
+        }
+    }
+    // The queries of the names asked once, by target, then bin.
+    let mut cold_by: Vec<Vec<Vec<Option<f64>>>> = vec![vec![Vec::new(); nbins]; n];
+    for c in counted.iter().filter(|c| inp.plan.touch[c.q] == 0) {
+        cold_by[c.t][c.bin].push(c.ms);
+    }
+
+    let bin_cell = |v: &[Option<f64>]| {
+        let mut ok: Vec<f64> = v.iter().flatten().copied().collect();
+        ok.sort_by(|a, b| a.total_cmp(b));
+        let sent = v.len() as u32;
+        BinCell {
+            sent,
+            lost: sent - ok.len() as u32,
+            p5: pct(&ok, 0.05),
+            p25: pct(&ok, 0.25),
+            p50: pct(&ok, 0.5),
+            p75: pct(&ok, 0.75),
+            p95: pct(&ok, 0.95),
+        }
+    };
     let bins: Vec<Bin> = (0..nbins)
         .map(|b| {
             let at = slots(b).flat_map(|q| live.iter().filter_map(move |&t| inp.grid[q][t])).map(|s| s.at as i64);
             let (lo, hi) = at.fold((i64::MAX, 0), |(lo, hi), a| (lo.min(a), hi.max(a)));
-            let r = (0..n)
-                .map(|t| {
-                    let mut ok: Vec<f64> = by[t][b].iter().flatten().copied().collect();
-                    ok.sort_by(|a, b| a.total_cmp(b));
-                    let sent = by[t][b].len() as u32;
-                    BinCell {
-                        sent,
-                        lost: sent - ok.len() as u32,
-                        p5: pct(&ok, 0.05),
-                        p25: pct(&ok, 0.25),
-                        p50: pct(&ok, 0.5),
-                        p75: pct(&ok, 0.75),
-                        p95: pct(&ok, 0.95),
-                    }
-                })
-                .collect();
-            Bin { at: lo.min(hi), end: hi, removed: removed[b], r }
+            let r = (0..n).map(|t| bin_cell(&by[t][b])).collect();
+            let rep = (0..n).map(|t| bin_cell(&by_rep[t][b])).collect();
+            Bin { at: lo.min(hi), end: hi, removed: removed[b], r, rep }
+        })
+        .collect();
+    // One cold bin for each run of `COLD_BINS` fine bins, from the once-asked lookups in those that are kept.
+    let cold_bins: Vec<Bin> = (0..nbins.div_ceil(COLD_BINS))
+        .map(|g| {
+            let members = g * COLD_BINS..((g + 1) * COLD_BINS).min(nbins);
+            let kept_in: Vec<usize> = members.clone().filter(|&b| !removed[b]).collect();
+            let r = (0..n).map(|t| bin_cell(&kept_in.iter().flat_map(|&b| cold_by[t][b].iter().copied()).collect::<Vec<_>>())).collect();
+            Bin { at: bins[members.start].at, end: bins[members.end - 1].end, removed: kept_in.is_empty(), r, rep: Vec::new() }
         })
         .collect();
 
     let kept: Vec<usize> = (0..nbins).filter(|&b| !removed[b]).collect();
     let kept_slots: usize = kept.iter().map(|&b| slots(b).len()).sum();
-    let vals = |t: usize, bs: &[usize]| ranked(bs.iter().flat_map(|&b| by[t][b].iter()));
-    let mut rows: Vec<Row> = live
-        .iter()
-        .map(|&t| {
-            let all = vals(t, &kept);
-            let sent = all.len() as u32;
-            let gone = kept.iter().map(|&b| by[t][b].iter().filter(|m| m.is_none()).count() as u32).sum::<u32>();
-            let q = |p: f64| (!all.is_empty()).then(|| stats::round1(stats::quantile(&all, p)));
-            Row {
-                t,
-                sent,
-                lost: gone,
-                loss_pct: if sent == 0 { 0.0 } else { round2(gone as f64 / sent as f64 * 100.0) },
-                blocked: blocked[t],
-                p50: q(0.5),
-                p90: q(0.9),
-                p95: q(0.95),
-                vs: None,
-                call: None,
-            }
-        })
-        .collect();
-    rows.sort_by(|a, b| a.p50.unwrap_or(f64::MAX).total_cmp(&b.p50.unwrap_or(f64::MAX)).then(a.lost.cmp(&b.lost)).then(a.t.cmp(&b.t)));
-    let margin = rows.first().and_then(|r| r.p50).map_or(2.0, |p| f64::max(2.0, stats::round1(0.05 * p)));
     let is_final = done > 0 && done == inp.total;
     let no_verdict = removed_n as f64 > 0.2 * nbins as f64;
+    let call = is_final && !no_verdict;
+    // The first ask of each common name only fills the caches, so the ranking leaves it out.
+    let (rows, margin) = rank(&live, &head, &kept, &blocked, kept_slots >= MIN_SLOTS, call);
 
-    // The gap to the lead: the kept bins cut into ten stretches of consecutive bins, the gap of medians in each, and a
-    // t-interval across the ten around the gap of the whole.
-    let size = kept.len() / BATCHES;
-    let comparisons = rows.len().saturating_sub(1).clamp(1, 3);
-    let gap = |a: usize, b: usize| -> Option<(f64, f64, f64)> {
-        if size == 0 {
-            return None;
-        }
-        let diff = stats::round1(median_of(&vals(b, &kept))? - median_of(&vals(a, &kept))?);
-        let g: Option<Vec<f64>> = (0..BATCHES)
-            .map(|k| {
-                let bs = &kept[k * size..(k + 1) * size];
-                Some(median_of(&vals(b, bs))? - median_of(&vals(a, bs))?)
-            })
-            .collect();
-        let g = g?;
-        let mean = g.iter().sum::<f64>() / BATCHES as f64;
-        let sd = (g.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (BATCHES - 1) as f64).sqrt();
-        let half = T9[comparisons - 1] * sd / (BATCHES as f64).sqrt();
-        Some((diff, diff - half, diff + half))
-    };
-    if let Some(lead) = rows.first().map(|r| r.t).filter(|_| kept_slots >= MIN_SLOTS) {
-        let call = is_final && !no_verdict;
-        rows[0].call = call.then_some("lead");
-        for r in rows.iter_mut().skip(1) {
-            let Some((diff, lo, hi)) = gap(lead, r.t) else { continue };
-            r.vs = Some(Vs { diff, lo: round2(lo), hi: round2(hi) });
-            r.call = call.then(|| {
-                if lo > margin {
-                    "slower"
-                } else if hi < margin && lo > -margin {
-                    "tie"
-                } else {
-                    "unclear"
-                }
-            });
-        }
-    }
+    // The same ranking over the names asked once.
+    let cold_slots = kept.iter().flat_map(|&b| slots(b)).filter(|&q| inp.plan.touch[q] == 0 && !dropped(q)).count();
+    let (cold, cold_margin) = rank(&live, &cold_by, &kept, &vec![0; n], cold_slots >= MIN_COLD_SLOTS, call);
     let loss_flag = matches!((rows.first(), rows.get(1)), (Some(a), Some(b)) if a.loss_pct - b.loss_pct >= 1.0);
 
     // The share answered within each threshold.
@@ -447,9 +499,9 @@ pub(crate) fn analyze(inp: &Input) -> Analysis {
     x.push(LOST_MS);
     let r: Vec<Vec<f64>> = (0..n)
         .map(|t| {
-            let mut ok: Vec<f64> = kept.iter().flat_map(|&b| by[t][b].iter().flatten().copied()).collect();
+            let mut ok: Vec<f64> = kept.iter().flat_map(|&b| head[t][b].iter().flatten().copied()).collect();
             ok.sort_by(|a, b| a.total_cmp(b));
-            let sent = kept.iter().map(|&b| by[t][b].len()).sum::<usize>().max(1) as f64;
+            let sent = kept.iter().map(|&b| head[t][b].len()).sum::<usize>().max(1) as f64;
             x.iter().map(|&v| (ok.partition_point(|&m| m <= v) as f64 / sent * 10_000.0).round() / 10_000.0).collect()
         })
         .collect();
@@ -486,9 +538,20 @@ pub(crate) fn analyze(inp: &Input) -> Analysis {
         }
     }
 
-    let result =
-        ExtResult { is_final, no_verdict, margin, loss_flag, removed_s: removed_n as u32 * BIN_S, dropped_names, rows, ecdf, groups };
-    Analysis { bins, result, shared_cache }
+    let result = ExtResult {
+        is_final,
+        no_verdict,
+        margin,
+        loss_flag,
+        removed_s: removed_n as u32 * BIN_S,
+        dropped_names,
+        rows,
+        cold,
+        cold_margin,
+        ecdf,
+        groups,
+    };
+    Analysis { bins, cold_bins, result, shared_cache }
 }
 
 // ---- The schedule.
@@ -529,8 +592,8 @@ pub(crate) struct Drive<'a> {
     pub plan: &'a Plan,
     pub order: &'a [Vec<u8>],
     pub cancel: &'a AtomicBool,
-    /// Unix ms when the run started.
-    pub started_at: i64,
+    /// The reading of the clock that runs through sleep (`clock::awake_total_ns().1`) when the run started.
+    pub origin_ns: u64,
 }
 
 /// Runs the schedule to the end of the plan or a cancel, with `conns` as each target's connections (none: not
@@ -573,8 +636,8 @@ fn worker(d: &Drive, t: usize, x: &mut dyn Exchanger, jobs: &Mutex<mpsc::Receive
         let kind = if d.plan.touch[q] > 0 { TestKind::Cached } else { TestKind::Uncached };
         // Encoding happens before the send stamp, outside the measured interval.
         let wire = dns::encode_query(dns::new_id(), &QuerySpec::new(d.plan.names[q].clone(), dns::TYPE_A)).ok();
-        let at = (now_ms() - d.started_at).clamp(0, u32::MAX as i64) as u32;
         let sent_ns = clock::awake_total_ns().1;
+        let at = (sent_ns.saturating_sub(d.origin_ns) / 1_000_000).min(u32::MAX as u64) as u32;
         let (o, us, ttl, ip_ttl) = match wire {
             Some(w) => {
                 let res = x.exchange(&w, d.timeout);
@@ -608,7 +671,7 @@ fn schedule(d: &Drive, jobs: Vec<Option<mpsc::Sender<Job>>>, mut pace: impl FnMu
                     Pace::Resumed { since_ns, until_ns, cause } => {
                         // Carry on from the next send, with no burst to catch up.
                         base = awake().saturating_sub(due);
-                        let end = now_ms() - d.started_at;
+                        let end = (clock::awake_total_ns().1.saturating_sub(d.origin_ns) / 1_000_000) as i64;
                         let start = end - (until_ns.saturating_sub(since_ns) / 1_000_000) as i64;
                         let _ = out.send(Msg::Gap { span: (start, end, cause), since_ns, until_ns });
                     }
@@ -617,7 +680,13 @@ fn schedule(d: &Drive, jobs: Vec<Option<mpsc::Sender<Job>>>, mut pace: impl FnMu
                 let now = awake();
                 match (base + due).checked_sub(now).filter(|r| !r.is_zero()) {
                     Some(left) => std::thread::sleep(left.min(Duration::from_millis(50))),
-                    None => break,
+                    None => {
+                        // Held up for a moment too short to be a gap: carry on from here, with no burst to catch up.
+                        if now.saturating_sub(base + due) > Duration::from_secs(1) {
+                            base = now.saturating_sub(due);
+                        }
+                        break;
+                    }
                 }
             }
             if let Some(tx) = &jobs[t as usize] {
@@ -633,9 +702,10 @@ fn reading() -> Reading {
     Reading { awake, total, slept_at: p.slept_at.load(Ordering::Relaxed), woke_at: p.woke_at.load(Ordering::Relaxed) }
 }
 
-/// The watch for sleeps and stalls, as the monitor keeps it, as a [`Pace`] for the scheduler.
+/// The watch for sleeps and stalls, as the monitor keeps it, as a [`Pace`] for the scheduler, which asks at least
+/// every 50 ms.
 fn watch() -> impl FnMut() -> Pace + Send {
-    let mut w = GapWatch::default();
+    let mut w = GapWatch::ticking_every(50_000_000);
     move || {
         let r = reading();
         if !w.tick(r) {
@@ -681,7 +751,7 @@ struct Collector<'a> {
     windows: Vec<(u64, u64)>,
     /// Slots every measured target has an outcome for, from the first.
     done: usize,
-    /// Bins already sent to the UI.
+    /// Slots already sent to the UI.
     emitted: usize,
 }
 
@@ -697,8 +767,9 @@ impl Collector<'_> {
                 while self.done < self.total && self.row_complete(self.done) {
                     self.done += 1;
                 }
-                if self.done / PER_BIN > self.emitted {
-                    self.emit((self.done / PER_BIN) * PER_BIN);
+                let upto = (self.done / EMIT_EVERY) * EMIT_EVERY;
+                if upto > self.emitted {
+                    self.emit(upto);
                 }
             }
             Ev::Msg(Msg::Gap { span, since_ns, until_ns }) => {
@@ -735,8 +806,7 @@ impl Collector<'_> {
     /// Marks what was sent in `window` and never answered, though it was recorded before the sleep was known.
     fn excuse(&mut self, (lo, hi): (u64, u64)) {
         self.flush();
-        let from = self.sent_ns.len().saturating_sub(256);
-        let hits: Vec<usize> = (from..self.sent_ns.len()).filter(|&i| self.sent_ns[i] >= lo && self.sent_ns[i] < hi).collect();
+        let hits: Vec<usize> = (0..self.sent_ns.len()).filter(|&i| self.sent_ns[i] >= lo && self.sent_ns[i] < hi).collect();
         let grid = &mut self.grid;
         self.h.with(|s| {
             for i in hits {
@@ -751,7 +821,8 @@ impl Collector<'_> {
         });
     }
 
-    /// Reads the first `upto` slots and sends the bins, gaps and result. Bins not yet sent go in the event.
+    /// Reads the first `upto` slots and sends the bins, gaps and result. Every bin goes in the event: a late answer or
+    /// a sleep can change one already sent.
     fn emit(&mut self, upto: usize) -> Analysis {
         self.flush();
         let a = analyze(&Input {
@@ -761,26 +832,24 @@ impl Collector<'_> {
             live: self.live,
             total: self.total,
         });
-        let from = self.emitted.min(a.bins.len());
-        let (bins, gaps, result) = (a.bins.clone(), self.gaps.clone(), a.result.clone());
+        let (bins, cold_bins, gaps, result) = (a.bins.clone(), a.cold_bins.clone(), self.gaps.clone(), a.result.clone());
         self.h.publish(|s| {
             let e = s.extended.as_mut().expect("extended state is set before the schedule starts");
-            let new = bins[from..].to_vec();
             e.bins = bins;
+            e.cold_bins = cold_bins;
             e.gaps = gaps;
             e.result = result;
-            json!({"type": "extended", "bins": new, "gaps": e.gaps, "result": e.result})
+            json!({"type": "extended", "bins": e.bins, "cold_bins": e.cold_bins, "gaps": e.gaps, "result": e.result})
         });
-        self.emitted = a.bins.len();
+        self.emitted = upto;
         a
     }
 }
 
 pub(crate) fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
     let timeout = Duration::from_millis(QUERY_TIMEOUT_MS);
-    let t0 = Instant::now();
 
-    // ---- Setup: the targets, then the names (fetched through the system's DNS, before anything is timed).
+    // ---- Setup: the targets, then the names.
     h.phase("setup", 0);
     let set = Setup::new(cfg);
     let mut plan = bench::expand(set, cfg, selected, deps.client_v6, timeout, h);
@@ -795,7 +864,7 @@ pub(crate) fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &
         s.targets = plan.iter().map(|(t, _)| t.clone()).collect();
         json!({"type": "targets", "targets": s.targets})
     });
-    let source = deps.rt.block_on(namelist::tail_source(&deps.store, now_ms()));
+    let source = namelist::bundled(deps.env.pointer("/vantage/geo/country").and_then(|c| c.as_str()));
     let seed = fastrand::u64(..1 << 53);
     let names = namelist::plan(cfg.samples as usize, &source, seed);
     let total = names.names.len();
@@ -803,7 +872,11 @@ pub(crate) fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &
     deps.measuring.store(true, Ordering::SeqCst);
     let xs = bench::open_targets(set, h, &plan, timeout);
     h.emit_targets();
-    let pinger = (!link::disabled()).then(|| link::start(t0));
+    // One clock for the link samples and the lookups: counted from the run's start, sleep included.
+    let started_at = h.with(|s| s.started_at);
+    let origin_ns = clock::awake_total_ns().1.saturating_sub((now_ms() - started_at).max(0) as u64 * 1_000_000);
+    let since_ms = move || (clock::awake_total_ns().1.saturating_sub(origin_ns) / 1_000_000).min(u32::MAX as u64) as u32;
+    let pinger = (!link::disabled()).then(|| link::start(since_ms));
 
     // ---- Warm-up: one lookup on every connection, so none starts cold.
     let mut conns: Vec<Vec<Box<dyn Exchanger>>> = std::thread::scope(|sc| {
@@ -868,7 +941,6 @@ pub(crate) fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &
     }
 
     // ---- The measured phase.
-    let started_at = h.with(|s| s.started_at);
     let live_ids: Vec<u8> = (0..live.len()).filter(|&t| live[t]).map(|t| t as u8).collect();
     let order: Vec<Vec<u8>> = (0..total)
         .map(|_| {
@@ -882,6 +954,7 @@ pub(crate) fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &
             total: total as u32,
             per_bin: PER_BIN as u32,
             bin_s: BIN_S,
+            cold_bin_s: BIN_S * COLD_BINS as u32,
             gap_ms: GAP_MS as u32,
             timeout_ms: QUERY_TIMEOUT_MS as u32,
             names: NamesUsed {
@@ -891,10 +964,13 @@ pub(crate) fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &
                 seed,
                 common: names.touch.iter().filter(|&&k| k == 1).count() as u32,
                 tail: names.touch.iter().filter(|&&k| k == 0).count() as u32,
+                region: source.region,
+                regional: source.regional.len().min(names.touch.iter().filter(|&&k| k == 0).count()) as u32,
             },
             plan: names.clone(),
             order: order.clone(),
             bins: Vec::new(),
+            cold_bins: Vec::new(),
             gaps: Vec::new(),
             result: ExtResult::default(),
         });
@@ -918,7 +994,7 @@ pub(crate) fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &
         emitted: 0,
     };
     let keep_awake = power::KeepAwake::hold();
-    let d = Drive { slot: Duration::from_millis(GAP_MS), timeout, plan: &names, order: &order, cancel: &h.cancel, started_at };
+    let d = Drive { slot: Duration::from_millis(GAP_MS), timeout, plan: &names, order: &order, cancel: &h.cancel, origin_ns };
     drive(&d, conns, watch(), &mut |ev| collector.on(ev));
     drop(keep_awake);
 
@@ -1003,6 +1079,130 @@ mod tests {
         run_on(&grid(slots, f), slots, &ordered(slots))
     }
 
+    /// Four slots in five ask a common name; the fifth is a tail name.
+    fn mixed(slots: usize, total: usize, f: impl Fn(usize, usize) -> (Outcome, f64)) -> Analysis {
+        let plan = Plan {
+            names: (0..total).map(|q| format!("q{q}.example.com")).collect(),
+            touch: (0..total).map(|q| if q % 5 == 0 { 0 } else { 1 + (q % 8) as u8 }).collect(),
+        };
+        analyze(&Input { grid: &grid(slots, f), plan: &plan, order: &ordered(total), live: &[true, true], total })
+    }
+
+    /// A is quicker on common names and slower on tail names; common names are most of the run.
+    fn a_leads_but_b_is_quicker_cold(q: usize, t: usize) -> (Outcome, f64) {
+        let cold = q.is_multiple_of(5);
+        (
+            Outcome::Ok,
+            match (t, cold) {
+                (0, false) => 10.0,
+                (0, true) => 40.0,
+                _ => 30.0,
+            },
+        )
+    }
+
+    #[test]
+    fn the_cold_ranking_uses_only_the_once_asked_names() {
+        let a = mixed(1000, 1000, a_leads_but_b_is_quicker_cold);
+        let r = &a.result;
+        assert_eq!((r.rows[0].t, r.rows[0].p50), (0, Some(10.0)));
+        assert_eq!(r.cold.iter().map(|c| c.t).collect::<Vec<_>>(), vec![1, 0]);
+        assert_eq!((r.cold[0].sent, r.cold[0].p50), (200, Some(30.0)));
+        assert_eq!(r.cold[0].call, Some("lead"));
+        assert_eq!(r.cold[1].call, Some("slower"));
+        assert_eq!(r.cold[1].vs.as_ref().unwrap().diff, 10.0);
+        assert_eq!(r.cold_margin, 3.0);
+    }
+
+    #[test]
+    fn cold_calls_wait_for_the_end_of_the_run() {
+        let a = mixed(1000, 2000, a_leads_but_b_is_quicker_cold);
+        let r = &a.result;
+        assert!(!r.is_final);
+        assert!(r.cold[1].vs.is_some());
+        assert!(r.cold.iter().all(|c| c.call.is_none()));
+    }
+
+    #[test]
+    fn too_few_once_asked_slots_give_no_cold_range() {
+        // 90 of 450 slots are tail names.
+        let a = mixed(450, 450, a_leads_but_b_is_quicker_cold);
+        assert_eq!(a.result.cold.len(), 2);
+        assert!(a.result.cold[1].vs.is_none() && a.result.cold.iter().all(|c| c.call.is_none()));
+    }
+
+    /// Every fifth slot is a tail name; the rest ask a common name, for the first time in the first eighth and again after.
+    fn phased(total: usize, f: impl Fn(usize, usize) -> (Outcome, f64)) -> (Analysis, Plan) {
+        let plan = Plan {
+            names: (0..total).map(|q| format!("q{q}.example.com")).collect(),
+            touch: (0..total)
+                .map(|q| {
+                    if q.is_multiple_of(5) {
+                        0
+                    } else if q < total / 8 {
+                        1
+                    } else {
+                        2
+                    }
+                })
+                .collect(),
+        };
+        let a = analyze(&Input { grid: &grid(total, f), plan: &plan, order: &ordered(total), live: &[true, true], total });
+        (a, plan)
+    }
+
+    #[test]
+    fn the_headline_leaves_out_first_asks() {
+        let touch = |q: usize| {
+            if q.is_multiple_of(5) {
+                0
+            } else if q < 125 {
+                1
+            } else {
+                2
+            }
+        };
+        let (a, plan) = phased(1000, |q, t| (Outcome::Ok, if t == 0 { if touch(q) == 1 { 300.0 } else { 10.0 } } else { 30.0 }));
+        let counted = plan.touch.iter().filter(|&&k| k != 1).count() as u32;
+        let row = a.result.rows.iter().find(|r| r.t == 0).unwrap();
+        assert_eq!((row.sent, row.p50), (counted, Some(10.0)));
+        assert_eq!(a.result.rows[0].t, 0);
+        let first = a.result.groups.iter().find(|g| g.key == "common_first").unwrap();
+        assert_eq!(first.count, plan.touch.iter().filter(|&&k| k == 1).count() as u32);
+        assert_eq!(first.r[0].p50, Some(300.0));
+    }
+
+    #[test]
+    fn repeat_cells_leave_out_first_asks_and_tail_names() {
+        let (a, plan) = phased(1000, |q, _| (Outcome::Ok, 20.0 + noise(q)));
+        assert_eq!(a.bins[0].rep.len(), 2);
+        assert_eq!(a.bins[0].rep[0].sent, 0);
+        for b in [4, 10] {
+            let later = (b * PER_BIN..(b + 1) * PER_BIN).filter(|&q| plan.touch[q] >= 2).count() as u32;
+            assert_eq!(a.bins[b].rep[1].sent, later);
+            assert_eq!(a.bins[b].r[1].sent, 50);
+        }
+    }
+
+    #[test]
+    fn cold_bins_hold_the_once_asked_lookups() {
+        let (a, _) = phased(1000, |q, _| (Outcome::Ok, 20.0 + noise(q)));
+        assert_eq!(a.cold_bins.len(), a.bins.len().div_ceil(COLD_BINS));
+        for t in 0..2 {
+            let row = a.result.cold.iter().find(|r| r.t == t).unwrap();
+            assert_eq!(a.cold_bins.iter().map(|b| b.r[t].sent).sum::<u32>(), row.sent);
+        }
+        assert!(a.cold_bins.iter().all(|b| b.rep.is_empty() && !b.removed));
+        assert_eq!((a.cold_bins[1].at, a.cold_bins[1].end), (a.bins[5].at, a.bins[9].end));
+    }
+
+    #[test]
+    fn a_cold_bin_is_removed_when_all_its_bins_are() {
+        let (a, _) = phased(1000, |q, _| if q < 250 { (Outcome::Timeout, 0.0) } else { (Outcome::Ok, 20.0) });
+        assert!(a.cold_bins[0].removed && !a.cold_bins[1].removed);
+        assert_eq!(a.cold_bins[0].r[0].sent, 0);
+    }
+
     #[test]
     fn same_resolver_twice_is_a_tie() {
         let a = simple(1000, |q, t| (Outcome::Ok, 20.0 + noise(q + t * 5)));
@@ -1015,7 +1215,8 @@ mod tests {
 
     #[test]
     fn known_gap_is_slower_with_the_known_range() {
-        // Ten bins make ten batches of one; each bin's gap is 9 or 11 ms, so they have mean 10 and sd 1.054; t for one comparison is 2.262.
+        // Ten bins make ten batches of one. Leaving one out moves the gap to 9 or 11 ms, so the ten have mean 10 and a standard error of 3;
+        // t for one comparison is 2.262.
         let a = simple(500, |q, t| {
             (
                 Outcome::Ok,
@@ -1030,8 +1231,37 @@ mod tests {
         });
         let v = a.result.rows[1].vs.clone().unwrap();
         assert_eq!(a.result.rows[1].call, Some("slower"));
-        assert_eq!(v, Vs { diff: 10.0, lo: 9.25, hi: 10.75 });
-        assert_eq!(a.result.margin, 2.0);
+        assert_eq!(v, Vs { diff: 10.0, lo: 3.21, hi: 16.79 });
+        assert_eq!(a.result.margin, 3.0);
+    }
+
+    #[test]
+    fn a_gap_that_moves_by_hundredths_still_has_a_range() {
+        // Leaving a stretch out moves the gap by 0.02 ms, which medians rounded to a tenth would hide.
+        let a = simple(500, |q, t| {
+            (
+                Outcome::Ok,
+                if t == 0 {
+                    20.0
+                } else if (q / PER_BIN).is_multiple_of(2) {
+                    29.99
+                } else {
+                    30.01
+                },
+            )
+        });
+        let v = a.result.rows[1].vs.clone().unwrap();
+        assert!(v.lo < v.hi, "{v:?}");
+    }
+
+    #[test]
+    fn the_last_bins_are_left_out_in_turn_too() {
+        // Fourteen bins, six at 29 ms and eight at 31: the median moves only when two of the eight go together,
+        // as they do in the last stretch.
+        let second = |q: usize| if q / PER_BIN < 6 { 29.0 } else { 31.0 };
+        let a = simple(700, |q, t| (Outcome::Ok, if t == 0 { 20.0 } else { second(q) }));
+        let v = a.result.rows[1].vs.clone().unwrap();
+        assert!(v.lo < v.hi, "{v:?}");
     }
 
     #[test]
@@ -1161,6 +1391,7 @@ mod tests {
             total: 50,
             per_bin: 50,
             bin_s: 15,
+            cold_bin_s: 75,
             gap_ms: 300,
             timeout_ms: 2000,
             names: NamesUsed {
@@ -1170,17 +1401,38 @@ mod tests {
                 seed: 7,
                 common: 5,
                 tail: 40,
+                region: None,
+                regional: 0,
             },
             plan: plan(50),
             order: ordered(50),
             bins: a.bins,
+            cold_bins: a.cold_bins,
             gaps: vec![(1000, 5000, "sleep")],
             result: a.result,
         };
         let v = serde_json::to_value(&e).unwrap();
-        for k in ["total", "per_bin", "bin_s", "gap_ms", "timeout_ms", "names", "plan", "order", "bins", "gaps", "result"] {
+        for k in [
+            "total",
+            "per_bin",
+            "bin_s",
+            "cold_bin_s",
+            "gap_ms",
+            "timeout_ms",
+            "names",
+            "plan",
+            "order",
+            "bins",
+            "cold_bins",
+            "gaps",
+            "result",
+        ] {
             assert!(v.get(k).is_some(), "{k}");
         }
+        assert!(v["bins"][0]["rep"].is_array());
+        assert_eq!(v["cold_bin_s"], 75);
+        assert!(v["cold_bins"][0].get("rep").is_none());
+        assert_eq!(v["cold_bins"][0]["r"][0]["sent"], 50);
         for k in ["final", "no_verdict", "margin", "loss_flag", "removed_s", "dropped_names", "rows", "ecdf", "groups"] {
             assert!(v["result"].get(k).is_some(), "{k}");
         }
@@ -1236,7 +1488,7 @@ mod tests {
             plan: &p,
             order: &order,
             cancel: &cancel,
-            started_at: now_ms(),
+            origin_ns: clock::awake_total_ns().1,
         };
         let (mut samples, mut gaps) = (Vec::new(), 0);
         drive(&d, conns, pace, &mut |ev| match ev {
@@ -1278,6 +1530,24 @@ mod tests {
         });
         assert_eq!(samples.len(), 12);
         assert_eq!(gaps, 1);
+    }
+
+    #[test]
+    fn a_short_stall_is_not_caught_up_in_a_burst() {
+        let mut n = 0;
+        let (log, samples, gaps) = run_fake(8, move || {
+            n += 1;
+            if n == 3 {
+                std::thread::sleep(Duration::from_millis(1100));
+            }
+            Pace::Go
+        });
+        assert_eq!((samples.len(), gaps), (16, 0));
+        // Target 0's sends are 15 or 45 ms apart; the slots that came due during the stall still are.
+        let mut t0: Vec<Instant> = log.iter().filter(|(t, _)| *t == 0).map(|(_, at)| *at).collect();
+        t0.sort();
+        let close = t0.windows(2).filter(|w| w[1].duration_since(w[0]) < Duration::from_millis(5)).count();
+        assert!(close <= 1, "{close} sends within 5 ms of the one before");
     }
 
     #[test]

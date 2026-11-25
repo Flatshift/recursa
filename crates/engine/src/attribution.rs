@@ -1,6 +1,6 @@
 //! The pure pieces of the monitor's drop attribution: when a cycle may count at all (sleep, stalls and the
-//! settling after them), which resolvers are one operator, and what a failed cycle is down to. No clock, OS,
-//! network or store calls: the monitor loop feeds readings in and acts on what comes out.
+//! settling after them), which resolvers are one operator, what a failed cycle is down to, and which resolver is
+//! checked when. No clock, OS, network or store calls: the monitor loop feeds readings in and acts on what comes out.
 
 use crate::catalog::{self, Resolver};
 use std::collections::{BTreeSet, HashMap};
@@ -109,9 +109,16 @@ pub(crate) struct GapWatch {
     /// A will-sleep stamp given up on as a lost wake.
     lost: u64,
     gap: Option<Gap>,
+    /// How often the caller ticks, when not every `TICK_NS`.
+    every: Option<u64>,
 }
 
 impl GapWatch {
+    /// A watch for a loop that ticks every `ns`, so a stall is measured against that.
+    pub(crate) fn ticking_every(ns: u64) -> Self {
+        Self { every: Some(ns), ..Self::default() }
+    }
+
     /// A tick of the loop. Whether a cycle may start now.
     pub(crate) fn tick(&mut self, now: Reading) -> bool {
         self.observe(now, true);
@@ -167,7 +174,7 @@ impl GapWatch {
         }
         let d_total = now.total.saturating_sub(prev.total);
         let slept = d_total.saturating_sub(now.awake.saturating_sub(prev.awake));
-        let late = d_total.saturating_sub(TICK_NS);
+        let late = d_total.saturating_sub(self.every.unwrap_or(TICK_NS));
         let new_sleep = now.slept_at != self.seen_slept;
         let new_wake = now.woke_at != self.seen_woke;
         self.seen_slept = now.slept_at;
@@ -296,6 +303,60 @@ pub(crate) fn attribute(cycle: &[(usize, bool, bool)]) -> Vec<Option<Cause>> {
     cycle.iter().map(|(_, _, ok)| (!ok).then_some(cause)).collect()
 }
 
+/// A check falling a slot later than this restarts the schedule from now.
+const LATE_MS: i64 = 30_000;
+
+/// The monitor's next check.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Check {
+    /// One resolver alone: its place in the monitored list.
+    One(usize),
+    /// Every resolver at once.
+    All,
+}
+
+/// Spreads the checks through the interval, one resolver at a time, so no two resolvers are queried together. After a
+/// round of all of them in which one answered nothing, it asks for such a round once per interval until every resolver
+/// answers in one. Times are in ms.
+#[derive(Debug, Default)]
+pub(crate) struct Spread {
+    /// What the next check is timed from: the last check's slot, or the last round.
+    at: i64,
+    /// The resolver to check next.
+    next: usize,
+    /// A resolver answered nothing in the last round.
+    round: bool,
+}
+
+impl Spread {
+    /// The check due at `now` among `n` resolvers, each checked once per `every`. Timed from the current interval, so
+    /// shortening it applies at once.
+    pub(crate) fn due(&self, now: i64, n: usize, every: i64) -> Option<Check> {
+        let step = if self.round { every } else { every / n.max(1) as i64 };
+        if now < self.at + step {
+            return None;
+        }
+        Some(if self.round || n < 2 { Check::All } else { Check::One(self.next % n) })
+    }
+
+    /// The check due at `now` ran. `round` is set when every resolver was checked at once, to whether each answered.
+    pub(crate) fn done(&mut self, now: i64, n: usize, every: i64, round: Option<bool>) {
+        match round {
+            Some(all) => {
+                self.round = !all;
+                self.at = now;
+            }
+            None => {
+                // The next slot follows this one's due time, not the tick that ran it, so slots don't drift. There is
+                // no catching up after a pause: the schedule restarts from now.
+                let due = self.at + every / n.max(1) as i64;
+                self.at = if now - due > LATE_MS { now } else { due };
+            }
+        }
+        self.next = self.next.wrapping_add(1);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,6 +417,23 @@ mod tests {
         assert!(!w.tick(at(160, 160)));
         assert!(w.tick(at(170, 170)));
         assert_eq!(w.end_cycle(at(172, 172), true), Verdict::Keep(Some(Gap { cause: GapCause::Stall, since: secs(110) })));
+    }
+
+    #[test]
+    fn a_fast_loop_sees_a_stall_its_own_tick_would_hide() {
+        // Eight seconds between readings: within a ten-second tick, a stall for a loop that ticks every 50 ms.
+        let mut slow = GapWatch::default();
+        assert!(slow.tick(at(100, 100)));
+        assert!(slow.tick(at(108, 108)));
+        assert!(!slow.in_gap());
+        let mut fast = GapWatch::ticking_every(S / 20);
+        assert!(fast.tick(at(100, 100)));
+        assert!(!fast.tick(at(108, 108)));
+        for t in 109..123 {
+            assert!(!fast.tick(at(t, t)), "{t}");
+        }
+        assert!(fast.tick(at(123, 123)));
+        assert_eq!(fast.end_cycle(at(123, 123), true), Verdict::Keep(Some(Gap { cause: GapCause::Stall, since: secs(100) })));
     }
 
     #[test]
@@ -562,5 +640,92 @@ mod tests {
         // An operator with one answered resolver is answered.
         assert_eq!(attribute(&[(0, true, false), (0, true, true), (1, true, false)]), [Some(Isolated), None, Some(Isolated)]);
         assert!(attribute(&[]).is_empty());
+    }
+
+    /// The schedule on the monitor's 10-second tick from `t0` to `t1`, every resolver answering: each check and its time.
+    fn run(s: &mut Spread, t0: i64, t1: i64, n: usize, every: i64) -> Vec<(i64, Check)> {
+        let mut ran = Vec::new();
+        let mut now = t0;
+        while now <= t1 {
+            while let Some(c) = s.due(now, n, every) {
+                s.done(now, n, every, (c == Check::All).then_some(true));
+                ran.push((now, c));
+            }
+            now += 10_000;
+        }
+        ran
+    }
+
+    #[test]
+    fn checks_take_turns_evenly_through_the_interval() {
+        let (t0, every) = (1_000_000_000, 300_000);
+        let ran = run(&mut Spread::default(), t0, t0 + 10 * every, 7, every);
+        // One resolver at a time, in order.
+        assert_eq!(ran.len(), 71);
+        for (k, (_, c)) in ran.iter().enumerate() {
+            assert_eq!(*c, Check::One(k % 7));
+        }
+        // Never two on one tick, and each resolver once per interval.
+        assert!(ran.windows(2).all(|w| w[1].0 - w[0].0 >= 40_000));
+        assert!(ran.iter().zip(&ran[7..]).all(|(a, b)| b.0 - a.0 == every));
+    }
+
+    #[test]
+    fn slots_shorter_than_a_tick_run_one_after_another() {
+        let t0 = 1_000_000_000;
+        let ran = run(&mut Spread::default(), t0, t0 + 10_000, 24, 60_000);
+        let on = |t: i64| ran.iter().filter(|(at, _)| *at == t).map(|(_, c)| *c).collect::<Vec<_>>();
+        assert_eq!(on(t0), [Check::One(0)]);
+        assert_eq!(on(t0 + 10_000), [Check::One(1), Check::One(2), Check::One(3), Check::One(4)]);
+    }
+
+    #[test]
+    fn a_pause_is_not_caught_up() {
+        let (t0, every) = (1_000_000_000, 300_000);
+        let mut s = Spread::default();
+        assert_eq!(s.due(t0, 5, every), Some(Check::One(0)));
+        s.done(t0, 5, every, None);
+        assert_eq!(s.due(t0 + 59_999, 5, every), None);
+        assert_eq!(s.due(t0 + 60_000, 5, every), Some(Check::One(1)));
+        s.done(t0 + 60_000, 5, every, None);
+        // Twenty-five minutes with no check (a run, a sleep): one is due, not the five that were missed.
+        let later = t0 + 60_000 + 1_500_000;
+        assert_eq!(s.due(later, 5, every), Some(Check::One(2)));
+        s.done(later, 5, every, None);
+        assert_eq!(s.due(later + 59_999, 5, every), None);
+        assert_eq!(s.due(later + 60_000, 5, every), Some(Check::One(3)));
+    }
+
+    #[test]
+    fn an_unanswered_resolver_keeps_every_resolver_checked_together() {
+        let (t0, every) = (1_000_000_000, 300_000);
+        let mut s = Spread::default();
+        // A round of all three in which one answered nothing.
+        s.done(t0, 3, every, Some(false));
+        assert_eq!(s.due(t0 + 100_000, 3, every), None);
+        assert_eq!(s.due(t0 + every - 1, 3, every), None);
+        assert_eq!(s.due(t0 + every, 3, every), Some(Check::All));
+        s.done(t0 + every, 3, every, Some(false));
+        assert_eq!(s.due(t0 + 2 * every - 1, 3, every), None);
+        assert_eq!(s.due(t0 + 2 * every, 3, every), Some(Check::All));
+        // All three answer: back to one at a time.
+        s.done(t0 + 2 * every, 3, every, Some(true));
+        assert_eq!(s.due(t0 + 2 * every + 99_999, 3, every), None);
+        assert!(matches!(s.due(t0 + 2 * every + 100_000, 3, every), Some(Check::One(_))));
+    }
+
+    #[test]
+    fn one_resolver_or_none_is_checked_as_a_round() {
+        assert_eq!(Spread::default().due(1_000_000_000, 0, 60_000), Some(Check::All));
+        assert_eq!(Spread::default().due(1_000_000_000, 1, 60_000), Some(Check::All));
+    }
+
+    #[test]
+    fn a_shorter_interval_applies_at_once() {
+        let t0 = 1_000_000_000;
+        let mut s = Spread::default();
+        s.done(t0, 4, 3_600_000, None);
+        assert_eq!(s.due(t0 + 60_000, 4, 3_600_000), None);
+        assert_eq!(s.due(t0 + 60_000, 4, 60_000), Some(Check::One(1)));
     }
 }

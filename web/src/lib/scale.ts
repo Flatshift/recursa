@@ -21,11 +21,11 @@ export function logDomain(lo: number, hi: number): [number, number] {
   return d;
 }
 
-/** 1-2-5 ticks when there's room, decades only when narrow. */
-export function logTicks(domain: [number, number], width: number): number[] {
+/** 1-2-5 ticks when there's room, decades only when narrow. `room` is the pixels a decade needs for all three. */
+export function logTicks(domain: [number, number], width: number, room = 110): number[] {
   const inside = NICE.filter((t) => t >= domain[0] && t <= domain[1]);
   const perDecade = width / Math.log10(domain[1] / domain[0]);
-  return perDecade < 110 ? inside.filter((t) => DECADES.includes(t)) : inside;
+  return perDecade < room ? inside.filter((t) => DECADES.includes(t)) : inside;
 }
 
 /** Map a value in ms to [x0, x1], clamped to the domain. */

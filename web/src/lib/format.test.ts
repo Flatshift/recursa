@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { monitoredCount, resolverName } from './format';
+import { isPrivate, monitoredCount, resolverName } from './format';
 import type { Resolver } from './types';
 
 const r = (id: string, extra: Partial<Resolver> = {}) => ({ id, ...extra }) as Resolver;
@@ -19,5 +19,12 @@ describe('resolverName', () => {
     expect(resolverName([], 'mullvad')).toBe('Mullvad Unfiltered');
     expect(resolverName([], 'adguard')).toBe('AdGuard Default');
     expect(resolverName([], 'custom-9')).toBe('custom-9');
+  });
+});
+
+describe('isPrivate', () => {
+  it('is true for on-network addresses and false for public ones', () => {
+    for (const ip of ['192.168.1.1', '10.0.0.53', '172.16.0.1', 'fd00::1', 'feb0::1']) expect(isPrivate(ip)).toBe(true);
+    for (const ip of ['192.0.2.1', '2001:db8::1']) expect(isPrivate(ip)).toBe(false);
   });
 });

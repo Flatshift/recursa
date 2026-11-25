@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bandPath, fitSpans, lastFilled, linePath, lossClass, lossHeight, slotAt, slotGrid, spreadLabels, timeTicks, type OverTimeCell, type OverTimeSeries } from './overtime';
+import { bandPath, blendSeries, fitSpans, lastFilled, linePath, lossClass, lossHeight, slotAt, slotGrid, spreadLabels, timeTicks, type OverTimeCell, type OverTimeSeries } from './overtime';
 
 const cell = (t0: number, w = 15_000, over: Partial<OverTimeCell> = {}): OverTimeCell => ({ t0, t1: t0 + w, p5: 4, p25: 5, p50: 6, p75: 8, p95: 12, sent: 50, lost: 0, ...over });
 const series = (cells: (OverTimeCell | null)[]): OverTimeSeries => ({ id: 'a', name: 'Example', cells });
@@ -11,6 +11,20 @@ describe('slotGrid', () => {
   it('spans the longest series and is null with no cell', () => {
     expect(slotGrid([series([cell(0)]), series([cell(0), null, null])])?.n).toBe(3);
     expect(slotGrid([series([null, null])])).toBeNull();
+  });
+});
+
+describe('blendSeries', () => {
+  const a = [series([cell(0, 15_000, { p50: 10 }), null])];
+  const b = [series([cell(0, 15_000, { p50: 1000 }), cell(15_000)])];
+  it('eases a cell in log space', () => {
+    expect(blendSeries(a, b, 0)[0].cells[0]?.p50).toBeCloseTo(10);
+    expect(blendSeries(a, b, 0.5)[0].cells[0]?.p50).toBeCloseTo(100);
+    expect(blendSeries(a, b, 1)[0].cells[0]?.p50).toBeCloseTo(1000);
+  });
+  it('shows a new cell as it is and keeps the counts', () => {
+    expect(blendSeries(a, b, 0)[0].cells[1]).toEqual(cell(15_000));
+    expect(blendSeries(a, b, 0.5)[0].cells[0]?.sent).toBe(50);
   });
 });
 

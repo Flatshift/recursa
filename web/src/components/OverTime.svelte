@@ -1,23 +1,33 @@
 <script lang="ts">
-  // Response time over time on one shared axis: the medians together on a log scale, then one small panel per series
-  // with its median line, middle half (p25 to p75) and nine in ten (p5 to p95), and under each a strip of lost queries.
-  // Gaps and left-out stretches are hatched across every panel and named. Pointer and arrow keys share one cursor.
-  import type { OverTimeGap, OverTimeMark, OverTimeOutage, OverTimeSeries } from '../lib/overtime';
-  import { bandPath, fitSpans, lastFilled, linePath, lossClass, lossHeight, slotAt, slotGrid, spreadLabels, timeTicks } from '../lib/overtime';
+  // Response time over time on one shared axis: the medians together on a log scale, then, behind a toggle, one small
+  // panel per series with its median line, middle half (p25 to p75) and nine in ten (p5 to p95), and under each a strip of lost queries.
+  // Gaps and left-out stretches are hatched across every panel and named. A stretch where the series slowed together
+  // keeps its data under a plain tint, with a cap whose shape says where the cause sits. Pointer and arrow keys share one cursor.
+  import { untrack } from 'svelte';
+  import { Tween } from 'svelte/motion';
+  import type { OverTimeGap, OverTimeMark, OverTimeOutage, OverTimeSeries, OverTimeSlow } from '../lib/overtime';
+  import { REVEAL, ZOOM, reduceMotion } from '../lib/motion';
+  import { SLOW_FAMILY, bandPath, blendSeries, fitSpans, lastFilled, linePath, lossClass, lossHeight, slotAt, slotGrid, spreadLabels, timeTicks } from '../lib/overtime';
   import { logDomain, logScale, logTicks, tickLabel } from '../lib/scale';
   import { ms } from '../lib/format';
+  import Icon from './Icon.svelte';
 
   let {
     series,
     gaps,
+    slows = [],
     marks = [],
     outages = [],
     cursor = $bindable(null),
     formatTime,
     unit,
+    totals,
+    totalsLabel,
+    slots,
   }: {
     series: OverTimeSeries[];
     gaps: OverTimeGap[];
+    slows?: OverTimeSlow[];
     marks?: OverTimeMark[];
     outages?: OverTimeOutage[];
     /** The slot under the pointer or the keyboard, shared with whatever else lists these times. */
@@ -25,12 +35,21 @@
     formatTime: (t: number) => string;
     /** What one cell is called: "15-second bin", "hour". */
     unit: string;
+    /** Each series' median over the whole chart, read out under it until a bin is picked. */
+    totals?: (number | null | undefined)[];
+    /** What `totals` covers: "Whole run", "So far". */
+    totalsLabel?: string;
+    /** While a run sends: the slots it will fill. The chart keeps that width and fills from the left, easing each update in. */
+    slots?: number;
   } = $props();
 
   const uid = $props.id();
   const PAD_L = 44;
   const OV_TOP = 30;
-  const OV_H = 84;
+  const OV_H = 150;
+  // A value axis stacks its labels, so a decade needs far less room for 1-2-5 ticks than a time axis does.
+  const TICK_ROOM = 46;
+  const MINOR_ROOM = 22;
   const OV_BOTTOM = OV_TOP + OV_H;
 
   let W = $state(0);
@@ -39,20 +58,29 @@
   let live = $state('');
 
   const grid = $derived(slotGrid(series));
-  const N = $derived(grid?.n ?? 0);
+  // The slots with data; a live run is drawn to all it will fill, so the chart keeps one width as it fills.
+  const edge = $derived(grid?.n ?? 0);
+  const growing = $derived(slots != null);
+  const N = $derived(grid ? Math.max(edge, slots ?? 0) : 0);
   const wide = $derived(W >= 620);
   const padR = $derived(wide ? 128 : 10);
   const pw = $derived(Math.max(40, W - PAD_L - padR));
   const slotW = $derived(N ? pw / N : pw);
-  // More than four series: nothing is coloured by identity; the panels carry the names.
-  const many = $derived(series.length > 4);
+  // Six identity colours (--r-1 to --r-6); past that nothing is coloured by identity and the panels carry the names.
+  const many = $derived(series.length > 6);
   const colour = (i: number) => (many ? 'var(--ink)' : `var(--r-${i + 1})`);
-  const panelH = $derived(many ? 44 : 58);
+  const panelH = $derived(many ? 44 : 160);
   const pitch = $derived(panelH + 38);
   const first = $derived(OV_BOTTOM + 34);
   const rowTop = (i: number) => first + i * pitch;
   const lastBottom = $derived(series.length ? rowTop(series.length - 1) + panelH + 16 : OV_BOTTOM);
   const H = $derived(lastBottom + 30);
+  // The medians chart ends at its own time axis; the panels open below it in a second chart that keeps these
+  // coordinates, so its view starts at B0 and its tints at BT, just above the first panel's name.
+  const HA = OV_BOTTOM + 30;
+  const B0 = $derived(first - 28);
+  const BT = $derived(first - 22);
+  let open = $state(false);
 
   const xb = (i: number) => PAD_L + i * slotW;
   const xm = (i: number) => xb(i) + slotW / 2;
@@ -66,35 +94,94 @@
       for (const c of s.cells) if (c) for (const v of pick(c)) if (v != null && v > 0) (lo = Math.min(lo, v)), (hi = Math.max(hi, v));
     return logDomain(lo, hi);
   }
-  const domOv = $derived(domainOf((c) => [c.p50]));
-  const domP = $derived(domainOf((c) => [c.p5 ?? c.p50, c.p95 ?? c.p50]));
+  const wantOv = $derived(domainOf((c) => [c.p50]));
+  const wantP = $derived(domainOf((c) => [c.p5 ?? c.p50, c.p95 ?? c.p50]));
+  // While a run is live each axis eases to its new bounds (in log space, as it is drawn); otherwise it snaps.
+  const toLog = (d: [number, number]): [number, number] => [Math.log10(d[0]), Math.log10(d[1])];
+  const zOv = new Tween(untrack(() => toLog(wantOv)), ZOOM);
+  const zP = new Tween(untrack(() => toLog(wantP)), ZOOM);
+  $effect.pre(() => {
+    const a = toLog(wantOv);
+    const b = toLog(wantP);
+    untrack(() => {
+      zOv.set(a, growing ? ZOOM : { duration: 0 });
+      zP.set(b, growing ? ZOOM : { duration: 0 });
+    });
+  });
+  const eased = (z: [number, number], want: [number, number]): [number, number] => {
+    const [a, b] = toLog(want);
+    return Math.abs(z[0] - a) < 1e-4 && Math.abs(z[1] - b) < 1e-4 ? want : [10 ** z[0], 10 ** z[1]];
+  };
+  const domOv = $derived(eased(zOv.current, wantOv));
+  const domP = $derived(eased(zP.current, wantP));
   const yOv = $derived(logScale(domOv, OV_BOTTOM, OV_TOP));
-  const ticksOv = $derived(logTicks(domOv, OV_H));
-  const ticksP = $derived(logTicks(domP, panelH));
+  const inOv = (t: number) => t >= domOv[0] && t <= domOv[1];
+  const inP = (t: number) => t >= domP[0] && t <= domP[1];
+  const ticksOv = $derived(logTicks(wantOv, OV_H, TICK_ROOM).filter(inOv));
+  const ticksP = $derived(logTicks(wantP, panelH, TICK_ROOM).filter(inP));
+  // Unlabelled lines at 2 and 5 where the labels had to drop to decades.
+  const minorP = $derived(logTicks(wantP, panelH, MINOR_ROOM).filter((t) => !ticksP.includes(t) && inP(t)));
+
+  // Between a live run's updates each cell eases from what was drawn to its new value; the read-outs keep the figures.
+  let from = untrack(() => series);
+  let to = untrack(() => series);
+  const step = new Tween(1, ZOOM);
+  $effect.pre(() => {
+    const next = series;
+    untrack(() => {
+      if (next === to) return;
+      const same = growing && next.length === to.length && next.every((s, i) => s.id === to[i].id);
+      from = same ? blendSeries(from, to, step.current) : next;
+      to = next;
+      step.set(0, { duration: 0 });
+      step.set(1, same ? ZOOM : { duration: 0 });
+    });
+  });
+  const drawn = $derived(step.current >= 1 ? series : blendSeries(from, to, step.current));
+
+  // A new bin's line draws on from the last point to it over about one update, rather than appearing at once.
+  const lastSlot = $derived(series.reduce((m, s) => Math.max(m, lastFilled(s.cells)), 0));
+  const reveal = new Tween(untrack(() => lastSlot), REVEAL);
+  $effect.pre(() => {
+    const at = lastSlot;
+    untrack(() => reveal.set(at, growing && at > reveal.target ? REVEAL : { duration: 0 }));
+  });
+  const drawing = $derived(growing && reveal.current < reveal.target);
+  const revealX = $derived(drawing ? xm(reveal.current) : W);
 
   const hwLine = $derived(Math.min(slotW / 2, 4));
   const slotXs = $derived(Array.from({ length: N }, (_, i) => xm(i)));
   const cellsOf = (s: OverTimeSeries) => Array.from({ length: N }, (_, i) => s.cells[i] ?? null);
 
   const together = $derived(
-    series.map((s, i) => {
+    drawn.map((s, i) => {
       const cells = cellsOf(s);
       const ys = cells.map((c) => (c?.p50 != null ? yOv(c.p50) : null));
       const last = lastFilled(ys);
-      return { i, d: linePath(slotXs, ys, hwLine), last, ly: last >= 0 ? ys[last]! : 0 };
+      return { i, d: linePath(slotXs, ys, hwLine), ys, last, ly: last >= 0 ? ys[last]! : 0 };
     }),
   );
+  /** Where a line ends as drawn: its last point, or mid-draw the point the reveal has reached on the way to it. */
+  function tipOf(t: (typeof together)[number]): [number, number] {
+    const r = reveal.current;
+    if (!drawing || r >= t.last) return [xm(t.last), t.ly];
+    const k = Math.floor(r);
+    const a = t.ys[k];
+    const b = t.ys[k + 1];
+    return a != null && b != null ? [xm(r), a + (b - a) * (r - k)] : [Math.min(xm(t.last), revealX), t.ly];
+  }
   // End-of-line names, pushed apart so close lines keep separate labels.
   const ends = $derived.by(() => {
     const seen = together.filter((t) => t.last >= 0);
     if (many) return [];
-    const ys = spreadLabels(seen.map((t) => t.ly), 16, OV_TOP + 6, OV_BOTTOM - 4);
-    return seen.map((t, k) => ({ i: t.i, x: xm(t.last), y: t.ly, labelY: ys[k] }));
+    const tips = seen.map(tipOf);
+    const ys = spreadLabels(tips.map((p) => p[1]), 16, OV_TOP + 6, OV_BOTTOM - 4);
+    return seen.map((t, k) => ({ i: t.i, x: tips[k][0], y: tips[k][1], labelY: ys[k] }));
   });
   const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, Math.max(1, n - 1))}…` : s);
 
   const panels = $derived(
-    series.map((s, i) => {
+    drawn.map((s, i) => {
       const top = rowTop(i);
       const bottom = top + panelH;
       const y = logScale(domP, bottom, top);
@@ -106,7 +193,9 @@
       let lost = 0;
       let from = -1;
       cells.forEach((c, k) => {
-        if (!c || c.sent === 0) {
+        // Past the data a live run has not got there yet; that is not a stretch without checks.
+        if (k >= edge) return;
+        if ((!c || (c.sent === 0 && c.cls !== 'shared')) && !gapAt(k)?.soft) {
           if (from < 0) from = k;
         } else if (from >= 0) {
           empty.push([from, k]);
@@ -118,7 +207,7 @@
         if (cls === 'thin') thin.push(k);
         else if (cls) bars.push({ x: xb(k), h: lossHeight(c, cls) * 8, cls });
       });
-      if (from >= 0) empty.push([from, N]);
+      if (from >= 0) empty.push([from, edge]);
       return {
         i,
         top,
@@ -142,18 +231,36 @@
     }),
   );
 
-  // Gaps named above the first panel; one that would run into another name stays unnamed (its tooltip still says it).
-  const gapBoxes = $derived.by(() => {
-    const boxes = gaps.map((g) => ({ g, x0: tx(g.t0), x1: tx(g.t1) })).filter((b) => b.x1 > b.x0);
+  // Gaps and slow stretches named above the first panel; a name that would run into another stays off (its tooltip
+  // still says it), and gaps are placed first.
+  const boxes = $derived.by(() => {
     const wOf = (s: string) => s.length * 6.2;
-    const placed = boxes.map((b) => {
-      const w = wOf(b.g.label);
-      const end = b.x0 - 6 - w >= PAD_L;
-      return { ...b, anchor: end ? 'end' : 'start', tx: end ? b.x0 - 6 : b.x0 + 4, span: (end ? [b.x0 - 6 - w, b.x0 - 6] : [b.x0 + 4, b.x0 + 4 + w]) as [number, number] };
-    });
-    const fit = fitSpans([[PAD_L, PAD_L + 112], ...placed.map((p) => p.span)]).slice(1);
-    return placed.map((p, k) => ({ ...p, named: fit[k] }));
+    const place = <T extends { t0: number; t1: number; label: string }>(list: T[]) =>
+      list
+        .map((g) => ({ g, x0: tx(g.t0), x1: tx(g.t1) }))
+        .filter((b) => b.x1 > b.x0)
+        .map((b) => {
+          const w = wOf(b.g.label);
+          const end = b.x0 - 6 - w >= PAD_L;
+          return { ...b, anchor: end ? 'end' : 'start', tx: end ? b.x0 - 6 : b.x0 + 4, span: (end ? [b.x0 - 6 - w, b.x0 - 6] : [b.x0 + 4, b.x0 + 4 + w]) as [number, number] };
+        });
+    const placed = place(gaps);
+    const slow = place(slows);
+    // A soft gap is part of the plan: named inside the plot, a word to a line when it is narrow, and not in the lane above.
+    const hard = placed.filter((p) => !p.g.soft);
+    const fit = fitSpans([[PAD_L, PAD_L + 112], ...hard.map((p) => p.span), ...slow.map((p) => p.span)]).slice(1);
+    const linesIn = (label: string, w: number) =>
+      [[label], label.split(' ')].find((ls) => ls.every((l) => w >= wOf(l) + 8)) ?? [];
+    return {
+      gaps: placed.map((p) => ({
+        ...p,
+        named: !p.g.soft && fit[hard.indexOf(p)],
+        inside: p.g.soft ? linesIn(p.g.label, p.x1 - p.x0) : [],
+      })),
+      slows: slow.map((p, k) => ({ ...p, w: Math.max(3, p.x1 - p.x0), family: SLOW_FAMILY[p.g.kind], named: fit[hard.length + k] })),
+    };
   });
+  const gapBoxes = $derived(boxes.gaps);
 
   const cur = $derived(cursor != null && cursor >= 0 && cursor < N ? cursor : null);
   const pillText = $derived(cur == null ? '' : formatTime(startOf(cur)));
@@ -170,6 +277,7 @@
   });
 
   const gapAt = (i: number) => gaps.find((g) => g.t1 > startOf(i) && g.t0 < startOf(i + 1));
+  const slowAt = (i: number) => slows.find((s) => s.t1 > startOf(i) && s.t0 < startOf(i + 1));
   function summary(si: number, i: number): string {
     const s = series[si];
     const c = s.cells[i] ?? null;
@@ -177,10 +285,12 @@
     const t1 = c?.t1 ?? startOf(i + 1);
     const gap = gapAt(i);
     const parts = [`${formatTime(t0)} – ${formatTime(t1)}`];
-    if (!c || c.sent === 0) parts.push(gap?.label ?? 'no checks');
+    if (!c || c.sent === 0) parts.push(gap?.label ?? c?.note ?? 'no checks');
     else {
       parts.push(`${c.sent - c.lost} of ${c.sent} answered`, `median ${ms(c.p50)}`, `p95 ${ms(c.p95)}`);
       if (gap) parts.push(gap.label);
+      const slow = slowAt(i);
+      if (slow) parts.push(slow.label);
       if (c.note) parts.push(c.note);
     }
     const out = outages.find((o) => o.id === s.id && !o.shared && o.t1 > t0 && o.t0 < t1);
@@ -190,30 +300,48 @@
   /** One series at one slot, for the read-out line. */
   function readOf(si: number, i: number): string {
     const c = series[si].cells[i] ?? null;
-    if (!c || c.sent === 0) return gapAt(i)?.label ?? 'no checks';
+    if (!c || c.sent === 0) return gapAt(i)?.label ?? c?.note ?? 'no checks';
     const spread = c.p5 != null && c.p95 != null ? `, 9 in 10 between ${ms(c.p5, false)} and ${ms(c.p95)}` : '';
     return `${ms(c.p50)}${spread}, ${c.lost} lost`;
   }
-  const shownSeries = $derived(many ? (sel == null ? [] : [sel]) : series.map((_, k) => k));
-  const plain = (i: number) => `${formatTime(startOf(i))}. ${shownSeries.map((k) => `${series[k].name}: ${readOf(k, i)}`).join('; ')}`;
+  const shownSeries = $derived(many && sel != null ? [sel] : series.map((_, k) => k));
+  // Every charted check, so the read-out has figures before a bin is picked.
+  const pooled = $derived(series.map((s) => s.cells.reduce((a, c) => (c ? { sent: a.sent + c.sent, lost: a.lost + c.lost } : a), { sent: 0, lost: 0 })));
+  /** The read-out row for one series: its median, then the rest in words; the whole chart when no bin is picked. */
+  function readParts(si: number, i: number | null): [string, string] {
+    if (i == null) {
+      const p = pooled[si];
+      return [ms(totals?.[si]), p.sent ? `${p.lost.toLocaleString()} of ${p.sent.toLocaleString()} lost` : 'no checks'];
+    }
+    const c = series[si].cells[i] ?? null;
+    if (!c || c.sent === 0) return ['—', gapAt(i)?.label ?? c?.note ?? 'no checks'];
+    const spread = c.p5 != null && c.p95 != null ? `9 in 10 between ${ms(c.p5, false)} and ${ms(c.p95)}, ` : '';
+    return [ms(c.p50), `${spread}${c.lost} of ${c.sent} lost`];
+  }
+  const hint = $derived(`oint at the chart, or use the arrow keys, to read one ${unit}`);
+  const plain = (i: number) => {
+    const slow = slowAt(i);
+    return `${formatTime(startOf(i))}. ${slow ? `${slow.label}. ` : ''}${shownSeries.map((k) => `${series[k].name}: ${readOf(k, i)}`).join('; ')}`;
+  };
 
   function panelAt(py: number): number | null {
     for (let i = 0; i < series.length; i++) if (py >= rowTop(i) - 22 && py <= rowTop(i) + panelH + 14) return i;
     return null;
   }
-  function hover(e: PointerEvent) {
+  /** `off` is where the chart's view starts: 0 for the medians, which have no panels, B0 for the panels. */
+  function hover(e: PointerEvent, off: number) {
     const box = (e.currentTarget as SVGElement).getBoundingClientRect();
     const px = e.clientX - box.left;
-    const py = e.clientY - box.top;
+    const py = e.clientY - box.top + off;
     const i = slotAt(px, PAD_L, pw, N);
-    if (i == null) return leave();
+    if (i == null || i >= edge) return leave();
     cursor = i;
-    const p = panelAt(py);
+    const p = off ? panelAt(py) : null;
     sel = p;
     if (p == null) tip = null;
     else {
       const m = panels[p].marks.find((k) => Math.abs(k.x - px) < 6 && py - panels[p].top < 10);
-      tip = { x: e.clientX, y: box.top + panels[p].top, text: m ? `Operator reported, ${formatTime(m.t)}: ${m.title}` : summary(p, i) };
+      tip = { x: e.clientX, y: box.top + panels[p].top - off, text: m ? `Operator reported, ${formatTime(m.t)}: ${m.title}` : summary(p, i) };
     }
   }
   function leave() {
@@ -221,13 +349,12 @@
     cursor = null;
     sel = null;
   }
-  const lastSlot = $derived(series.reduce((m, s) => Math.max(m, lastFilled(s.cells)), 0));
   function key(e: KeyboardEvent) {
     if (!N) return;
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') {
       e.preventDefault();
       const at = cur ?? lastSlot;
-      cursor = e.key === 'Home' ? 0 : e.key === 'End' ? lastSlot : Math.min(N - 1, Math.max(0, at + (e.key === 'ArrowLeft' ? -1 : 1)));
+      cursor = e.key === 'Home' ? 0 : e.key === 'End' ? lastSlot : Math.min(edge - 1, Math.max(0, at + (e.key === 'ArrowLeft' ? -1 : 1)));
       live = plain(cursor);
     } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault();
@@ -242,8 +369,9 @@
     live = plain(cursor);
   }
   const label = $derived(
-    `Response time over time, one ${unit} per step. ${series.map((s) => `${s.name}${s.sub ? `, ${s.sub}` : ''}`).join('; ')}. Left and right arrows read each ${unit}; up and down arrows pick a series.`,
+    `Response time over time, one ${unit} per step. ${series.map((s) => `${s.name}${s.sub ? `, ${s.sub}` : ''}`).join('; ')}. Left and right arrows read each ${unit}${many ? '; up and down arrows pick a series' : ''}.`,
   );
+  const labelEach = $derived(`Each series on its own panel, one ${unit} per step. Left and right arrows read each ${unit}; up and down arrows pick a series.`);
 </script>
 
 {#snippet shape(i: number, x: number, y: number)}
@@ -253,17 +381,33 @@
   {:else}<path class="m" d="M{x},{y - 4.4}L{x + 4.4},{y}L{x},{y + 4.4}L{x - 4.4},{y}Z" />{/if}
 {/snippet}
 
+<!-- The time axis along y, with the cursor from top down to it and the time pill under it. -->
+{#snippet timeAxis(y: number, top: number)}
+  {#each axis as a}
+    <line class="axis" x1={a.x} x2={a.x} y1={y} y2={y + 4} />
+    {#if cur == null || Math.abs(a.x - pillX) > pillW / 2 + a.label.length * 3.2 + 4}
+      <text class="tick" x={a.x} y={y + 18} text-anchor="middle">{a.label}</text>
+    {/if}
+  {/each}
+  <line class="axis" x1={PAD_L} x2={PAD_L + pw} y1={y} y2={y} />
+  {#if cur != null}
+    <rect class="cur" x={xb(cur)} y={top} width={Math.max(2, slotW)} height={y - top} />
+    <rect class="pill" x={pillX - pillW / 2} y={y + 6} width={pillW} height="18" rx="4" />
+    <text class="pilltext" x={pillX} y={y + 19} text-anchor="middle">{pillText}</text>
+  {/if}
+{/snippet}
+
 <div class="ot" bind:clientWidth={W}>
   {#if W > 0 && grid && series.length}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
     <svg
       width={W}
-      height={H}
-      viewBox="0 0 {W} {H}"
+      height={HA}
+      viewBox="0 0 {W} {HA}"
       role="group"
       tabindex="0"
       aria-label={label}
-      onpointermove={hover}
+      onpointermove={(e) => hover(e, 0)}
       onpointerleave={leave}
       onkeydown={key}
       onfocus={focus}
@@ -273,16 +417,48 @@
           <rect width="5" height="5" class="hatch-bg" />
           <line x1="0" y1="0" x2="0" y2="5" class="hatch" />
         </pattern>
+        <!-- The warm-up's bubbles, one in four tinted by the kind of name asked; they rise slowly while the run sends. -->
+        <pattern id="{uid}-bubbles" x={PAD_L} y={OV_TOP} width="48" height="144" patternUnits="userSpaceOnUse">
+          <circle cx="6" cy="8" r="1.25" class="bub" />
+          <circle cx="27" cy="18" r="1.5" class="bub" />
+          <circle cx="40" cy="31" r="1.5" class="bub c" />
+          <circle cx="14" cy="42" r="1.25" class="bub" />
+          <circle cx="33" cy="55" r="1.5" class="bub" />
+          <circle cx="21" cy="67" r="1.5" class="bub u" />
+          <circle cx="44" cy="79" r="1.25" class="bub" />
+          <circle cx="9" cy="90" r="1.5" class="bub" />
+          <circle cx="30" cy="102" r="1.5" class="bub c" />
+          <circle cx="17" cy="114" r="1.25" class="bub" />
+          <circle cx="38" cy="126" r="1.5" class="bub" />
+          <circle cx="4" cy="136" r="1.25" class="bub" />
+          {#if growing && !reduceMotion}<animateTransform attributeName="patternTransform" type="translate" from="0 0" to="0 -144" dur="96s" repeatCount="indefinite" />{/if}
+        </pattern>
+        <pattern id="{uid}-comb" width="4" height="5" patternUnits="userSpaceOnUse">
+          <line x1="0.5" y1="0" x2="0.5" y2="5" class="comb" />
+        </pattern>
+        <clipPath id="{uid}-reveal"><rect x="0" y="0" width={revealX} height={H} /></clipPath>
+        <clipPath id="{uid}-reveal-slot"><rect x="0" y="0" width={revealX + (drawing ? slotW / 2 : 0)} height={H} /></clipPath>
       </defs>
 
-      {#if sel != null && panels[sel]}
-        <rect class="sel" x="0" y={panels[sel].top - 22} width={W} height={panelH + 36} />
-      {/if}
-
       {#each gapBoxes as b}
-        <rect class="gap" x={b.x0} y={OV_TOP} width={Math.max(3, b.x1 - b.x0)} height={lastBottom - OV_TOP} fill="url(#{uid}-hatch)" />
-        <line class="ref" x1={b.x0} x2={b.x0} y1={OV_TOP} y2={lastBottom} />
-        <line class="ref" x1={b.x1} x2={b.x1} y1={OV_TOP} y2={lastBottom} />
+        {#if b.g.soft}
+          <rect class="gap" x={b.x0} y={OV_TOP} width={Math.max(3, b.x1 - b.x0)} height={OV_H} fill="url(#{uid}-bubbles)" />
+          <line class="ref lead" x1={b.x1} x2={b.x1} y1={OV_TOP} y2={OV_BOTTOM} />
+        {:else}
+          <rect class="gap" x={b.x0} y={OV_TOP} width={Math.max(3, b.x1 - b.x0)} height={OV_H} fill="url(#{uid}-hatch)" />
+          <line class="ref" x1={b.x0} x2={b.x0} y1={OV_TOP} y2={OV_BOTTOM} />
+          <line class="ref" x1={b.x1} x2={b.x1} y1={OV_TOP} y2={OV_BOTTOM} />
+          {#if b.named}
+            <line class="ref" x1={b.x0} x2={b.x0} y1={OV_TOP - 14} y2={OV_TOP} />
+            <text class="note" x={b.tx} y={OV_TOP - 6} text-anchor={b.anchor}>{b.g.label}</text>
+          {/if}
+        {/if}
+      {/each}
+      {#each boxes.slows as b}
+        <rect class="slow" x={b.x0} y={OV_TOP} width={b.w} height={OV_H} />
+        {#if b.family === 'host'}<rect class="cap" x={b.x0} y={OV_TOP} width={b.w} height="5" fill="url(#{uid}-comb)" />
+        {:else if b.family === 'up'}<rect class="cap hollow" x={b.x0 + 0.5} y={OV_TOP + 0.5} width={b.w - 1} height="4" />
+        {:else}<rect class="cap solid" x={b.x0} y={OV_TOP} width={b.w} height={b.family === 'net' ? 5 : 1} />{/if}
         {#if b.named}
           <line class="ref" x1={b.x0} x2={b.x0} y1={OV_TOP - 14} y2={OV_TOP} />
           <text class="note" x={b.tx} y={OV_TOP - 6} text-anchor={b.anchor}>{b.g.label}</text>
@@ -296,12 +472,19 @@
         <line class="grid" x1={PAD_L} x2={PAD_L + pw} y1={yOv(g)} y2={yOv(g)} />
         <text class="tick" x={PAD_L - 8} y={yOv(g) + 3.5} text-anchor="end">{tickLabel(g)}</text>
       {/each}
-      {#each together as t (t.i)}
-        {#if t.d && !(many && sel === t.i)}
-          <path class="ln" class:neutral={many} style:--c={many ? 'var(--s-neutral)' : colour(t.i)} d={t.d} />
-        {/if}
+      <g clip-path={growing ? `url(#${uid}-reveal)` : undefined}>
+        {#each together as t (t.i)}
+          {#if t.d && !(many && sel === t.i)}
+            <path class="ln" class:neutral={many} style:--c={many ? 'var(--s-neutral)' : colour(t.i)} d={t.d} />
+          {/if}
+        {/each}
+      </g>
+      {#each gapBoxes as b}
+        {#each b.inside as line, i}
+          <text class="note in" x={(b.x0 + b.x1) / 2} y={OV_TOP + 14 + i * 12} text-anchor="middle">{line}</text>
+        {/each}
       {/each}
-      {#if many && sel != null && together[sel]?.d}<path class="ln pick" d={together[sel].d} />{/if}
+      {#if many && sel != null && together[sel]?.d}<path class="ln pick" d={together[sel].d} clip-path={growing ? `url(#${uid}-reveal)` : undefined} />{/if}
       {#each ends as e (e.i)}
         <g style:--c={colour(e.i)}>
           {#if wide}
@@ -313,66 +496,104 @@
         </g>
       {/each}
 
-      <!-- One panel per series -->
-      {#each panels as p (p.i)}
-        {@const s = series[p.i]}
-        <g style:--c={colour(p.i)}>
-          {#if !many}{@render shape(p.i, PAD_L + 4, p.top - 14)}{/if}
-          <text class="rowname" x={PAD_L + (many ? 0 : 14)} y={p.top - 10}>{s.name}{#if s.sub}<tspan class="sub" dx="8">{clip(s.sub, Math.max(8, Math.floor(pw / 6.2) - s.name.length - 4))}</tspan>{/if}</text>
-          {#each ticksP as g}
-            <line class="grid" x1={PAD_L} x2={PAD_L + pw} y1={p.y(g)} y2={p.y(g)} />
-            <text class="tick" x={PAD_L - 8} y={p.y(g) + 3.5} text-anchor="end">{tickLabel(g)}</text>
-          {/each}
-          {#each p.empty as [a, z]}<rect class="empty" x={xb(a)} y={p.top} width={(z - a) * slotW} height={panelH} />{/each}
-          {#if p.bandOuter}<path class="band2" d={p.bandOuter} />{/if}
-          {#if p.bandInner}<path class="band1" d={p.bandInner} />{/if}
-          {#each p.outs as o}
-            <rect class="out" class:shared={o.shared} x={o.x0} y={p.top} width={o.x1 - o.x0} height={panelH} />
-            <line class="out-edge" class:shared={o.shared} x1={o.x0} x2={o.x0} y1={p.top} y2={p.bottom} />
-          {/each}
-          {#if p.median}
-            <path class="med-ring" d={p.median} />
-            <path class="med" d={p.median} />
-          {/if}
-          {#each p.thin as k}<rect class="thin" x={xb(k)} y={p.top} width={slotW} height={panelH + 14} fill="url(#{uid}-hatch)" />{/each}
-          {#each p.marks as m}<circle class="mark" cx={m.x} cy={p.top + 5} r="3.5" />{/each}
-          <rect class="rail" x={PAD_L} y={p.bottom + 6} width={pw} height="8" />
-          <text class="tick" x={PAD_L - 8} y={p.bottom + 13.5} text-anchor="end">lost</text>
-          {#each p.bars as b}<rect class="loss {b.cls}" x={b.x + 0.5} y={p.bottom + 14 - b.h} width={Math.max(1.5, slotW - 1)} height={b.h} />{/each}
-          {#if wide}<text class="railnote" x={PAD_L + pw + 10} y={p.bottom + 14}>{p.lost.toLocaleString()} lost</text>{/if}
-        </g>
-      {/each}
-
-      <!-- Shared time axis -->
-      {#each axis as a}
-        <line class="axis" x1={a.x} x2={a.x} y1={lastBottom} y2={lastBottom + 4} />
-        {#if cur == null || Math.abs(a.x - pillX) > pillW / 2 + a.label.length * 3.2 + 4}
-          <text class="tick" x={a.x} y={lastBottom + 18} text-anchor="middle">{a.label}</text>
-        {/if}
-      {/each}
-      <line class="axis" x1={PAD_L} x2={PAD_L + pw} y1={lastBottom} y2={lastBottom} />
-
-      {#if cur != null}
-        <rect class="cur" x={xb(cur)} y={OV_TOP} width={Math.max(2, slotW)} height={lastBottom - OV_TOP} />
-        <rect class="pill" x={pillX - pillW / 2} y={lastBottom + 6} width={pillW} height="18" rx="4" />
-        <text class="pilltext" x={pillX} y={lastBottom + 19} text-anchor="middle">{pillText}</text>
-      {/if}
+      {@render timeAxis(OV_BOTTOM, OV_TOP)}
     </svg>
 
-    <p class="read" aria-hidden="true">
-      {#if cur != null}
-        <b class="num">{formatTime(startOf(cur))}</b>
-        {#each shownSeries as k (k)}
-          <span class="rd" style:--c={colour(k)}>
-            {#if !many}<svg class="sw" width="12" height="12" viewBox="-6 -6 12 12">{@render shape(k, 0, 0)}</svg>{/if}<span class="who">{series[k].name}</span>
-            <span class="num">{readOf(k, cur)}</span>
-          </span>
+    <button class="each" aria-expanded={open} aria-controls="{uid}-each" onclick={() => (open = !open)}>
+      <Icon name={open ? 'chevron-down' : 'chevron-right'} size={12} />{open ? 'Hide each resolver' : `Show each resolver (${series.length})`}
+    </button>
+
+    {#if open}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+      <svg
+        id="{uid}-each"
+        width={W}
+        height={H - B0}
+        viewBox="0 {B0} {W} {H - B0}"
+        role="group"
+        tabindex="0"
+        aria-label={labelEach}
+        onpointermove={(e) => hover(e, B0)}
+        onpointerleave={leave}
+        onkeydown={key}
+        onfocus={focus}
+      >
+        {#if sel != null && panels[sel]}
+          <rect class="sel" x="0" y={panels[sel].top - 22} width={W} height={panelH + 36} />
+        {/if}
+
+        {#each gapBoxes as b}
+          {#if b.g.soft}
+            {#each panels as p (p.i)}
+              <rect class="gap" x={b.x0} y={p.top} width={Math.max(3, b.x1 - b.x0)} height={panelH} fill="url(#{uid}-bubbles)" />
+              <line class="ref lead" x1={b.x1} x2={b.x1} y1={p.top} y2={p.bottom} />
+            {/each}
+          {:else}
+            <rect class="gap" x={b.x0} y={BT} width={Math.max(3, b.x1 - b.x0)} height={lastBottom - BT} fill="url(#{uid}-hatch)" />
+            <line class="ref" x1={b.x0} x2={b.x0} y1={BT} y2={lastBottom} />
+            <line class="ref" x1={b.x1} x2={b.x1} y1={BT} y2={lastBottom} />
+          {/if}
         {/each}
-        {#if many && sel == null}<span class="rd">Point at a panel to read it.</span>{/if}
-      {:else}
-        Point at the chart, or use the arrow keys, to read one {unit}.
-      {/if}
-    </p>
+        {#each boxes.slows as b}
+          <rect class="slow" x={b.x0} y={BT} width={b.w} height={lastBottom - BT} />
+        {/each}
+
+        {#each panels as p (p.i)}
+          {@const s = series[p.i]}
+          <g style:--c={colour(p.i)}>
+            {#if !many}{@render shape(p.i, PAD_L + 4, p.top - 14)}{/if}
+            <text class="rowname" x={PAD_L + (many ? 0 : 14)} y={p.top - 10}>{s.name}{#if s.sub}<tspan class="sub" dx="8">{clip(s.sub, Math.max(8, Math.floor(pw / 6.2) - s.name.length - 4))}</tspan>{/if}</text>
+            {#each minorP as g}<line class="grid minor" x1={PAD_L} x2={PAD_L + pw} y1={p.y(g)} y2={p.y(g)} />{/each}
+            {#each ticksP as g}
+              <line class="grid" x1={PAD_L} x2={PAD_L + pw} y1={p.y(g)} y2={p.y(g)} />
+              <text class="tick" x={PAD_L - 8} y={p.y(g) + 3.5} text-anchor="end">{tickLabel(g)}</text>
+            {/each}
+            {#each p.empty as [a, z]}<rect class="empty" x={xb(a)} y={p.top} width={(z - a) * slotW} height={panelH} />{/each}
+            <g clip-path={growing ? `url(#${uid}-reveal-slot)` : undefined}>
+              {#if p.bandOuter}<path class="band2" d={p.bandOuter} />{/if}
+              {#if p.bandInner}<path class="band1" d={p.bandInner} />{/if}
+              {#each p.outs as o}
+                <rect class="out" class:shared={o.shared} x={o.x0} y={p.top} width={o.x1 - o.x0} height={panelH} />
+                <line class="out-edge" class:shared={o.shared} x1={o.x0} x2={o.x0} y1={p.top} y2={p.bottom} />
+              {/each}
+            </g>
+            {#if p.median}
+              <g clip-path={growing ? `url(#${uid}-reveal)` : undefined}>
+                <path class="med-ring" d={p.median} />
+                <path class="med" d={p.median} />
+              </g>
+            {/if}
+            <g clip-path={growing ? `url(#${uid}-reveal-slot)` : undefined}>
+              {#each p.thin as k}<rect class="thin" x={xb(k)} y={p.top} width={slotW} height={panelH + 14} fill="url(#{uid}-hatch)" />{/each}
+            </g>
+            {#each p.marks as m}<circle class="mark" cx={m.x} cy={p.top + 5} r="3.5" />{/each}
+            <rect class="rail" x={PAD_L} y={p.bottom + 6} width={pw} height="8" />
+            <text class="tick" x={PAD_L - 8} y={p.bottom + 13.5} text-anchor="end">lost</text>
+            <g clip-path={growing ? `url(#${uid}-reveal-slot)` : undefined}>
+              {#each p.bars as b}<rect class="loss {b.cls}" x={b.x + 0.5} y={p.bottom + 14 - b.h} width={Math.max(1.5, slotW - 1)} height={b.h} />{/each}
+            </g>
+            {#if wide}<text class="railnote" x={PAD_L + pw + 10} y={p.bottom + 14}>{p.lost.toLocaleString()} lost</text>{/if}
+          </g>
+        {/each}
+
+        {@render timeAxis(lastBottom, BT)}
+      </svg>
+    {/if}
+
+    <!-- One row per series at rest and on hover alike, so picking a bin never moves the page. -->
+    <div class="read" class:picking={many && sel != null} aria-hidden="true">
+      <p class="rhead">
+        {#if cur != null}<b class="num">{formatTime(startOf(cur))}</b> · one {unit}{:else if totalsLabel}<b>{totalsLabel}</b> · p{hint}{:else}P{hint}{/if}
+      </p>
+      {#each series as s, k (k)}
+        {@const r = readParts(k, cur)}
+        <span class="rd" class:on={many && sel === k} style:--c={colour(k)}>
+          <span class="who">{#if !many}<svg class="sw" width="12" height="12" viewBox="-6 -6 12 12">{@render shape(k, 0, 0)}</svg>{/if}{s.name}</span>
+          <span class="num med">{r[0]}</span>
+          <span class="more">{r[1]}</span>
+        </span>
+      {/each}
+    </div>
     <p class="visually-hidden" aria-live="polite">{live}</p>
   {/if}
 </div>
@@ -430,6 +651,9 @@
     stroke: var(--rule);
     stroke-width: 1;
   }
+  .grid.minor {
+    stroke-opacity: 0.5;
+  }
   .axis {
     stroke: var(--rule-2);
     stroke-width: 1;
@@ -453,6 +677,49 @@
   }
   .gap {
     pointer-events: none;
+  }
+  .bub {
+    fill: none;
+    stroke: var(--ink-3);
+    stroke-width: 1;
+    stroke-opacity: 0.55;
+  }
+  .bub.c {
+    fill: var(--s-cached);
+    stroke: none;
+  }
+  .bub.u {
+    fill: var(--s-uncached);
+    stroke: none;
+  }
+  .ref.lead {
+    stroke-dasharray: 2 3;
+  }
+  .note.in {
+    paint-order: stroke;
+    stroke: var(--surface);
+    stroke-width: 4px;
+    stroke-linejoin: round;
+  }
+  .slow {
+    fill: var(--ink);
+    fill-opacity: 0.06;
+    pointer-events: none;
+  }
+  .cap {
+    pointer-events: none;
+  }
+  .cap.solid {
+    fill: var(--ink-2);
+  }
+  .cap.hollow {
+    fill: none;
+    stroke: var(--ink-2);
+    stroke-width: 1;
+  }
+  .comb {
+    stroke: var(--ink-2);
+    stroke-width: 1;
   }
   .empty {
     fill: var(--surface-2);
@@ -554,25 +821,63 @@
   }
   .read {
     margin-top: 6px;
-    min-height: 2.6em;
     font-size: var(--t-xs);
     color: var(--ink-2);
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px 16px;
+    display: grid;
+    grid-template-columns: max-content max-content minmax(0, 1fr);
+    gap: 2px 14px;
     align-items: center;
+  }
+  .rhead {
+    grid-column: 1 / -1;
+    margin: 0 0 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .read b {
     color: var(--ink);
   }
+  .each {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin: 2px 0 6px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font-size: var(--t-xs);
+    color: var(--ink-2);
+    text-decoration: underline;
+    text-decoration-color: var(--rule-2);
+  }
+  .each:hover {
+    color: var(--ink);
+    text-decoration-color: var(--ink-3);
+  }
   .rd {
+    display: contents;
+  }
+  .rd .who {
     display: inline-flex;
     gap: 6px;
     align-items: center;
-  }
-  .rd .who {
     color: var(--ink);
     font-weight: 600;
+    white-space: nowrap;
+  }
+  .rd .med {
+    min-width: 8ch;
+    text-align: right;
+    color: var(--ink);
+  }
+  .rd .more {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .picking .rd:not(.on) > * {
+    color: var(--ink-3);
   }
   .sw {
     flex: none;

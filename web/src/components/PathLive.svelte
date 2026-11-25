@@ -7,7 +7,7 @@
   import type { Resolver, RunState, TraceHop } from '../lib/types';
   import type { Row } from '../lib/verdict';
   import { answered } from '../lib/cells';
-  import { holder, ms } from '../lib/format';
+  import { holder, isPrivate, ms } from '../lib/format';
   import PhaseStages, { type Stage } from './PhaseStages.svelte';
 
   let { run, rows }: { run: RunState; rows: Row[] } = $props();
@@ -15,9 +15,6 @@
   const HANDSHAKES = 5;
   const ROUNDS = 4;
 
-  const isPrivate = (ip: string) =>
-    /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip) ||
-    /^(fe80|fc|fd|::1$)/i.test(ip);
   const traced = (r: Resolver) => r.group !== 'system' && [...r.ipv4, ...r.ipv6].slice(0, 1).some((ip) => !isPrivate(ip));
 
   // The lanes keep the order the ranking had when the check began, so nothing jumps while hops land. One lane per

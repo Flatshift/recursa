@@ -170,7 +170,9 @@
             Random labels under unsigned wildcard zones ({m?.uncached_zones.join(', ')}). A different DNS provider hosts each zone.
             Each name exists, but no cache can have it. The zones are unsigned, so aggressive NSEC cannot give a shortcut. The resolver
             must ask the authoritative servers, and this is the delay that people feel. These servers are usually large anycast
-            networks near the big resolvers, so for them the difference from Cached is often small. Setup makes sure that each zone is
+            networks near the big resolvers, so for them the difference from Cached is often small. The resolver
+            also knows already where these zones live, so each query is one question to one server. The first lookup of an ordinary
+            site can take several, to servers further away, and the Extended test measures that. Setup makes sure that each zone is
             still unsigned and still answers all names, and does not use a zone that fails. A new answer has the full TTL of the zone.
             An answer with a lower TTL came from a cache: Recursa removes it and records this.
           </dd>
@@ -197,12 +199,12 @@
         own pick, and a pick must have answered at least 98%. The latency ranking and the fastest pick use a speed score in ms:
         cached 50%, uncached 40%, TLD 10%. The score is the mean of two halves, each a pick of its own: the cached test, and
         the uncached and TLD tests at 0.8 and 0.2. For each test, the score is the mean of the answers after the slowest tenth are
-        pulled down to the 90th percentile, so one straggler cannot move it; the 95th percentile and the jitter are shown
-        beside it rather than folded in. A test in which a resolver began refusing or stopped answering (a rate limit, from
+        pulled down to the 90th percentile, so one straggler cannot move it. The 95th percentile and the jitter are shown
+        beside it, not folded in. A test in which a resolver began refusing or stopped answering (a rate limit, from
         here) is left out of its score and its answered share and marked limited. Each timeout or failed answer (SERVFAIL,
         REFUSED, a network error) adds 1 s, about the time your computer waits before it asks again, divided over all queries
         sent. A failure that hits three or more resolvers within the same two seconds is a network blip from here, not any
-        resolver's fault; it is excused and counts as nothing. If this run's own variation can cause a difference (the
+        resolver's fault. It is excused and counts as nothing. If this run's own variation can cause a difference (the
         answers resampled 200 times), the result is a tie, and no resolver is first.
       </p>
       <p>
@@ -211,7 +213,7 @@
         at home, 60% in an office, 50% in a lab). The cached figure is corrected for answers that were really fresh lookups, using
         the share of Cached answers the resolver gave from its cache. Uncached and TLD figures count for the rest, weighted as in
         the speed score. Timeouts add their cost, and so does the CDN edge penalty, 3 round trips on the half of lookups that open a
-        new connection; without CDN mapping the number is DNS only. The Best from here pick ranks by it and may name a tie. At the
+        new connection. Without CDN mapping the number is DNS only. The Best from here pick ranks by it and may name a tie. At the
         Lab mix without the correction and the CDN term it is the speed score.
       </p>
     </section>
@@ -219,31 +221,48 @@
     <section id="extended">
       <h3>Extended test</h3>
       <p>
-        Quick and Accurate rank resolvers for this moment. Extended settles a close call between two to four of them. It sends every
+        Quick and Accurate rank resolvers for this moment. Extended compares two to four of them over thousands of different
+        sites, enough to tell a real gap of a few milliseconds from a tie. You pick the resolvers in Setup, which can also
+        fill the slots with the three fastest of your latest Accurate run and the resolver this computer uses now. It sends every
         resolver the same 5,000 lookups, one name every 300 ms, in a random order each time, over plain UDP on IPv4. A run takes about 25
         minutes, and Recursa keeps the computer awake while it runs. A lookup with no answer after 2 s counts as lost, and ranks as slower
         than any answer.
       </p>
       <p>
-        The names are 500 common ones that ship with Recursa, each asked three times, so the resolver holds them after the first ask,
-        and 3,500 less common sites sampled from the Tranco list. Recursa downloads that list when the run starts, or uses the copy it
-        kept from an earlier run. Without either, it uses its own list, and the run says so. The list ID and date, and the random
-        seed that fixes the names and their order, are in the result. The less common names are not screened for content. Names under a
-        few country domains that filters and networks often block, such as .ru and .cn, are left out of every list, so a blocked name
-        is not read as a lost one.
+        The names are 500 common ones, each asked 8 times across the run, and 1,000 less common sites sampled from a larger list.
+        The run is built like ordinary use: about 8 in 10 lookups are for names asked before, and most of those come from a resolver’s
+        cache, while 2 in 10 are sites asked once. The first ask of each common name fills the resolver’s cache, as earlier lookups in a
+        household would have; it is shown as a warm-up and is not ranked. The main result, the median and the call, covers the later asks
+        and the sites asked once. A resolver that no longer holds a common name in its cache pays for that there. The once-asked sites
+        are also ranked on their own as cold lookups, with the same method: the median, a range for the gap and a 3 ms floor under which
+        a gap counts as a tie. The two are charted apart on the same time axis: repeat lookups in 15-second bins and cold lookups in
+        75-second bins.
+        A later ask of a common name comes from the resolver’s cache only if the resolver still holds it. Both lists ship with Recursa,
+        and nothing is downloaded for a run. The larger list is built from the official websites recorded in Wikidata, with each site’s
+        country where one is known. Recursa takes your country from Cloudflare’s answer about your public address and picks the less
+        common sites from the countries your regional internet registry serves: North America (ARIN), Europe, the Middle East and
+        Central Asia (RIPE NCC), Asia Pacific (APNIC), Latin America and the Caribbean (LACNIC) or Africa (AFRINIC). On a VPN that is
+        the VPN’s region. When the country is not known, or the region has too few sites, the rest come from the whole list: about 6
+        in 10 under .com, 1 in 4 under other generic domains and the rest under country domains. Runs from different regions ask
+        different names, so their figures do not compare. When the lists are built, every name is looked up through Cloudflare’s family
+        filter (1.1.1.1 for Families), and a name it refuses as adult or malicious is dropped. A site can change hands after that, so
+        the screen is not a guarantee. The list’s date, and the random seed that fixes the names and their order, are in the result. Names under
+        top-level domains that filters, firewalls and intrusion prevention often block, such as .ru, .cn, .su and .top, are left out
+        of every list, so a blocked name is not read as a lost one. Adult top-level domains such as .xxx and .porn are left out too.
       </p>
       <p>
         The run is cut into bins of 15 s, 50 queries to each resolver in every bin, so you can see whether a gap held the whole time.
-        A bin in which every resolver lost half or more of its queries points at your link and is left out of every figure. When most
-        of a run is left out, it makes no call. Time while the computer sleeps is a hole in the record, and nothing is counted for it.
+        A bin in which every resolver lost half or more of its queries points at your link and is left out of every figure. When more
+        than a fifth of the bins are left out, the run makes no call. Time while the computer sleeps is a hole in the record, and nothing is counted for it.
       </p>
       <p>
-        The comparison is the gap between two medians. Its range comes from the gap in ten equal stretches of the run, and holds about 9
-        times in 10 (adjusted when more than two resolvers are compared). A gap counts as real when its whole range is above the margin,
-        the larger of 2 ms and 5% of the lowest median, and as a practical tie when its whole range is inside it. Anything else is too
+        The comparison is the gap between two medians. The result also gives each resolver’s median for the common names on every ask
+        after the first. The gap’s range comes from taking the gap ten more times, each with a different tenth of the run left out, and holds about 19
+        times in 20 (adjusted when more than two resolvers are compared). A gap counts as real when its whole range is above the margin,
+        the larger of 3 ms and 5% of the lowest median, and as a practical tie when its whole range is inside it. Anything else is too
         close to call. With fewer than 500 counted lookups, or a run stopped early, the run shows the figures and makes no call. A name
         that one resolver blocked and the others answered is left out of that resolver’s timing, and a name that no resolver answered is
-        dropped; the result counts both.
+        dropped. The result counts both.
       </p>
     </section>
 
@@ -320,7 +339,26 @@
         <li><b>ECS and egress:</b> <code>o-o.myaddr.l.google.com</code> returns the address that Google's servers saw, and any client subnet that the resolver sent. <code>whoami.ds.akahelp.net</code> returns the same for Akamai. A resolver can send different data to each: Cloudflare, for example, sends Akamai a /29 and Google nothing.</li>
         <li><b>QNAME minimisation:</b> internet.nl's <code>qnamemintest</code> zone.</li>
         <li><b>Identity:</b> NSID and the <code>id.server</code> CHAOS TXT record name the instance that answered.</li>
-        <li><b>Blocking:</b> six common ad and tracker hosts, and the test domains that blocking services publish for checking their own blocking: malware.wicar.org (WICAR), malware.testcategory.com (Cloudflare), isitblocked.org (Quad9), examplemalwaredomain.com (Cisco) and testsafebrowsing.appspot.com (Google) for malware, phishing.testcategory.com and internetbadguys.com for phishing (Cloudflare, Cisco OpenDNS), nudity.testcategory.com and exampleadultsite.com for adult content (Cloudflare, Cisco OpenDNS). The adult-content check is off until you turn it on, since the network can see its lookups. They host nothing harmful and resolve normally through an unfiltered resolver, so a block is NXDOMAIN, REFUSED, an empty answer, a sinkhole address, a known block page (Cisco, AdGuard, DNS4EU and others) or an EDE code 15–18. Each service mostly blocks only its own names, so one blocked name confirms malware or phishing blocking; it does not say how much a resolver catches. Ad blocking needs at least half the ad hosts. A check the run left off shows as Not tested. To go further, Check live feeds in a resolver's Inspector tests it against live hosts from the URLhaus and ThreatView malware feeds: up to 20 that still resolve through Google or Cloudflare over DoT. It shows the share blocked and each host, and every resolver checked within 30 minutes gets the same hosts so their results compare side by side. The Live threat test in setup runs the same check across every selected resolver as the last phase of a run, with one sample of hosts for all of them, and adds a Live malware row to Blocking; Best protection then ranks resolvers on the share of those hosts they blocked. Both are off until you start them, because security tools on the network (a UniFi gateway, Azure, a corporate firewall) may flag those lookups or block the device, and the run asks you to confirm first. The live names go only over DoT or DoH, except to your own resolver on this network (a Pi-hole, your router) or when you allow plain DNS for that check. A resolver with no DoT or DoH that isn't on your network is left out of the run's test.</li>
+        <li>
+          <b>Blocking:</b> six common ad and tracker hosts, and the test domains that blocking services publish for checking their own blocking.
+          For malware: malware.wicar.org (WICAR), malware.testcategory.com (Cloudflare), isitblocked.org (Quad9), examplemalwaredomain.com (Cisco)
+          and testsafebrowsing.appspot.com (Google). For phishing: phishing.testcategory.com (Cloudflare) and internetbadguys.com (Cisco OpenDNS).
+          For adult content: nudity.testcategory.com (Cloudflare) and exampleadultsite.com (Cisco OpenDNS). The adult-content check is off until
+          you turn it on, since the network can see its lookups. The test domains host nothing harmful and resolve normally through an unfiltered
+          resolver. A block is NXDOMAIN, REFUSED, an empty answer, a sinkhole address, a known block page (Cisco, AdGuard or DNS4EU) or an EDE
+          code 15–18. Each service mostly blocks only its own names, so one blocked name confirms malware or phishing blocking. It does not say
+          how much a resolver catches. Ad blocking needs at least half the ad hosts. A check the run left off shows as Not tested.
+        </li>
+        <li>
+          <b>Live feeds:</b> Check live feeds in a resolver's Inspector tests it against live hosts from the URLhaus and ThreatView malware feeds:
+          up to 20 that still resolve through Google or Cloudflare over DoT. It shows the share blocked and each host. Every resolver checked
+          within 30 minutes gets the same hosts, so their results compare side by side. The Live threat test in setup runs the same check across
+          every selected resolver as the last phase of a run, with one sample of hosts for all of them, and adds a Live malware row to Blocking.
+          Best protection then ranks resolvers on the share of those hosts they blocked. Both are off until you start them, because security tools
+          on the network (a UniFi gateway, Azure, a corporate firewall) may flag those lookups or block the device. The run asks you to confirm
+          first. The live names go only over DoT or DoH, except to your own resolver on this network (a Pi-hole, your router) or when you allow
+          plain DNS for that check. A resolver with no DoT or DoH that isn't on your network is left out of the run's test.
+        </li>
         <li><b>Integrity:</b> NXDOMAIN rewriting, private-address rebinding, Extended DNS Errors and DNS Cookies.</li>
         <li><b>Transports:</b> TCP, DoT, DoH and IPv6 reachability.</li>
       </ul>
@@ -350,7 +388,7 @@
         answers marked authoritative, so a device that intercepts port 53 cannot give a false one. That answer is the edge the CDN
         chooses for <b>your own address</b>. A resolver that sends a usable ECS should get the same edge. The table marks each
         resolver whose edges match it (● within about 4% or the run's noise) or nearly match it (○ in the same /24 cluster and
-        within 10%, for Akamai, CloudFront and Meta).
+        within 10% or 3 ms, for Akamai, CloudFront and Meta).
       </p>
       <p>
         This reference shows why ECS does not always win. With ECS, a CDN can map you by your subnet, but only if it accepts ECS
@@ -371,7 +409,7 @@
           <b>Route-origin filtering:</b> a live test with <a href="https://cmdns.dns-oarc.net/" target="_blank" rel="noreferrer">Check My DNS by DNS-OARC</a>.
           Recursa asks each resolver for a one-time name that is served only from an RPKI-invalid route, over IPv4 and over IPv6, and DNS-OARC reports
           whether the query reached its server. DNS-OARC sees this computer's address and the resolver's outbound address. A resolver that never answers
-          the name counts only if it answered the rest of the run; a query that never left this computer shows "Not tested". Filtering anywhere between
+          the name counts only if it answered the rest of the run. A query that never left this computer shows "Not tested". Filtering anywhere between
           the resolver and the DNS-OARC site counts, so this describes the resolver's path, not what its operator runs.
         </li>
         <li>
@@ -385,9 +423,9 @@
         <li>
           <b>Peering map:</b> each router's network is read on this computer from <a href="https://www.caida.org/catalog/datasets/routeviews-prefix2as/" target="_blank" rel="noreferrer">CAIDA's prefix-to-AS table</a>,
           fetched once a day. The IPv6 table (routeviews6-prefix2as) is fetched alongside it. Destinations are traced over IPv6 as well when this computer
-          has an IPv6 route; a route that crosses the same networks as the IPv4 one is listed but not drawn. Links are named transit, peering or customer from
+          has an IPv6 route. A route that crosses the same networks as the IPv4 one is listed but not drawn. Links are named transit, peering or customer from
           <a href="https://www.caida.org/catalog/datasets/as-relationships/" target="_blank" rel="noreferrer">CAIDA's AS relationships</a>, fetched monthly.
-          By default no router address is sent to any service. The last map run is kept on this computer; a new run replaces it.
+          By default no router address is sent to any service. The last map run is kept on this computer, and a new run replaces it.
         </li>
         <li>
           <b>Serving sites:</b> before a map run, and when the border links are found, Recursa makes one request each to speed.cloudflare.com,
@@ -395,7 +433,7 @@
           a header from Cloudflare, Fastly and CloudFront, the first line of Google's mapping report. Akamai gives none, so only its address is shown.
           Meta gets no request: Recursa looks up www.facebook.com and reads the site from the reverse name of the address. These addresses are the ones
           the map traces to. Cloudflare's answer also gives your network's number and an approximate city and position, used to name your network and to check
-          the routers' city hints; the address in it is never read.
+          the routers' city hints. The address in it is never read.
         </li>
         <li>
           <b>Exchanges and facilities:</b> only if you allow it, the map syncs <a href="https://www.peeringdb.com" target="_blank" rel="noreferrer">PeeringDB</a>'s
@@ -403,9 +441,9 @@
         </li>
         <li>
           <b>Router names and registry records:</b> only if you turn them on. Reverse names come from your resolver, so it sees each router's address, and are
-          read for a city hint by plain string rules; a hint is kept only when the round trip is long enough to reach that city. For address space that no
+          read for a city hint by plain string rules. A hint is kept only when the round trip is long enough to reach that city. For address space that no
           network announces, past your ISP, the holder is read from the regional registry's RDAP record through rdap.org. The request carries that router's
-          address, never one of yours; each answer covers a block and is kept for a month.
+          address, never one of yours. Each answer covers a block and is kept for a month.
         </li>
         <li>
           <b>Border links:</b> when the monitor is on, the last router inside your ISP and the first beyond it on the way to each CDN are probed with ICMP every
@@ -420,9 +458,11 @@
       <p>
         Free public resolvers share their capacity. Some say that they will limit a client address that sends too much. Recursa
         sends each resolver one query at a time (sends go out at least 4 ms apart in Accurate mode, 1 ms in Quick), so a run sends a resolver tens
-        of queries per second at most, in tests of 3 to 500 queries per resolver (30 by default). Monitoring sends six queries per
-        resolver in each cycle, three to each of its two servers. When resolvers of several operators go unanswered in the same cycle and none answers,
-        the cause is taken to be this network or the path, and the cycle is not counted against any of them. Time this computer was
+        of queries per second at most, in tests of 3 to 500 queries each (30 by default). Monitoring checks one resolver at a
+        time, spread evenly through the interval, with up to six queries per check, three to each of its first two servers. A resolver that
+        answers nothing is checked again at once together with every other monitored resolver. When resolvers of several operators go
+        unanswered in that check and none answers, the cause is taken to be this network or the path, and the cycle is not counted against
+        any of them. Time this computer was
         asleep is shown as no checks.
       </p>
       <p>
@@ -431,7 +471,7 @@
         Cloudflare gives no number. It says that it can limit security scanning, proxied traffic and a high rate of uncacheable
         answers (SERVFAIL for one domain, for example). Quad9, OpenDNS and Control D
         publish nothing that we could find, so Recursa shows no limit for them and does not guess. The free NextDNS plan counts
-        queries per profile, and the addresses here have no profile. The Usage limits of each resolver link to the sources.
+        queries per profile, and the addresses here have no profile. Where an operator publishes a limit, the resolver's Usage limits link to the source.
       </p>
       <p>
         <b>What Recursa detects.</b> After the measured tests, Recursa finds the highest number of queries sent to each resolver in
@@ -573,14 +613,13 @@
         It also requires a session token, which the page gets by trading the one-time code in the link Recursa opens or prints. Outbound, Recursa connects only to the resolvers you select, the
         CDN edges that they return, the time servers you choose on the Time page (UDP 123, and TCP 4460 for the NTS check), and the
         public sources above. During a run it also pings your default gateway. In a resolver's Inspector, or for
-        the resolvers selected in the list, Sample 18 queries sends 18 normal queries to each resolver, one time; Check live feeds, only when you start it,
+        the resolvers selected in the list, Sample 18 queries sends 18 normal queries to each resolver, one time. Check live feeds, only when you start it,
         downloads the URLhaus feed (from the malware-filter mirror) and ThreatView's high-confidence URL feed (at most once in 7 days), looks up to 60 of their hosts through Google or Cloudflare to find live ones
         (once per 30 minutes, since checks in that window share one sample), and asks the resolver for up to 20. The Live threat test in setup does the same once for a run, then asks every selected resolver for the same hosts. Check behaviour,
         also only when you start it, sends about 90 queries for test names (the root zone's key set, localtest.me, akahelp.net,
         extended-dns-errors.com, cloudflare.com) to the resolver over UDP, TCP, DoT and DoH where it offers them, plus three UDP queries to the
-        name servers of localtest.me and akahelp.net, to read the TTLs those zones publish. The Extended test, when a run starts, connects to <code>tranco-list.eu</code> over HTTPS
-        through your computer’s own DNS, reads the ID of the current Tranco list and downloads its top million sites (at most once in 30
-        days; later runs use the copy it kept), then looks the sampled names up through the resolvers you chose. Results stay in a local database:
+        name servers of localtest.me and akahelp.net, to read the TTLs those zones publish. The Extended test downloads nothing. Its names ship with Recursa, and it
+        looks them up through the resolvers you chose. Results stay in a local database:
       </p>
       <p class="mono path">{env?.db ?? '—'}</p>
     </section>
@@ -590,6 +629,7 @@
       <pre class="mono"><code>recursa                     # open the interface
 recursa run --samples 30    # benchmark the default set in the terminal
 recursa run --resolvers quad9,cloudflare --transports udp,doh --json
+recursa run --extended --resolvers quad9,cloudflare     # the Extended test, about 25 minutes
 recursa run --cached-names example.com,wikipedia.org    # your own names for the Cached test
 recursa run --cached-names-file names.txt               # or a file of them
 recursa check               # is port 53 direct or answered locally?

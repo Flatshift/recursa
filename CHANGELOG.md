@@ -2,11 +2,15 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.6.0 (2026-11-25)
 
-- Added the Extended test: a 25-minute comparison of two to four resolvers on 5,000 names, with a verdict and a chart of the run over time (`recursa run --extended`).
+- Added the Extended test: a 25-minute comparison of two to four resolvers over 5,000 lookups each, with a verdict and charts of repeat and cold lookups over the run (`recursa run --extended`).
+- Extended charts mark stretches where every resolver slowed together and name the likely cause: Wi-Fi or local network, this computer, or the internet link.
 - Reliability charts now show each resolver's median and spread over time.
-- Removed AdGuard DNS from the resolver list and the status feeds to respect its terms of service.
+- Background monitoring checks one resolver at a time, spread through the interval, instead of all at once; all are checked together only when one stops answering.
+- Removed AdGuard DNS from the resolver list and the status feeds.
+- Fixed the router check on macOS, which timed the computer's reply to itself instead of the router's and so never showed a slow or lost echo.
+- A run now records the network link it starts on, not the one seen at the last interception check.
 
 ## 0.5.9 (2026-11-21)
 

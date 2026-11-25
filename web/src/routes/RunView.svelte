@@ -196,7 +196,7 @@
           ? 'Running · getting ready'
           : 'Stopped before the first lookup'
         : running
-        ? `Running · ${sentOf(run.extended).toLocaleString()} of ${run.extended.total.toLocaleString()} lookups · about ${minutesLeft(run.extended)} min left`
+        ? `Running · ${sentOf(run.extended, run.phase === 'extended' ? run : undefined).toLocaleString()} of ${run.extended.total.toLocaleString()} lookups · about ${minutesLeft(run.extended, run.phase === 'extended' ? run : undefined)} min left`
         : [
             plural(resolverCount(run.targets), 'resolver'),
             run.status === 'cancelled'
@@ -261,12 +261,9 @@
     if (app.runView === 'latency' && n >= 1 && n <= tabs.length) test = tabs[n - 1];
   }
   const open = (id: string) => (app.inspect = id);
-  // Run again: the same finalists, started at once.
+  // Run again: the same configuration, started at once.
   function again() {
-    if (!run || !app.draft) return;
-    app.extPick = [...run.config.resolvers];
-    app.draft.mode = 'extended';
-    app.startRun();
+    if (run) app.rerun(run.config);
   }
 
   // The run's row in history, for its saved mark.
@@ -632,10 +629,10 @@
     height: 28px;
     font-size: var(--t-xs);
   }
-  /* Phone: five views (Numbers folds into Overview) as a strip of tabs under the bar, all in view at once. */
   .extacts {
     padding: 12px 0 24px;
   }
+  /* Phone: five views (Numbers folds into Overview) as a strip of tabs under the bar, all in view at once. */
   .viewstrip {
     flex: none;
     display: flex;

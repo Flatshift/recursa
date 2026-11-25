@@ -46,6 +46,8 @@ const AWDL_BPS: u64 = 100_000;
 /// Ticks per host row (1 Hz).
 #[cfg(any(unix, windows))]
 const TICKS_PER_ROW: usize = 10;
+/// A run stores every echo up to this many (five minutes' worth).
+const KEEP_ALL: usize = 3_000;
 
 /// What the gateway's echoes looked like over a run.
 #[derive(Clone, Debug, PartialEq)]
@@ -212,9 +214,9 @@ pub fn disabled() -> bool {
     std::env::var_os("RECURSA_NO_LINK").is_some_and(|v| v == "1")
 }
 
-/// Start pinging the default gateway. `at_ms` in the samples counts from `t0`, like `Sample.at`. The error is the
-/// reason there is no link check (shown to the user).
-pub fn start(t0: Instant) -> Result<LinkProbe, String> {
+/// Start pinging the default gateway. `at_ms` in the samples is what `elapsed_ms` returns, so the caller's clock
+/// for `Sample.at` is the one used here too. The error is the reason there is no link check (shown to the user).
+pub fn start(elapsed_ms: impl Fn() -> u32 + Send + 'static) -> Result<LinkProbe, String> {
     let gateway = crate::sysdns::default_gateway().ok_or("No default gateway found.")?;
     let IpAddr::V4(gw) = gateway else { return Err("The default gateway is not an IPv4 address.".into()) };
     #[cfg(any(unix, windows))]
@@ -230,15 +232,39 @@ pub fn start(t0: Instant) -> Result<LinkProbe, String> {
         let flag = stop.clone();
         let join = std::thread::Builder::new()
             .name("recursa-link".into())
-            .spawn(move || imp::sample(sock, t0, &flag))
+            .spawn(move || imp::sample(sock, elapsed_ms, &flag))
             .map_err(|e| format!("Could not start the link check ({e})."))?;
         Ok(LinkProbe { gateway, stop, join: Some(join) })
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (t0, gw);
+        let _ = (elapsed_ms, gw);
         Err("The link check is not available on this platform.".into())
     }
+}
+
+/// The echoes a run stores: all of them as `[at_ms, us]`, or past five minutes' worth one row a second,
+/// `[at_ms, us, stalled, sent]`: the worst echo (a lost one, else the slowest), then how many of that second's echoes
+/// were lost or over `limit_us`, and how many were sent.
+fn kept(samples: &[(u32, u32)], limit_us: u32) -> Vec<Vec<u32>> {
+    if samples.len() <= KEEP_ALL {
+        return samples.iter().map(|&(at, us)| vec![at, us]).collect();
+    }
+    let mut out: Vec<Vec<u32>> = Vec::new();
+    for &(at, us) in samples {
+        let stalled = (us == 0 || us > limit_us) as u32;
+        match out.last_mut() {
+            Some(last) if last[0] / 1000 == at / 1000 => {
+                if last[1] != 0 && (us == 0 || us > last[1]) {
+                    (last[0], last[1]) = (at, us);
+                }
+                last[2] += stalled;
+                last[3] += 1;
+            }
+            _ => out.push(vec![at, us, stalled, 1]),
+        }
+    }
+    out
 }
 
 /// The run-body value for a finished pinger, and the warning to show when the link was noisy.
@@ -258,7 +284,7 @@ pub fn report(r: Result<LinkRun, String>) -> (Value, Option<String>) {
         "sent": sum.sent, "lost": sum.lost,
         "p50": ms(sum.p50_us), "p95": ms(sum.p95_us), "max": ms(sum.max_us),
         "stalls": sum.stalls,
-        "samples": run.samples.iter().map(|&(at, us)| [at, us]).collect::<Vec<_>>(),
+        "samples": kept(&run.samples, sum.limit_us),
     });
     let cause = sum.noisy().then(|| classify(&sum, &run.samples, &run.host.rows));
     value["host"] = json!({
@@ -348,7 +374,15 @@ mod imp {
     struct Loopback {
         sock: Socket,
         dest: SockAddr,
+        nonce: [u8; 8],
         stamped: bool,
+    }
+
+    /// The gateway echo's nonce and the loopback echo's. macOS hands every ICMP socket every echo reply, so the two
+    /// must differ or each socket would take the other's reply for its own.
+    pub(super) fn nonces() -> ([u8; 8], [u8; 8]) {
+        let n = fastrand::u64(..);
+        (n.to_le_bytes(), (!n).to_le_bytes())
     }
 
     pub(super) fn open(gw: Ipv4Addr, iface: Option<String>) -> Result<Pinger, String> {
@@ -356,12 +390,13 @@ mod imp {
             Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::ICMPV4)).map_err(|e| format!("Could not open an ICMP socket ({e})."))?;
         let stamped = net::enable_rx_timestamps_fd(sock.as_raw_fd());
         let dest = SockAddr::from(SocketAddrV4::new(gw, 0));
+        let (nonce, lo_nonce) = nonces();
         let lo = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::ICMPV4)).ok().and_then(|sock| {
             sock.set_nonblocking(true).ok()?;
             let stamped = net::enable_rx_timestamps_fd(sock.as_raw_fd());
-            Some(Loopback { sock, dest: SockAddr::from(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)), stamped })
+            Some(Loopback { sock, dest: SockAddr::from(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)), nonce: lo_nonce, stamped })
         });
-        Ok(Pinger { sock, dest, nonce: fastrand::u64(..).to_le_bytes(), stamped, lo, iface })
+        Ok(Pinger { sock, dest, nonce, stamped, lo, iface })
     }
 
     /// One interface's `if_data` counters (32-bit on macOS, so they wrap).
@@ -513,7 +548,7 @@ mod imp {
         }
     }
 
-    pub(super) fn sample(p: Pinger, t0: Instant, stop: &AtomicBool) -> Pinged {
+    pub(super) fn sample(p: Pinger, elapsed_ms: impl Fn() -> u32, stop: &AtomicBool) -> Pinged {
         let id = std::process::id() as u16;
         let fd = p.sock.as_raw_fd();
         let mut echoes: Vec<Echo> = Vec::new();
@@ -529,12 +564,12 @@ mod imp {
             let stopping = stop.load(Ordering::Relaxed);
             let now = Instant::now();
             if !stopping && now >= next {
-                let at = t0.elapsed().as_millis() as u32;
+                let at = elapsed_ms();
                 let sent_ns = clock::now_ns();
                 let lag_us = Instant::now().saturating_duration_since(next).as_micros().min(u32::MAX as u128) as u32;
                 let ok = p.sock.send_to(&echo_request(id, seq, &p.nonce), &p.dest).is_ok();
                 let lo_sent_ns = clock::now_ns();
-                let lo_ok = p.lo.as_ref().is_some_and(|l| l.sock.send_to(&echo_request(id, seq, &p.nonce), &l.dest).is_ok());
+                let lo_ok = p.lo.as_ref().is_some_and(|l| l.sock.send_to(&echo_request(id, seq, &l.nonce), &l.dest).is_ok());
                 if echoes.len().is_multiple_of(TICKS_PER_ROW) {
                     snaps.push((Instant::now(), read_counters(p.iface.as_deref())));
                 }
@@ -553,7 +588,7 @@ mod imp {
             if let Some(l) = &p.lo {
                 while let Ok((n, stamp)) = net::recv_stamped_fd(l.sock.as_raw_fd(), &mut buf) {
                     let arrived = if l.stamped { stamp.unwrap_or_else(clock::now_ns) } else { clock::now_ns() };
-                    if let Some(reply) = parse_reply(&buf[..n], &p.nonce) {
+                    if let Some(reply) = parse_reply(&buf[..n], &l.nonce) {
                         settle(&mut echoes, lo, reply, arrived, true);
                     }
                 }
@@ -666,6 +701,15 @@ mod imp {
             assert_eq!(parse_reply(&icmp, &[8u8; 8]), None);
             icmp[0] = 8;
             assert_eq!(parse_reply(&icmp, &nonce), None);
+        }
+
+        #[test]
+        fn the_loopback_reply_is_never_taken_for_the_gateways() {
+            let (gw, lo) = nonces();
+            let mut reply = echo_request(1, 42, &lo);
+            reply[0] = 0;
+            assert_eq!(parse_reply(&reply, &lo), Some(42));
+            assert_eq!(parse_reply(&reply, &gw), None);
         }
     }
 }
@@ -787,14 +831,14 @@ mod imp {
         lag_us: u32,
     }
 
-    pub(super) fn sample(mut p: Pinger, t0: Instant, stop: &AtomicBool) -> Pinged {
+    pub(super) fn sample(mut p: Pinger, elapsed_ms: impl Fn() -> u32, stop: &AtomicBool) -> Pinged {
         let mut echoes: Vec<Echo> = Vec::new();
         let mut next = Instant::now();
         loop {
             let stopping = stop.load(Ordering::Relaxed);
             let now = Instant::now();
             if !stopping && now >= next {
-                let at = t0.elapsed().as_millis() as u32;
+                let at = elapsed_ms();
                 let lag_us = Instant::now().saturating_duration_since(next).as_micros().min(u32::MAX as u128) as u32;
                 let free = p.slots.iter().position(|s| s.echo.is_none());
                 let sent_ns = clock::now_ns();
@@ -970,6 +1014,19 @@ mod tests {
         let s = summarize(&[(0, 0), (100, 0)]);
         assert_eq!((s.sent, s.lost, s.stalls, s.p50_us), (2, 2, 2, 0));
         assert_eq!(s.replies(), 0);
+    }
+
+    #[test]
+    fn a_long_run_keeps_the_worst_echo_of_each_second() {
+        assert_eq!(kept(&steady(KEEP_ALL as u32, 2100), 20_000).len(), KEEP_ALL);
+        let mut samples = steady(KEEP_ALL as u32 + 10, 2100);
+        samples[3].1 = 90_000;
+        samples[14].1 = 90_000;
+        samples[15].1 = 0;
+        samples[16].1 = 95_000;
+        let k = kept(&samples, 20_000);
+        assert_eq!(k.len(), 301);
+        assert_eq!(k[..3], [vec![300, 90_000, 1, 10], vec![1500, 0, 3, 10], vec![2000, 2100, 0, 10]]);
     }
 
     #[test]

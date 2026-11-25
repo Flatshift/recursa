@@ -1,9 +1,9 @@
-//! Background monitoring: a light probe of selected resolvers every N minutes while
-//! Recursa is running. It pauses during manual runs and builds a local reliability
-//! record from this network.
+//! Background monitoring: a light probe of each selected resolver every N minutes while
+//! Recursa is running, one resolver at a time through the interval. It pauses during
+//! manual runs and builds a local reliability record from this network.
 
 use crate::app::AppState;
-use crate::attribution::{Cause, Egress, GapWatch, Reading, Verdict, attribute, operators};
+use crate::attribution::{Cause, Check, Egress, GapWatch, Reading, Spread, Verdict, attribute, operators};
 use crate::bench::{self, TestKind};
 use crate::catalog::{self, Resolver};
 use crate::clock;
@@ -69,7 +69,9 @@ pub(crate) fn independent(app: &AppState, cfg: &MonitorConfig) -> usize {
 
 pub fn spawn(app: Arc<AppState>) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut last_cycle = 0i64;
+        let mut spread = Spread::default();
+        // A check just ran: the next one may be due already.
+        let mut more = false;
         // Held while this process records monitoring for its database.
         let mut owner: Option<lock::Guard> = None;
         let mut seen = None;
@@ -81,7 +83,9 @@ pub fn spawn(app: Arc<AppState>) -> JoinHandle<()> {
         let mut egress_ids: Vec<String> = Vec::new();
         let rt = tokio::runtime::Handle::current();
         loop {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            if !std::mem::take(&mut more) {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
             // Another process may have switched it on or off: re-read once something has written to the database.
             if app.store.changed_since(&mut seen) {
                 app.reload_monitors();
@@ -90,7 +94,7 @@ pub fn spawn(app: Arc<AppState>) -> JoinHandle<()> {
             if !cfg.enabled {
                 // Let another Recursa process monitor this database instead; switched on again, start afresh.
                 owner = None;
-                last_cycle = 0;
+                spread = Spread::default();
                 watch = GapWatch::default();
                 // Switched on again, every egress is looked up afresh before the first cycle.
                 (egress_at, egress_tried) = (0, 0);
@@ -100,12 +104,13 @@ pub fn spawn(app: Arc<AppState>) -> JoinHandle<()> {
             // Fed on every tick, including those skipped below, so a paused stretch isn't read as a stall.
             let ready = watch.tick(reading());
             let now = bench::now_ms();
-            // Due time is derived from the current interval, so shortening it applies at once.
-            let due = last_cycle + cfg.interval_min.clamp(1, 1440) as i64 * 60_000;
             // A database download of ours would skew the probes: wait it out.
-            if app.run_active.load(Ordering::SeqCst) || app.downloading() || now < due || !ready {
+            if app.run_active.load(Ordering::SeqCst) || app.downloading() || !ready {
                 continue;
             }
+            let resolvers = monitored(&app, &cfg);
+            let every = cfg.interval_min.clamp(1, 1440) as i64 * 60_000;
+            let Some(check) = spread.due(now, resolvers.len(), every) else { continue };
             if owner.is_none() {
                 owner = lock::try_lock(&lock::monitor_path(&app.store.path));
                 if owner.is_none() {
@@ -114,11 +119,9 @@ pub fn spawn(app: Arc<AppState>) -> JoinHandle<()> {
             }
             // Never measure alongside a run or a cycle, in this process or another.
             let Some(_measuring) = lock::try_lock(&lock::measure_path()) else { continue };
-            let resolvers = monitored(&app, &cfg);
             // While port 53 is intercepted, plain DNS would measure the interceptor.
             let avoid_udp = app.interception.read().unwrap()["verdict"] == "intercepted";
-            let every = cfg.interval_min.clamp(1, 1440) as i64 * 60_000;
-            // Where each resolver's queries come from, looked up under the measure lock just before the cycle.
+            // Where each resolver's queries come from, looked up under the measure lock just before the check.
             let all = now - egress_at >= DAY_MS;
             let after_gap = watch.in_gap();
             let ids: Vec<String> = resolvers.iter().map(|r| r.id.clone()).collect();
@@ -140,21 +143,47 @@ pub fn spawn(app: Arc<AppState>) -> JoinHandle<()> {
                     continue;
                 }
             }
-            let rs = resolvers.clone();
+            let (a, rs) = (app.clone(), resolvers.clone());
             let ran = tokio::task::spawn_blocking(move || {
-                let rows = cycle(&rs, avoid_udp, every);
-                (rows, reading())
+                let mut rows = match check {
+                    Check::One(i) => cycle(std::slice::from_ref(&rs[i]), avoid_udp, every),
+                    Check::All => Vec::new(),
+                };
+                // A resolver that answered nothing alone is checked again with every other at once, which tells its
+                // failure from this network's.
+                let round = !rows.iter().any(|r| r.ok);
+                if round {
+                    // A run that started meanwhile is waiting for the measure lock: leave the check for later.
+                    if check != Check::All && a.run_active.load(Ordering::SeqCst) {
+                        return None;
+                    }
+                    let all = cycle(&rs, avoid_udp, every);
+                    // The lone samples join the round's cycle: the resolver is down only if it answers nothing in either.
+                    if let Some(ts) = all.first().map(|r| r.ts) {
+                        rows.iter_mut().for_each(|r| r.ts = ts);
+                    }
+                    rows.extend(all);
+                }
+                Some((rows, round, reading()))
             })
             .await;
-            let Ok((mut rows, after)) = ran else {
-                last_cycle = now;
+            let Ok(ran) = ran else {
+                spread.done(now, resolvers.len(), every, None);
+                watch.rebase(reading());
+                continue;
+            };
+            let Some((mut rows, round, after)) = ran else {
                 watch.rebase(reading());
                 continue;
             };
             let answered = rows.iter().any(|r| r.ok);
             let Verdict::Keep(gap) = watch.end_cycle(after, answered) else { continue };
-            last_cycle = now;
-            label_causes(&mut rows, &resolvers, &app.monitor_egress.read().unwrap());
+            // Causes come from comparing resolvers checked together, so a lone check that answered has none to set.
+            let all = round.then(|| {
+                label_causes(&mut rows, &resolvers, &app.monitor_egress.read().unwrap());
+                resolvers.iter().all(|r| rows.iter().any(|w| w.resolver_id == r.id && w.ok))
+            });
+            spread.done(now, resolvers.len(), every, all);
             app.store.monitor_record(&rows);
             if let Some(gap) = gap {
                 let ended = rows.first().map_or_else(bench::now_ms, |r| r.ts);
@@ -164,6 +193,7 @@ pub fn spawn(app: Arc<AppState>) -> JoinHandle<()> {
             let (raw, summaries) = prune_before(now, cfg.retention_days);
             app.store.monitor_prune(raw, summaries);
             watch.rebase(reading());
+            more = true;
         }
     })
 }

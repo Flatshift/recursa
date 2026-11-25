@@ -349,13 +349,17 @@ export interface RunConfig {
 
 /** Where the Extended test's names came from. */
 export interface ExtNames {
-  source: 'tranco' | 'tranco-cached' | 'bundled';
+  source: 'bundled';
   list_id: string;
   list_date: string;
   seed: number;
-  /** Common names (each asked three times), and less common ones. */
+  /** Common names (each asked several times: 3 in older runs, 8 now), and less common ones. */
   common: number;
   tail: number;
+  /** The internet registry (`arin`, `ripe`, …) serving the user's country when it was known, and how many of the
+   *  less common names came from its countries. Runs from before the regional lists have neither. */
+  region?: string | null;
+  regional?: number;
 }
 
 /** One resolver's lookups in one 15-second bin. Percentiles are null when nothing answered. */
@@ -376,6 +380,8 @@ export interface ExtBin {
   /** Every resolver lost half or more, so the bin is in no figure. */
   removed: boolean;
   r: ExtBinCell[];
+  /** The later asks of common names alone, by target index. Runs from before the split charts lack it; empty on a cold bin. */
+  rep?: ExtBinCell[];
 }
 
 /** The gap to the lowest median, with its range. */
@@ -416,6 +422,10 @@ export interface ExtResult {
   dropped_names: number;
   /** Best first. */
   rows: ExtRow[];
+  /** The ranking over the once-asked names alone, best first. Runs from before the cold ranking lack it. */
+  cold?: ExtRow[];
+  /** The gap in ms under which a cold gap counts as a tie. Runs from before the cold ranking lack it. */
+  cold_margin?: number;
   /** Share (0 to 1) of counted queries answered within each threshold in `x` (ms), by target index. */
   ecdf: { x: number[]; r: number[][] };
   groups: ExtGroup[];
@@ -429,10 +439,14 @@ export interface ExtendedState {
   total: number;
   per_bin: number;
   bin_s: number;
+  /** Seconds in a cold bin. Runs from before the split charts lack it and `cold_bins`. */
+  cold_bin_s?: number;
   gap_ms: number;
   timeout_ms: number;
   names: ExtNames;
   bins: ExtBin[];
+  /** The once-asked lookups in wider bins. */
+  cold_bins?: ExtBin[];
   gaps: ExtGap[];
   result: ExtResult;
 }
@@ -523,7 +537,7 @@ export interface Trace {
   hops: TraceHop[];
 }
 
-/** How the link to the gateway behaved while a run measured. Times in ms; samples are [ms into the run, µs], 0 µs = lost. */
+/** How the link to the gateway behaved while a run measured. Times in ms; samples are [ms into the run, µs], 0 µs = lost (a run over five minutes keeps the worst of each second). */
 export interface LinkStats {
   gateway: string;
   sent: number;
@@ -532,7 +546,8 @@ export interface LinkStats {
   p95: number;
   max: number;
   stalls: number;
-  samples: [number, number][];
+  /** `[at_ms, us]` for each echo; a long run has one row a second, `[at_ms, worst_us, stalled, sent]`. */
+  samples: number[][];
   /** What the Mac itself was doing, and the cause named from it. Absent in runs from before cause detection. */
   host?: LinkHost;
 }
@@ -541,9 +556,9 @@ export interface LinkStats {
 export type LinkCause = 'busy' | 'traffic' | 'awdl' | 'driver' | 'unknown';
 
 /** One row per second: [ms into the run, loopback echo µs, tick lag µs, en0 rx bps, en0 tx bps, en0 errors+drops, awdl0 bps]. null = not readable. */
-type HostSample = [number, number | null, number, number | null, number | null, number | null, number | null];
+export type HostSample = [number, number | null, number, number | null, number | null, number | null, number | null];
 
-interface LinkHost {
+export interface LinkHost {
   samples: HostSample[];
   cause: LinkCause | null;
 }

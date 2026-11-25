@@ -32,7 +32,30 @@ export interface OverTimeGap {
   t1: number;
   kind: string;
   label: string;
+  /** Part of the plan, not a fault: dotted instead of hatched, and named inside the plot. */
+  soft?: boolean;
 }
+
+/** Why every resolver slowed at once, as far as the run can tell. */
+export type SlowKind = 'busy' | 'traffic' | 'wifi' | 'local' | 'upstream' | 'shared';
+
+/** A stretch where every resolver slowed together. Unlike a gap its cells still draw and still count. */
+export interface OverTimeSlow {
+  t0: number;
+  t1: number;
+  kind: SlowKind;
+  label: string;
+}
+
+/** Where the cause sits; each family has its own mark on the chart and in its legend. */
+export const SLOW_FAMILY: Record<SlowKind, 'host' | 'net' | 'up' | 'any'> = {
+  busy: 'host',
+  traffic: 'host',
+  wifi: 'net',
+  local: 'net',
+  upstream: 'up',
+  shared: 'any',
+};
 
 /** An operator-reported incident on one series' panel. */
 export interface OverTimeMark {
@@ -65,6 +88,18 @@ export function slotGrid(series: OverTimeSeries[]): { base: number; width: numbe
 export function lastFilled(a: unknown[]): number {
   for (let i = a.length - 1; i >= 0; i--) if (a[i] != null) return i;
   return -1;
+}
+
+/** Series `b` with each cell eased from its value in `a` by `t` (0..1), in log space as the axes are. A cell new in `b` shows as it is. */
+export function blendSeries(a: OverTimeSeries[], b: OverTimeSeries[], t: number): OverTimeSeries[] {
+  const mix = (x: number | null, y: number | null) => (x != null && y != null && x > 0 && y > 0 ? x * (y / x) ** t : y);
+  return b.map((s, i) => ({
+    ...s,
+    cells: s.cells.map((c, k) => {
+      const p = a[i]?.cells[k];
+      return c && p ? { ...c, p5: mix(p.p5, c.p5), p25: mix(p.p25, c.p25), p50: mix(p.p50, c.p50), p75: mix(p.p75, c.p75), p95: mix(p.p95, c.p95) } : c;
+    }),
+  }));
 }
 
 /** The slot under a pixel x of a plot starting at `x0` and `w` wide; null outside it. */

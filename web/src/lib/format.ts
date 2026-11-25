@@ -169,3 +169,8 @@ export function shortWhen(ts: number | null | undefined): string {
   if (days === 1) return `Yesterday ${time}`;
   return when(ts);
 }
+
+/** A private, loopback, link-local or carrier-NAT address: on this network, not across the internet. */
+export const isPrivate = (ip: string) =>
+  /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip) ||
+  /^(fe[89ab]|fc|fd|::1$)/i.test(ip);

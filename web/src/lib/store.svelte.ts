@@ -1,5 +1,6 @@
 import { api, confirmAction, desktop, mac, mobile, notifyDone, onDesktop, saveExport, setCaps, streamRun, type RunStream } from './api';
 import { flushSync } from 'svelte';
+import { MIN_PICK } from './extended';
 import { resolverCount } from './format';
 import { reduceMotion } from './motion';
 import { phaseTab } from './phases';
@@ -104,8 +105,15 @@ class AppState {
   /** The user picked a results view while the run was live; don't switch for them at the end. */
   #viewChosen = false;
   #openSeq = 0;
+  /** The run being measured. It has no stored row until it ends, so the sidebar lists this one. */
+  live = $state<RunRow | null>(null);
+  /** The run measuring now, if any: one followed in the background, one found at launch, or the one on screen. */
+  get liveId(): string | null {
+    return this.live?.id ?? this.boot?.active_run ?? (this.run?.status === 'running' ? this.run.id : null);
+  }
+  #liveTimer: ReturnType<typeof setInterval> | undefined;
   draft = $state<RunConfig | null>(null);
-  /** The resolvers chosen for the Extended test, from the shortlist; also what Run again repeats. */
+  /** The resolvers picked for the Extended test, in slot order. */
   extPick = $state<string[]>([]);
   toast = $state<{ text: string; tone: 'info' | 'error' } | null>(null);
   /** Bumped when monitoring changes outside the UI (the desktop menu-bar item). */
@@ -113,11 +121,16 @@ class AppState {
 
   #stream: RunStream | null = null;
   #toastTimer: ReturnType<typeof setTimeout> | undefined;
+  /** An Extended run's chart and count updates while the window is hidden: the latest of each, by event type. */
+  #held = new Map<string, { ev: any; id: string }>();
 
   constructor() {
     window.addEventListener('popstate', () => {
       this.route = parse(location.pathname);
       this.#onRoute();
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) this.#release();
     });
     this.applyTheme();
     if (desktop) {
@@ -267,7 +280,11 @@ class AppState {
       if (!['accurate', 'quick', 'extended'].includes(this.draft.mode)) this.draft.mode = 'accurate';
       this.#onRoute();
       if (!this.#envSettled(this.boot.env)) this.#pollEnv();
-      if (this.boot.active_run && this.route.name === 'bench') this.navigate(`/run/${this.boot.active_run}`);
+      const live = this.boot.active_run;
+      if (live && this.route.name === 'bench') this.navigate(`/run/${live}`);
+      else if (live && !(this.route.name === 'run' && this.route.id === live)) {
+        api.get<RunState>(`/api/runs/${live}`).then((r) => r.status === 'running' && this.#trackLive(r)).catch(() => {});
+      }
     } catch (e) {
       this.bootError = (e as Error).message;
     }
@@ -366,8 +383,9 @@ class AppState {
   }
 
   async startRun() {
-    if (!this.draft || (this.draft.mode === 'extended' && this.extPick.length < 2)) return;
-    if (this.draft.live) {
+    if (!this.draft || (this.draft.mode === 'extended' && this.extPick.length < MIN_PICK)) return;
+    // An Extended run never does the live threat test, whatever the saved setup says.
+    if (this.draft.live && this.draft.mode !== 'extended') {
       const n = this.draft.resolvers.length;
       const through = n === 1 ? 'the selected resolver' : `each of the ${n} selected resolvers`;
       const msg = `Run the live threat test? It looks up about 20 real malware hosts through ${through}. Security tools on your network may flag the lookups.`;
@@ -375,9 +393,20 @@ class AppState {
     }
     this.saveDraft();
     try {
-      // Extended asks two to four finalists, over UDP on IPv4, and none of the other checks.
+      // Extended compares two to four resolvers, over UDP on IPv4, and runs none of the other checks.
       const body: RunConfig = this.draft.mode === 'extended' ? { ...this.draft, resolvers: this.extPick, samples: 5000, transports: ['udp'], family: 'v4', tests: [], probes: false, cdn: false, live: false } : this.draft;
       const { id } = await api.post<{ id: string }>('/api/runs', body);
+      this.run = null;
+      this.navigate(`/run/${id}`);
+    } catch (e) {
+      this.notify((e as Error).message, 'error');
+    }
+  }
+
+  /** Start a stored run's own configuration again, leaving the saved setup as it is. */
+  async rerun(config: RunConfig) {
+    try {
+      const { id } = await api.post<{ id: string }>('/api/runs', config);
       this.run = null;
       this.navigate(`/run/${id}`);
     } catch (e) {
@@ -475,7 +504,10 @@ class AppState {
       // A live run opens on its samples landing; a finished one on its verdict.
       this.runView = r.status === 'running' ? liveView(r) : 'overview';
       this.#viewChosen = false;
-      if (r.status === 'running') this.#connect(id);
+      if (r.status === 'running') {
+        this.#trackLive(r);
+        this.#connect(id);
+      } else if (this.live?.id === id) this.#recordRun(r);
     } catch (e) {
       if (seq !== this.#openSeq) return;
       this.runError = (e as Error).message;
@@ -499,15 +531,18 @@ class AppState {
     );
   }
 
-  #apply(ev: any, id: string) {
+  #apply(ev: any, id: string, held = false) {
     if (ev.type === 'snapshot') {
+      this.#held.clear();
       this.run = ev.run as RunState;
       return;
     }
     if (ev.type === 'resync') {
+      this.#held.clear();
       this.openRun(id);
       return;
     }
+    if (!held && this.#hold(ev, id)) return;
     const cur = this.#staged?.run ?? this.run;
     if (!cur || cur.id !== id) return;
     if (typeof ev.seq === 'number' && ev.seq <= cur.seq) return;
@@ -534,8 +569,8 @@ class AppState {
         next.extended = ev.extended;
         break;
       case 'extended':
-        // The new bins are appended; the gaps and the running figures are replaced whole.
-        next.extended = cur.extended ? { ...cur.extended, bins: cur.extended.bins.concat(ev.bins), gaps: ev.gaps, result: ev.result } : cur.extended;
+        // Every bin so far is sent each time: a later answer or a sleep can change an earlier bin.
+        next.extended = cur.extended ? { ...cur.extended, bins: ev.bins, cold_bins: ev.cold_bins, gaps: ev.gaps, result: ev.result } : cur.extended;
         break;
       case 'samples':
         // An Extended run's 20,000 samples are not read while it runs; the finished run carries them all.
@@ -626,6 +661,25 @@ class AppState {
     this.#show(next, this.#staged?.view ?? this.runView, false);
   }
 
+  /** While the window is hidden, holds an Extended run's chart or count update: each carries the whole state so far,
+   * so only the latest of each is kept and nothing is drawn. Otherwise applies what was held, first. */
+  #hold(ev: any, id: string): boolean {
+    const cur = this.#staged?.run ?? this.run;
+    if (document.hidden && cur?.id === id && cur.config.mode === 'extended' && (ev.type === 'extended' || ev.type === 'samples')) {
+      this.#held.set(ev.type, { ev, id });
+      return true;
+    }
+    this.#release();
+    return false;
+  }
+
+  #release() {
+    if (!this.#held.size) return;
+    const held = [...this.#held.values()].sort((a, b) => (a.ev.seq ?? 0) - (b.ev.seq ?? 0));
+    this.#held.clear();
+    for (const h of held) this.#apply(h.ev, h.id, true);
+  }
+
   /** Tell the user a run finished while they were in another app. */
   #announceDone(r: RunState) {
     if (document.hasFocus()) return;
@@ -634,7 +688,24 @@ class AppState {
     notifyDone(title, `Results for ${n} resolver${n === 1 ? '' : 's'} are ready.`);
   }
 
+  #trackLive(r: RunState) {
+    if (this.live?.id === r.id) return;
+    this.live = { id: r.id, started_at: r.started_at, finished_at: null, status: 'running', summary: {}, saved: false };
+    clearInterval(this.#liveTimer);
+    // With another run on screen this one has no stream here; its row in the stored list says it ended.
+    this.#liveTimer = setInterval(async () => {
+      const id = this.live?.id;
+      if (!id) return clearInterval(this.#liveTimer);
+      if (this.run?.id === id) return;
+      const runs = await api.get<RunRow[]>('/api/runs').catch(() => null);
+      if (this.live?.id !== id || !runs?.some((x) => x.id === id)) return;
+      this.live = null;
+      if (this.boot) this.boot = { ...this.boot, active_run: null, runs };
+    }, 5000);
+  }
+
   #recordRun(r: RunState) {
+    this.live = null;
     if (!this.boot) return;
     const row: RunRow = { id: r.id, started_at: r.started_at, finished_at: r.finished_at, status: r.status, summary: {}, saved: false };
     this.boot = { ...this.boot, active_run: null, runs: [row, ...this.boot.runs.filter((x) => x.id !== r.id)] };

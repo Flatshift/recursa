@@ -1,5 +1,5 @@
 # Common names with long TTLs, written by hand by category for the Extended test.
-# Built: 2026-11-22
+# Built: 2026-11-23
 # One lower-case registrable domain per line. tools/build-names.py common --check trims this list.
 
 # search
@@ -10,20 +10,17 @@ ask.com
 seznam.cz
 mojeek.com
 metager.org
-msn.com
 # video and streaming
 twitch.tv
 paramountplus.com
 iheart.com
 svt.se
 # social and messaging
-skype.com
 dribbble.com
 disqus.com
 # commerce
 costco.com
 etsy.com
-rakuten.co.jp
 adidas.com
 currys.co.uk
 kroger.com
@@ -182,6 +179,7 @@ gov.hr
 sabor.hr
 dzs.hr
 stat.si
+nih.gov
 # education
 stanford.edu
 princeton.edu
@@ -206,7 +204,6 @@ kyoto-u.ac.jp
 snu.ac.kr
 ntu.edu.sg
 iitd.ac.in
-iisc.ac.in
 sydney.edu.au
 auckland.ac.nz
 wits.ac.za
@@ -264,11 +261,22 @@ univ-lille.fr
 u-bordeaux.fr
 univ-grenoble-alpes.fr
 univ-rennes.fr
+unimelb.edu.au
+kuleuven.be
+uio.no
+unam.mx
+uct.ac.za
+kaist.ac.kr
+titech.ac.jp
+uu.nl
+lu.se
+umn.edu
+uw.edu
+ucsd.edu
 # reference
 ieee.org
 pubmed.gov
 # software and update hosts
-live.com
 office365.com
 visualstudio.com
 mzstatic.com
@@ -284,11 +292,9 @@ chef.io
 fastly.com
 ovh.com
 pcloud.com
-protonmail.com
 evernote.com
 sap.com
 broadcom.com
-cisco.com
 fortinet.com
 malwarebytes.com
 eset.com
@@ -327,7 +333,6 @@ whatwg.org
 apnic.net
 lacnic.net
 codeberg.org
-nmap.org
 arm.com
 philips.com
 nokia.com
@@ -342,13 +347,11 @@ avm.de
 mathworks.com
 sas.com
 tableau.com
-proton.me
 fastmail.com
 strato.de
 leaseweb.com
 rackspace.com
 # banks and payments
-capitalone.com
 fidelity.com
 etrade.com
 lloydsbank.com
@@ -443,7 +446,6 @@ sbb.ch
 renfe.com
 hertz.com
 viator.com
-carnival.com
 # regional services: Africa
 vodacom.co.za
 orange.com
@@ -477,7 +479,6 @@ libero.it
 virgilio.it
 movistar.es
 vodafone.es
-elcorteingles.es
 odido.nl
 swisscom.ch
 tele2.se
@@ -498,7 +499,6 @@ vodafone.gr
 tvp.pl
 telekom.sk
 # regional services: Americas
-t-mobile.com
 spectrum.com
 cox.com
 ups.com

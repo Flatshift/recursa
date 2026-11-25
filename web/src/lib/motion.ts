@@ -25,6 +25,9 @@ export const RERANK_GAP = 1800;
 /** The latency axis easing to new bounds while a run is live (the `Tween` options; log10 space). */
 export const ZOOM = { duration: reduceMotion ? 0 : 600, easing: quintOut };
 
+/** A live chart's newest stretch drawn in over about one update's time, at an even pace (the `Tween` options; slots). */
+export const REVEAL = { duration: reduceMotion ? 0 : 3000 };
+
 /** A gridline or axis label entering or leaving as the axis zooms. */
 export const TICK_FADE = reduceMotion ? 0 : 200;
 

@@ -19,8 +19,9 @@
     { href: '/settings', label: 'Settings', icon: 'gear', match: 'settings', key: ',' },
   ] as const;
 
-  const runs = $derived(app.boot?.runs ?? []);
-  const liveId = $derived(app.boot?.active_run ?? (app.run?.status === 'running' ? app.run.id : null));
+  const stored = $derived(app.boot?.runs ?? []);
+  const runs = $derived(app.live && !stored.some((r) => r.id === app.live!.id) ? [app.live, ...stored] : stored);
+  const liveId = $derived(app.liveId);
   const current = $derived(app.route.name === 'run' ? app.route.id : null);
   const monitoring = $derived(app.boot?.monitor ?? null);
   const border = $derived(app.boot?.border_monitor ?? null);

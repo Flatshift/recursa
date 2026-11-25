@@ -1587,7 +1587,7 @@ fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
     };
     let auth = authority_ttls(h, set, cfg, &cached, selected, &verified, timeout);
     // The link check pings the gateway from the start of warm-up to the end of the measured phases.
-    let pinger = (!link::disabled()).then(|| link::start(t0));
+    let pinger = (!link::disabled()).then(|| link::start(move || t0.elapsed().as_millis() as u32));
     // Warm-up gets a budget of its own: setup may have used most of the shared one, and a target
     // left unwarmed would measure cold lookups in its cached test.
     warm_up(Setup::new(cfg), h, &mut xs, timeout, &cached, &fresh);

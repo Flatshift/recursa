@@ -566,11 +566,18 @@ impl AppState {
         // The run's thread sets `measuring` itself, only while it times.
         let (claim, measure) = self.claim_run().await?;
         let app = self.clone();
+        // The interception check can be hours old; the run records the link it leaves by now.
+        let mut env = self.env();
+        if env["interception"].is_object()
+            && let Ok(Some(link)) = tokio::task::spawn_blocking(crate::sysdns::link).await
+        {
+            env["interception"]["link"] = link;
+        }
         let deps = bench::Deps {
             resolvers,
             intel: self.intel.clone(),
             rt: tokio::runtime::Handle::current(),
-            env: self.env(),
+            env,
             client_v6: self.client_v6(),
             measuring: self.measuring.clone(),
             store: self.store.clone(),

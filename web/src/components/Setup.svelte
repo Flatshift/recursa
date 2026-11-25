@@ -9,6 +9,7 @@
   import { TEST_LABEL } from '../lib/phases';
   import { onResolverContext } from '../lib/resolverMenu';
   import { latestChecks } from '../lib/measured';
+  import { MAX_PICK, MIN_PICK, toggled } from '../lib/extended';
   import Icon from './Icon.svelte';
   import Toolbar from './Toolbar.svelte';
   import SetupExtended from './SetupExtended.svelte';
@@ -30,6 +31,12 @@
     app.saveDraft();
   });
 
+  // A resolver removed while it is picked for the Extended test gives up its slot.
+  $effect(() => {
+    const keep = app.extPick.filter((id) => resolvers.some((r) => r.id === id));
+    if (keep.length !== app.extPick.length) app.extPick = keep;
+  });
+
   const matches = (r: Resolver) => {
     const f = filter.trim().toLowerCase();
     if (!f) return true;
@@ -47,10 +54,19 @@
     return [...m.entries()];
   });
 
-  const selected = $derived(new Set(draft.resolvers));
   const extended = $derived(draft.mode === 'extended');
+  // Extended keeps its own short pick, so switching pacing leaves the benchmark's selection alone.
+  const selected = $derived(new Set(extended ? app.extPick : draft.resolvers));
   function toggle(id: string) {
-    draft.resolvers = selected.has(id) ? draft.resolvers.filter((x) => x !== id) : [...draft.resolvers, id];
+    if (extended) app.extPick = toggled(app.extPick, id);
+    else draft.resolvers = selected.has(id) ? draft.resolvers.filter((x) => x !== id) : [...draft.resolvers, id];
+  }
+  /** Why a resolver can't be ticked for the Extended test, which runs over IPv4 and has MAX_PICK slots. */
+  function blocked(r: Resolver): string | null {
+    if (!extended || selected.has(r.id)) return null;
+    if (!r.ipv4.length) return 'The Extended test runs over IPv4, and this resolver has no IPv4 address.';
+    if (app.extPick.length >= MAX_PICK) return `All ${MAX_PICK} slots are in use. Remove one to pick another.`;
+    return null;
   }
   function setAll(ids: string[]) {
     draft.resolvers = ids;
@@ -93,7 +109,7 @@
   // opens by itself and stays open through the first picks, until Done.
   let editing = $state(false);
   $effect(() => {
-    if (draft.resolvers.length === 0) editing = true;
+    if (selected.size === 0) editing = true;
   });
   const pickerOpen = $derived(!mobile || editing);
   let planOpen = $state(false);
@@ -111,7 +127,7 @@
   const chosenNames = $derived(chosen.map((r) => label(r.provider, r.variant)).join(' · '));
   const planLine = $derived(
     extended
-      ? ['Extended test']
+      ? 'Extended test · 5,000 lookups each'
       : [
       draft.tests.map((k) => TEST_LABEL[k]).join(', ') || 'No tests',
       ...(draft.cdn ? ['CDN mapping'] : []),
@@ -134,7 +150,7 @@
   // One line per provider that publishes limits, among the resolvers picked.
   const limited = $derived([...new Map(chosen.filter((r) => r.limits).map((r) => [r.provider, r])).values()]);
   const estimate = $derived.by(() => {
-    // Extended sends 5,000 lookups to each finalist, over UDP on IPv4.
+    // Extended sends 5,000 lookups to each resolver picked, over UDP on IPv4.
     if (extended) return { targets: app.extPick.length, queries: 5000 * app.extPick.length, ms: runEstimateMs(app.extPick.length, app.extPick.length, { ...draft, samples: 5000 }) };
     let targets = 0;
     for (const r of chosen) {
@@ -149,11 +165,15 @@
 
   const v6ok = $derived(app.env?.vantage?.ipv6_reachable ?? false);
   const noNames = $derived(draft.tests.includes('cached') && !draft.cached_names?.length);
-  const canStart = $derived(extended ? app.extPick.length >= 2 : draft.resolvers.length > 0 && draft.tests.length > 0 && draft.transports.length > 0 && estimate.targets > 0 && !noNames);
+  // One run at a time: while one is measuring, Start becomes the way back to it.
+  const liveId = $derived(app.liveId);
+  const openLive = () => liveId && app.navigate(`/run/${liveId}`);
+  const LIVE_NOTE = 'A run is measuring. The next one can start when it ends.';
+  const canStart = $derived(extended ? app.extPick.length >= MIN_PICK : draft.resolvers.length > 0 && draft.tests.length > 0 && draft.transports.length > 0 && estimate.targets > 0 && !noNames);
   const blocker = $derived(
     extended
-      ? app.extPick.length < 2
-        ? 'Tick at least two resolvers to compare.'
+      ? app.extPick.length < MIN_PICK
+        ? 'Pick at least two resolvers to compare.'
         : null
       : !draft.resolvers.length
       ? 'Pick at least one resolver.'
@@ -174,7 +194,9 @@
     try {
       const r = await api.post<Resolver>('/api/resolvers', { ip: newIp, name: newName, dot: newDot, doh: newDoh });
       await app.refreshBoot();
-      draft.resolvers = [...new Set([...draft.resolvers, r.id])];
+      if (extended) {
+        if (r.ipv4.length && !app.extPick.includes(r.id)) app.extPick = toggled(app.extPick, r.id);
+      } else draft.resolvers = [...new Set([...draft.resolvers, r.id])];
       newIp = newName = newDot = newDoh = '';
       adding = false;
       app.notify(r.group === 'system' ? `That's your system resolver: it's now called ${r.provider}.` : `Added ${r.provider} ${r.name}.`);
@@ -186,6 +208,7 @@
   async function removeResolver(id: string) {
     await api.del(`/api/resolvers/${id}`);
     draft.resolvers = draft.resolvers.filter((x) => x !== id);
+    app.extPick = app.extPick.filter((x) => x !== id);
     await app.refreshBoot();
   }
 
@@ -204,9 +227,10 @@
       e.preventDefault();
       filterEl?.focus();
     }
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && canStart) {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && (liveId || canStart)) {
       e.preventDefault();
-      app.startRun();
+      if (liveId) openLive();
+      else app.startRun();
     }
   }
 
@@ -233,13 +257,19 @@
 <div class="view-root">
   <Toolbar
     title="Benchmark"
-    subtitle={blocker ?? `≈ ${duration(estimate.ms)} · ${estimate.queries.toLocaleString()} queries · ${estimate.targets} targets`}
+    subtitle={liveId ? LIVE_NOTE : (blocker ?? `≈ ${duration(estimate.ms)} · ${estimate.queries.toLocaleString()} queries · ${estimate.targets} targets`)}
   >
     {#snippet actions()}
       {#if !mobile}
-        <button class="btn primary" disabled={!canStart} title={blocker ?? `Start (${shortcut('cmd+Enter')})`} onclick={() => app.startRun()}>
-          <Icon name="play" size={12} />Start
-        </button>
+        {#if liveId}
+          <button class="btn primary" title={`Open the run in progress (${shortcut('cmd+Enter')})`} onclick={openLive}>
+            <span class="live-dot" aria-hidden="true"></span>Measuring… View run
+          </button>
+        {:else}
+          <button class="btn primary" disabled={!canStart} title={blocker ?? `Start (${shortcut('cmd+Enter')})`} onclick={() => app.startRun()}>
+            <Icon name="play" size={12} />Start
+          </button>
+        {/if}
       {/if}
     {/snippet}
   </Toolbar>
@@ -248,14 +278,18 @@
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <section class="pick content scroll" aria-labelledby="pick-h" oncontextmenu={onResolverContext}>
       {#if extended}
-      <SetupExtended />
-      {:else}
+        <SetupExtended />
+      {/if}
       <header class="pick-head">
-        <h2 id="pick-h" class="section-title">Resolvers <span class="count num">{draft.resolvers.length}</span></h2>
-        {#if mobile && draft.resolvers.length > 0}
+        <h2 id="pick-h" class="section-title">
+          Resolvers <span class="count num">{extended ? `${app.extPick.length} of ${MAX_PICK}` : draft.resolvers.length}</span>
+        </h2>
+        {#if mobile && selected.size > 0}
           <button class="textbtn" aria-expanded={editing} onclick={() => (editing = !editing)}>{editing ? 'Done' : 'Edit'}</button>
         {/if}
-        {#if pickerOpen}
+        {#if extended}
+          <p class="full" role="status">{app.extPick.length >= MAX_PICK ? `All ${MAX_PICK} slots are in use. Remove one to pick another.` : ''}</p>
+        {:else if pickerOpen}
         <div class="quick" class:seg={mobile} class:five={mobile}>
           <button class={pickCls} onclick={() => setAll(resolvers.filter((r) => r.default).map((r) => r.id))}>Defaults</button>
           <button class={pickCls} onclick={() => setAll(resolvers.filter((r) => r.group !== 'legacy').map((r) => r.id))}
@@ -275,7 +309,7 @@
         </div>
         {/if}
       </header>
-      {#if mobile && !pickerOpen}
+      {#if mobile && !pickerOpen && !extended}
         <p class="names">{chosenNames}</p>
       {/if}
       {#if icpt && icpt.verdict !== 'direct' && icpt.verdict !== 'unknown'}
@@ -317,6 +351,7 @@
 
       <div class="group">
         <h3>Public resolvers</h3>
+        {#if filter.trim() && !providers.some(([, list]) => list.some(matches))}<p class="hint">No public resolver matches “{filter.trim()}”.</p>{/if}
         {#each providers as [provider, list] (provider)}
           {@const visible = list.filter(matches)}
           {#if visible.length}
@@ -377,7 +412,6 @@
         {/if}
       </div>
       {/if}
-      {/if}
     </section>
 
     {#if mobile}
@@ -411,16 +445,45 @@
     {#if mobile}
       <!-- The phone's Start lives at the foot of the page so it stays in reach while scrolled. -->
       <div class="startbar">
-        <p class="est" class:blocked={!!blocker}>
-          {blocker ?? `≈ ${duration(estimate.ms)} · ${estimate.queries.toLocaleString()} queries · ${estimate.targets} targets`}
+        <p class="est" class:blocked={!liveId && !!blocker}>
+          {liveId ? LIVE_NOTE : (blocker ?? `≈ ${duration(estimate.ms)} · ${estimate.queries.toLocaleString()} queries · ${estimate.targets} targets`)}
         </p>
-        <button class="btn primary" disabled={!canStart} onclick={() => app.startRun()}><Icon name="play" size={14} />Start</button>
+        {#if liveId}
+          <button class="btn primary" onclick={openLive}><span class="live-dot" aria-hidden="true"></span>View run</button>
+        {:else}
+          <button class="btn primary" disabled={!canStart} onclick={() => app.startRun()}><Icon name="play" size={14} />Start</button>
+        {/if}
       </div>
     {/if}
   </div>
 </div>
 
 {#snippet planBody()}
+        <fieldset>
+          <legend>Pacing</legend>
+          <div class="seg three" role="radiogroup">
+            <label class="segbtn">
+              <input type="radio" name="mode" value="accurate" aria-label="Accurate pacing" bind:group={draft.mode} />
+              <span>Accurate</span>
+            </label>
+            <label class="segbtn">
+              <input type="radio" name="mode" value="quick" aria-label="Quick pacing" bind:group={draft.mode} />
+              <span>Quick</span>
+            </label>
+            <label class="segbtn">
+              <input type="radio" name="mode" value="extended" aria-label="Extended pacing" bind:group={draft.mode} />
+              <span>Extended</span>
+            </label>
+          </div>
+          <p class="hint">
+            {draft.mode === 'accurate'
+              ? 'One query in flight per resolver, sends 4 ms apart, so queries never queue on your link.'
+              : draft.mode === 'quick'
+                ? 'Up to 8 queries in flight to different resolvers. Faster, slightly noisier.'
+                : 'One name every 300 ms to each resolver, for about 25 minutes. A long side-by-side comparison of two to four resolvers.'}
+          </p>
+        </fieldset>
+
         {#if !extended}
         <fieldset>
           <legend>Transports</legend>
@@ -475,31 +538,23 @@
         </fieldset>
 
         {/if}
-        <fieldset>
-          <legend>Pacing</legend>
-          <div class="seg wide" role="radiogroup">
-            <label class="segbtn">
-              <input type="radio" name="mode" value="accurate" aria-label="Accurate pacing" bind:group={draft.mode} />
-              <span>Accurate</span>
-            </label>
-            <label class="segbtn">
-              <input type="radio" name="mode" value="quick" aria-label="Quick pacing" bind:group={draft.mode} />
-              <span>Quick</span>
-            </label>
-            <label class="segbtn">
-              <input type="radio" name="mode" value="extended" aria-label="Extended pacing" bind:group={draft.mode} />
-              <span>Extended</span>
-            </label>
-          </div>
-          <p class="hint">
-            {draft.mode === 'accurate'
-              ? 'One query in flight per resolver, sends 4 ms apart, so queries never queue on your link.'
-              : draft.mode === 'quick'
-                ? 'Up to 8 queries in flight to different resolvers. Faster, slightly noisier.'
-                : 'One name every 300 ms to each resolver, for about 25 minutes. For settling a close call between two to four resolvers.'}
-          </p>
-        </fieldset>
-        {#if !extended}
+        {#if extended}
+          <fieldset>
+            <legend>What it sends</legend>
+            <dl class="facts">
+              <dt>Lookups</dt>
+              <dd><span class="num">5,000</span> to each resolver</dd>
+              <dt>Transport</dt>
+              <dd>UDP over IPv4</dd>
+              <dt>Names</dt>
+              <dd><span class="num">500</span> common, asked 8 times each, and <span class="num">1,000</span> less common</dd>
+            </dl>
+            <p class="hint">
+              Both name lists ship with Recursa. They were screened through a family filter when they were built, and adult top-level
+              domains are left out. Every name will show in the DNS log of your router or filter.
+            </p>
+          </fieldset>
+        {:else}
 
         {#if limited.length}
           <div class="limits" role="note">
@@ -547,16 +602,18 @@
           </div>
         </fieldset>
         {/if}
-        <p class="hint start-hint">{#each shortcutParts('cmd+Enter') as k, i}{i ? ' ' : ''}<kbd>{k}</kbd>{/each} starts the benchmark.</p>
+        <p class="hint start-hint">{#each shortcutParts('cmd+Enter') as k, i}{i ? ' ' : ''}<kbd>{k}</kbd>{/each} starts the {extended ? 'Extended test' : 'benchmark'}.</p>
 {/snippet}
 
 {#snippet row(r: Resolver, removable = false)}
-  <div class="rrow" class:on={selected.has(r.id)} data-resolver={r.id}>
-    <label>
-      <input type="checkbox" aria-label="{label(r.provider, r.variant)}, {r.ipv4[0] ?? r.ipv6[0] ?? r.name}" checked={selected.has(r.id)} onchange={() => toggle(r.id)} />
+  {@const why = blocked(r)}
+  <div class="rrow" class:on={selected.has(r.id)} class:off={!!why} data-resolver={r.id}>
+    <label title={why}>
+      <input type="checkbox" aria-label="{label(r.provider, r.variant)}, {r.ipv4[0] ?? r.ipv6[0] ?? r.name}" checked={selected.has(r.id)} disabled={!!why} onchange={() => toggle(r.id)} />
       <span class="rname">{documented(r) ? r.variant || r.provider : label(r.provider, r.variant)}</span>
       <span class="rip mono">{r.ipv4[0] ?? r.ipv6[0] ?? r.name}</span>
       <span class="chips">
+        {#if extended && !r.ipv4.length}<span class="chip">no IPv4</span>{/if}
         {#if !r.udp}<span class="chip enc" title={r.notes ?? ''}>encrypted only</span>{/if}
         {#if r.group === 'legacy'}<span class="chip">legacy</span>{/if}
         {#if r.limits}<span class="chip" title={r.limits.text}>rate limits</span>{/if}
@@ -723,6 +780,16 @@
   .rrow:hover {
     background: var(--surface-2);
   }
+  .rrow.off:hover {
+    background: none;
+  }
+  .rrow.off .rname {
+    color: var(--ink-2);
+  }
+  .full {
+    font-size: var(--t-xs);
+    color: var(--ink-3);
+  }
   .rrow label {
     flex: 1;
     display: grid;
@@ -883,17 +950,32 @@
   .sub {
     padding-left: 24px;
   }
+  .facts {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 6px 14px;
+    margin: 0;
+    font-size: var(--t-sm);
+  }
+  .facts dt {
+    color: var(--ink-3);
+  }
+  .facts dd {
+    margin: 0;
+  }
   @media (max-width: 980px) {
     .plan {
       width: 290px;
       padding: 18px 16px 24px;
     }
   }
-  @media (max-width: 560px) {
+  @media (max-width: 1140px) {
     .provider {
       grid-template-columns: 1fr;
       gap: 0;
     }
+  }
+  @media (max-width: 560px) {
     .add {
       grid-template-columns: 1fr;
     }
@@ -1178,5 +1260,27 @@
     min-width: 112px;
     min-height: 44px;
     font-size: var(--t-base);
+  }
+  /* The sidebar's live-run dot, in the button's own ink. */
+  .live-dot {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: live-pulse 1.4s var(--ease-out) infinite;
+  }
+  @keyframes live-pulse {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in oklch, currentColor 55%, transparent);
+    }
+    100% {
+      box-shadow: 0 0 0 5px transparent;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .live-dot {
+      animation: none;
+    }
   }
 </style>

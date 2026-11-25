@@ -4,7 +4,8 @@
 #   tools/build-names.py pool --classes                  verify the Wikidata class IDs (label and count of official websites)
 #   tools/build-names.py pool [--work DIR]               build data/names-pool.txt from Wikidata official websites
 # Flags: --work DIR scratch for downloads and the resumable progress file, --rate N lookups per second (default 20),
-# --limit N small trial run (writes to the work folder, never over the bundled files), --doh URL the pool's liveness resolver.
+# --limit N small trial run (writes to the work folder, never over the bundled files), --doh URL the pool's liveness and content-filter resolver,
+# --per-country N the most names the pool keeps for one country.
 import argparse, ipaddress, json, os, random, re, sys, time, threading, urllib.error, urllib.parse, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -16,13 +17,30 @@ UA = "Recursa-DNS-Benchmark-build/1 (+https://github.com/flatshift/recursa)"
 PSL_URL = "https://publicsuffix.org/list/public_suffix_list.dat"
 SPARQL = "https://query.wikidata.org/sparql"
 WDAPI = "https://www.wikidata.org/w/api.php"
-CHECK_ENDPOINTS = ["https://dns.google/resolve", "https://cloudflare-dns.com/dns-query"]
-LIVENESS = "https://cloudflare-dns.com/dns-query"
+# Cloudflare for Families blocks malware and adult sites: a blocked name answers 0.0.0.0, which is not a public address, so
+# both lists drop it like a dead name.
+FAMILY = "https://family.cloudflare-dns.com/dns-query"
+CHECK_ENDPOINTS = ["https://dns.google/resolve", FAMILY]
+LIVENESS = FAMILY
 COMMON_KEEP, MIN_TTL = 500, 900
 PAGE, PAGE_PAUSE = 20000, 2
 BLOCKED_TLDS = {"local", "localhost", "internal", "onion", "test", "invalid", "example", "lan", "home", "corp", "arpa"}
-# Country TLDs left out because filtering resolvers and networks often block or drop names under them, which reads as loss.
-EXCLUDED_TLDS = {"ru", "su", "xn--p1ai", "cn", "xn--fiqs8s", "xn--fiqz9s", "by", "ir", "kp", "sy", "cu"}
+# TLDs left out because filtering resolvers, firewalls and intrusion prevention often block or drop names under them, which
+# reads as loss. Country TLDs first, then TLDs that common intrusion rules or abuse rankings single out, then the adult TLDs.
+# Keep in step with EXCLUDED_TLDS in crates/engine/src/namelist.rs.
+EXCLUDED_TLDS = {
+    "ru", "su", "xn--p1ai", "cn", "xn--fiqs8s", "xn--fiqz9s", "by", "ir", "kp", "sy", "cu",
+    "top", "to", "cc", "tk", "pw", "gq", "ga", "ml", "cf", "gdn", "icu", "biz", "okinawa", "desi", "life", "work", "world",
+    "fit", "ryukyu", "cloud", "foo", "zip", "dad", "prof", "mov", "nexus", "phd", "esq", "win", "cfd", "management", "fyi",
+    "beauty", "xin", "bond", "help", "cyou", "sbs", "quest", "rest", "vip", "lol", "cam", "surf", "monster", "buzz", "date",
+    "xyz", "click", "shop",
+    "xxx", "porn", "adult", "sex", "sexy", "webcam",
+}
+# A name holding one of these is left out even when the content filter answers it. Substrings, so a few harmless names go too.
+ADULT_WORDS = (
+    "porn", "xxx", "playboy", "sexy", "sexwork", "sexshop", "sextoy", "erotic", "escort", "fetish", "hentai", "nude",
+    "casino", "poker", "gambl", "betting", "lotto", "lotter", "loteri", "bingo", "jackpot", "roulette", "sportsbook", "bookmaker",
+)
 
 # Wikidata classes whose members' official websites make the pool, as (QID, expected English label). Direct instance-of only.
 # Never: political parties and politicians, religious bodies, health providers, adult, gambling, trade unions, people.
@@ -75,6 +93,12 @@ PLATFORMS = {
     "web.archive.org", "line.me", "whatsapp.com", "snapchat.com", "reddit.com", "twitch.tv", "vimeo.com", "issuu.com",
     "yelp.com", "tripadvisor.com", "amazon.com", "ebay.com", "microsoft.com", "apple.com", "netlify.app", "vercel.app",
     "herokuapp.com", "azurewebsites.net", "ning.com", "yahoo.com", "live.com", "mail.ru", "ok.ru", "livejournal.com",
+}
+
+# Country TLDs registered widely outside their country, so the TLD does not say where a name belongs.
+OPEN_CCTLDS = {
+    "ac", "ad", "ag", "ai", "am", "as", "bz", "cd", "co", "cx", "dj", "fm", "gg", "gs", "im", "io", "la", "ly", "me", "ms", "mu",
+    "nu", "sc", "sh", "so", "sr", "st", "tc", "tv", "vc", "vg", "ws",
 }
 
 # Hold back this many seconds after a 429 when the answer carries no Retry-After.
@@ -199,6 +223,7 @@ def label_ok(host):
     labels = host.split(".")
     return (
         len(labels) >= 2 and len(host) <= 253 and labels[-1] not in BLOCKED_TLDS | EXCLUDED_TLDS and not labels[-1].isdigit()
+        and not any(w in host for w in ADULT_WORDS)
         and all(l and len(l) <= 63 and not l.startswith("-") and not l.endswith("-") and re.fullmatch(r"[a-z0-9-]+", l) for l in labels)
     )
 
@@ -236,7 +261,9 @@ def cmd_common(a, work, rate):
         ttl = 0
         for ep in CHECK_ENDPOINTS:
             r = doh(ep, name, rate)
-            if r is None or r[0] != 0:
+            if r is None:
+                return name, None, "no answer from " + ep  # not a verdict: the name stays
+            if r[0] != 0:
                 return name, False, "no NOERROR from " + ep
             ttls = public_a(r[1])
             if not ttls:
@@ -246,10 +273,13 @@ def cmd_common(a, work, rate):
 
     with ThreadPoolExecutor(8) as ex:
         results = list(ex.map(check, todo))
-    kept = {n for n, ok, _ in results if ok}
+    kept = {n for n, ok, _ in results if ok is not False}
     for n, ok, why in results:
         if not ok:
-            log("drop", n, why)
+            log("drop" if ok is False else "unchecked", n, why)
+    unanswered = sum(ok is None for _, ok, _ in results)
+    if unanswered:
+        log("warning: %d names got no answer and stay unchecked; run again" % unanswered)
     # Cap at 500, spread evenly over the categories: take from each in turn.
     by_cat = [[n for n in ns if n in kept] for _, ns in cats]
     chosen, i = set(), 0
@@ -342,25 +372,29 @@ def normalise(url, psl):
 
 
 def gather(a, work, psl, common):
-    path = os.path.join(work, "candidates-%s.txt" % (a.limit or "full"))
+    # Candidates as {name: country}: the item's country in Wikidata as an ISO 3166 two-letter code, or "" when it has none.
+    path = os.path.join(work, "candidates-%s.tsv" % (a.limit or "full"))
     if os.path.exists(path):
-        return read_names(path)
+        with open(path, encoding="utf-8") as f:
+            return dict(l.rstrip("\n").split("\t") for l in f)
     per_class = max(1, -(-a.candidates // len(CLASSES))) * 2  # raw rows per class, so the big classes do not use it all
     found = {}
     for q, label in CLASSES:
         taken, offset = 0, 0
         while len(found) < a.candidates and taken < per_class:
             n = min(PAGE, a.limit or PAGE)
-            body = sparql("SELECT ?url WHERE { ?item wdt:P31 wd:%s ; wdt:P856 ?url } LIMIT %d OFFSET %d" % (q, n, offset))
+            body = sparql("SELECT ?url ?cc WHERE { ?item wdt:P31 wd:%s ; wdt:P856 ?url . OPTIONAL { ?item wdt:P17 ?c . ?c wdt:P297 ?cc } } LIMIT %d OFFSET %d" % (q, n, offset))
             time.sleep(PAGE_PAUSE)
             if body is None:
                 log("class", q, label, "page failed at offset", offset)
                 break
             rows = body.decode("utf-8", "replace").splitlines()[1:]
             for r in rows:
-                d = normalise(r, psl)
+                url, _, cc = r.partition("\t")
+                d = normalise(url, psl)
                 if d and d not in common:
-                    found[d] = True
+                    cc = cc.strip().strip('"')
+                    found[d] = found.get(d) or (cc if re.fullmatch("[A-Z]{2}", cc) else "")
             taken += len(rows)
             offset += n
             log("%s %s: %d rows, %d candidates" % (q, label, taken, len(found)))
@@ -368,19 +402,19 @@ def gather(a, work, psl, common):
                 break
         if len(found) >= a.candidates or (a.limit and len(found) >= a.limit):
             break
-    names = sorted(found)
     with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(names) + "\n")
-    return names
+        f.write("".join("%s\t%s\n" % (n, found[n]) for n in sorted(found)))
+    return found
 
 
 def cmd_pool(a, work, rate):
     psl = load_psl(work)
     common = set(read_names(COMMON))
-    names = [n for n in gather(a, work, psl, common) if label_ok(n) and n not in common]  # the cached candidates may be older than the rules or the common list
+    found = gather(a, work, psl, common)
+    names = sorted(n for n in found if label_ok(n) and n not in common)  # the cached candidates may be older than the rules or the common list
     log("%d candidates" % len(names))
-    # Liveness at one public resolver, with a progress file so a stopped run can resume.
-    progress = os.path.join(work, "pool-progress-%s.tsv" % (a.limit or "full"))
+    # Liveness and the content filter at one public resolver, with a progress file so a stopped run can resume.
+    progress = os.path.join(work, "pool-progress-%s-%s.tsv" % (urllib.parse.urlsplit(a.doh).hostname, a.limit or "full"))
     done = {}
     if os.path.exists(progress):
         for l in open(progress, encoding="utf-8"):
@@ -408,38 +442,37 @@ def cmd_pool(a, work, rate):
     alive = [n for n in names if done.get(n)]
     rng = random.Random(856)
     rng.shuffle(alive)
-    alive = cap_tld(alive[: a.max_names])
+    tags = {n: country(n, found[n]) for n in alive}
+    alive = cap_country(alive, tags, a.per_country)[: a.max_names]
     alive.sort()
     now = datetime.now(timezone.utc)
     dest = POOL if not a.limit else os.path.join(work, "names-pool.trial.txt")
     with open(dest, "w", encoding="utf-8") as f:
         f.write("# Names for the Extended test: registrable domains of organisations and places, one per line, sorted.\n")
+        f.write("# A name's country follows it where one is known: the ISO 3166 code Wikidata records, or else the name's country TLD.\n")
         f.write("# Source: Wikidata official website values (P856), CC0\n# Licence: CC0 1.0\n")
         f.write("# Built: %s\n# Count: %d\n" % (now.strftime("%Y-%m-%dT%H:%M:%SZ"), len(alive)))
-        f.write("\n".join(alive) + "\n")
-    print("%d candidates, %d answered, %d written to %s" % (len(names), sum(done.get(n, False) for n in names), len(alive), dest))
+        f.write("".join("%s\n" % " ".join(filter(None, (n, tags[n]))) for n in alive))
+    print("%d candidates, %d unanswered, %d passed, %d written to %s" % (len(names), sum(n not in done for n in names), sum(done.get(n, False) for n in names), len(alive), dest))
     if len(alive) < 50000 and not a.limit:
         log("warning: fewer than 50,000 names; raise --candidates")
 
 
-def cap_tld(names):
-    # No TLD above a quarter of the output: the largest cap c with 4c <= sum(min(count, c)).
-    counts = {}
-    for n in names:
-        t = n.rsplit(".", 1)[1]
-        counts[t] = counts.get(t, 0) + 1
-    best = 0
-    for c in range(1, max(counts.values()) + 1):
-        if 4 * c <= sum(min(v, c) for v in counts.values()):
-            best = c
-    if best == 0:
-        log("warning: too few TLDs to cap any at 25%")
-        return names
+def country(name, wikidata):
+    # A name's country as an ISO 3166 code: the one Wikidata records for the item, or else the country TLD's own.
+    tld = name.rsplit(".", 1)[1]
+    if wikidata or len(tld) != 2 or tld in OPEN_CCTLDS or tld == "eu":
+        return wikidata
+    return "GB" if tld == "uk" else tld.upper()
+
+
+def cap_country(names, tags, most):
+    # No country above `most` names, so one country's places do not fill a region's share of the pool.
     seen, out = {}, []
     for n in names:
-        t = n.rsplit(".", 1)[1]
-        seen[t] = seen.get(t, 0) + 1
-        if seen[t] <= best:
+        c = tags[n]
+        seen[c] = seen.get(c, 0) + 1
+        if not c or seen[c] <= most:
             out.append(n)
     return out
 
@@ -452,9 +485,10 @@ def main():
     p.add_argument("--work", default="build-names-work", help="scratch folder for downloads and progress")
     p.add_argument("--rate", type=float, default=20, help="lookups per second")
     p.add_argument("--limit", type=int, default=0, help="trial run size; output goes to the work folder")
-    p.add_argument("--doh", default=LIVENESS, help="the pool's liveness resolver (DoH JSON)")
-    p.add_argument("--candidates", type=int, default=160000, help="pool: stop collecting at this many candidates")
-    p.add_argument("--max-names", type=int, default=100000, help="pool: most names to keep")
+    p.add_argument("--doh", default=LIVENESS, help="the pool's liveness and content-filter resolver (DoH JSON)")
+    p.add_argument("--candidates", type=int, default=300000, help="pool: stop collecting at this many candidates")
+    p.add_argument("--per-country", type=int, default=10000, help="pool: most names to keep for one country")
+    p.add_argument("--max-names", type=int, default=200000, help="pool: most names to keep")
     a = p.parse_args()
     os.makedirs(a.work, exist_ok=True)
     rate = Rate(a.rate)

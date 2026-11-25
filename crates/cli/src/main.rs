@@ -60,10 +60,10 @@ enum Cmd {
         #[arg(long)]
         extended: bool,
         /// Ask one resolver twice, as A and B, to see how far two runs of the same resolver differ.
-        #[arg(long, hide = true)]
+        #[arg(long, hide = true, requires = "extended")]
         aa: bool,
         /// Up to 8 queries in flight to different resolvers.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "extended")]
         quick: bool,
         /// Skip capability probes and CDN mapping.
         #[arg(long)]
@@ -72,10 +72,10 @@ enum Cmd {
         #[arg(long)]
         json: bool,
         /// Comma-separated names for the Cached test instead of the default sites.
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long, value_delimiter = ',', conflicts_with = "extended")]
         cached_names: Vec<String>,
         /// A file of names for the Cached test (one per line, or comma-separated; # starts a comment).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "extended")]
         cached_names_file: Option<std::path::PathBuf>,
     },
     /// Measure how accurate and how fast public NTP servers are from here.
@@ -360,6 +360,14 @@ async fn main() {
                     }
                 }
             }
+            if extended && parsed.len() > 1 {
+                eprintln!("--extended measures one transport. Give one.");
+                std::process::exit(2);
+            }
+            if extended && samples.is_some_and(|n| !(500..=5000).contains(&n) || n % 50 != 0) {
+                eprintln!("With --extended, --samples is 500 to 5000 in steps of 50.");
+                std::process::exit(2);
+            }
             let mut names: Vec<String> = cached_names.clone();
             if let Some(path) = cached_names_file {
                 match std::fs::read_to_string(path) {
@@ -579,6 +587,17 @@ fn print_extended(s: &bench::RunState, e: &recursa_engine::extended::ExtendedSta
             vs,
             r.call.unwrap_or("")
         );
+    }
+    if !e.result.cold.is_empty() {
+        println!("\nCold lookups (names asked once)");
+        println!("{:<30} {:>8} {:<26} call", "resolver", "median", "behind the cold lead");
+        for r in &e.result.cold {
+            let vs = r.vs.as_ref().map_or(String::new(), |v| format!("{:+.1} ({:+.1} to {:+.1})", v.diff, v.lo, v.hi));
+            println!("{:<30} {:>8} {:<26} {}", name(r.t), ms(r.p50), vs, r.call.unwrap_or(""));
+        }
+    }
+    if !e.result.rows.is_empty() {
+        println!("\nThe first ask of each common name fills the caches and is not ranked.");
     }
     for n in &s.notes {
         println!("\n{}", n.text);
