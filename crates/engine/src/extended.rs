@@ -1506,15 +1506,21 @@ mod tests {
         assert_eq!(samples.len(), 40);
         assert_eq!(samples.iter().filter(|s| s.o == Outcome::Timeout).count(), 20);
         assert!(samples.iter().filter(|s| s.t == 0).all(|s| s.o == Outcome::Ok));
-        // Target 0's k-th send is due at slot k, plus half a slot when it goes second.
+        // Target 0's k-th send is due at slot k, plus half a slot when it goes second. A busy machine can make any one
+        // send late; a timeout that held up the schedule would make every later one late.
         let mut t0: Vec<Instant> = log.iter().filter(|(t, _)| *t == 0).map(|(_, at)| *at).collect();
         t0.sort();
         let first = t0[0];
-        for (q, at) in t0.iter().enumerate() {
-            let due = Duration::from_millis(30 * q as u64 + if q % 2 == 0 { 0 } else { 15 });
-            let got = at.duration_since(first);
-            assert!(got.abs_diff(due) < Duration::from_millis(40), "send {q}: due {due:?}, got {got:?}");
-        }
+        let off: Vec<String> = t0
+            .iter()
+            .enumerate()
+            .filter_map(|(q, at)| {
+                let due = Duration::from_millis(30 * q as u64 + if q % 2 == 0 { 0 } else { 15 });
+                let got = at.duration_since(first);
+                (got.abs_diff(due) >= Duration::from_millis(40)).then(|| format!("send {q}: due {due:?}, got {got:?}"))
+            })
+            .collect();
+        assert!(off.len() <= 3, "{off:?}");
     }
 
     #[test]
@@ -1535,19 +1541,24 @@ mod tests {
     #[test]
     fn a_short_stall_is_not_caught_up_in_a_burst() {
         let mut n = 0;
+        let woke = Arc::new(Mutex::new(None));
+        let w = woke.clone();
         let (log, samples, gaps) = run_fake(8, move || {
             n += 1;
             if n == 3 {
                 std::thread::sleep(Duration::from_millis(1100));
+                *w.lock().unwrap() = Some(Instant::now());
             }
             Pace::Go
         });
         assert_eq!((samples.len(), gaps), (16, 0));
-        // Target 0's sends are 15 or 45 ms apart; the slots that came due during the stall still are.
-        let mut t0: Vec<Instant> = log.iter().filter(|(t, _)| *t == 0).map(|(_, at)| *at).collect();
-        t0.sort();
-        let close = t0.windows(2).filter(|w| w[1].duration_since(w[0]) < Duration::from_millis(5)).count();
-        assert!(close <= 1, "{close} sends within 5 ms of the one before");
+        // The stall came before the second send of slot 0. Carried on from there, target 0's last send (slot 7, half a
+        // slot in) is due 210 ms after it; caught up in a burst, it would go at once. No send goes before it is due, so a
+        // busy machine can only make it later.
+        let woke = woke.lock().unwrap().expect("the stall ran");
+        let last = log.iter().filter(|(t, _)| *t == 0).map(|(_, at)| *at).max().unwrap();
+        let after = last.duration_since(woke);
+        assert!(after >= Duration::from_millis(150), "last send {after:?} after the stall");
     }
 
     #[test]

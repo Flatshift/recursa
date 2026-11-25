@@ -4,7 +4,7 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 
 ## 0.6.0 (2026-11-25)
 
-- Added the Extended test: a 25-minute comparison of two to four resolvers over 5,000 lookups each, with a verdict and charts of repeat and cold lookups over the run (`recursa run --extended`).
+- Added the Extended test, sized to [Google Public DNS's benchmarking advice](https://developers.google.com/speed/public-dns/faq): 5,000 lookups per resolver, so packet loss and retransmits average out and each resolver's cache is thoroughly exercised. It compares two to four resolvers over about 25 minutes and gives a verdict, with charts of repeat and cold lookups over the run (`recursa run --extended`).
 - Extended charts mark stretches where every resolver slowed together and name the likely cause: Wi-Fi or local network, this computer, or the internet link.
 - Reliability charts now show each resolver's median and spread over time.
 - Background monitoring checks one resolver at a time, spread through the interval, instead of all at once; all are checked together only when one stops answering.
