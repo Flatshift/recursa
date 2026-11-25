@@ -118,7 +118,7 @@ MIT: 377 packages
   concurrent-queue 2.5.0
   const-oid 0.10.2
       Copyright (c) 2020-2026 The RustCrypto Project Developers
-  cookie 0.18.2
+  cookie 0.18.3
       Copyright (c) 2014 Alex Crichton
       Copyright (c) 2017 Sergio Benitez
   core-foundation 0.10.1
@@ -220,7 +220,7 @@ MIT: 377 packages
       Copyright (c) 2017 The foreign-types Developers
   foreign-types-shared 0.3.1
       Copyright (c) 2017 The foreign-types Developers
-  form_urlencoded 1.2.2
+  form_urlencoded 1.2.3
       Copyright (c) 2013-2016 The rust-url developers
   futures-channel 0.3.34
       Copyright (c) 2016 Alex Crichton
@@ -535,8 +535,8 @@ MIT: 377 packages
       Copyright (c) 2015 Danny Guo
       Copyright (c) 2016 Titus Wormer <tituswormer@gmail.com>
       Copyright (c) 2018 Akash Kurdekar
-  svelte 5.58.0 (npm)
-      Copyright (c) 2016-2025 [Svelte Contributors](https://github.com/sveltejs/svelte/graphs/contributors)
+  svelte 5.59.2 (npm)
+      Copyright (c) 2016-2026 [Svelte Contributors](https://github.com/sveltejs/svelte/graphs/contributors)
   swift-rs 1.0.9
       Copyright (c) 2023 The swift-rs Developers
   syn 2.0.119
@@ -635,7 +635,7 @@ MIT: 377 packages
       Copyright (c) 2014-2026 Sean McArthur
   unicode-segmentation 1.13.3
       Copyright (c) 2015 The Rust Project Developers
-  url 2.5.8
+  url 2.5.9
       Copyright (c) 2013-2025 The rust-url developers
   urlpattern 0.6.0
       Copyright (c) 2021 the Deno authors
