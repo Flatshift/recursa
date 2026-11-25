@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "precheck": "node -e \"require('fs').rmSync('.svelte-check', { recursive: true, force: true })\"",
     "check": "svelte-check --tsconfig ./tsconfig.json --tsgo",
     "test": "vitest run"
   },
