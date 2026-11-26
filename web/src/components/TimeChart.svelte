@@ -69,7 +69,7 @@
 <div class="tc">
   {#if legend}
     <ul class="series-key">
-      {#each series as s (s.name)}
+      {#each series as s, i (i)}
         <li>
           <svg width="18" height="8" aria-hidden="true"><path d="M0 4H18" stroke={s.color} stroke-width="2" stroke-dasharray={s.dash} fill="none" /></svg>
           {s.name}
@@ -80,7 +80,7 @@
   <p class="read num" aria-live="polite">
     {#if at != null}
       <span>{stamp(at)}</span>
-      {#each series as s, i (s.name)}
+      {#each series as s, i (i)}
         {@const v = byTs[i].get(at)}
         <span>
           {#if legend}<svg width="10" height="8" aria-hidden="true"><path d="M0 4H10" stroke={s.color} stroke-width="2" fill="none" /></svg>{s.name}{/if}
@@ -114,12 +114,12 @@
         <path d="M{x(t).toFixed(1)} {MT}V{MT + ph + 4}" stroke="var(--rule)" stroke-width="1" />
         <text x={x(t)} y={height - 5} text-anchor="middle" class="lab">{tickText(t)}</text>
       {/each}
-      {#each series as s, i (s.name)}
+      {#each series as s, i (i)}
         <path d={paths[i]} fill="none" stroke={s.color} stroke-width="1.5" stroke-dasharray={s.dash} stroke-linejoin="round" />
       {/each}
       {#if at != null}
         <path d="M{x(at).toFixed(1)} {MT}V{MT + ph}" stroke="var(--ink-2)" stroke-width="1" />
-        {#each series as s, i (s.name)}
+        {#each series as s, i (i)}
           {@const v = byTs[i].get(at)}
           {#if v != null}<circle cx={x(at)} cy={y(v)} r="3" fill={s.color} stroke="var(--surface)" stroke-width="1" />{/if}
         {/each}

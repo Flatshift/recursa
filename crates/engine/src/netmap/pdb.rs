@@ -108,6 +108,14 @@ fn v6_mask(len: u8) -> u128 {
     if len == 0 { 0 } else { u128::MAX << (128 - len) }
 }
 
+/// The oldest table's sync time, and none until every table has synced once: a sync that stopped halfway is taken up
+/// again at the next refresh, not counted fresh.
+fn synced_at(c: &Connection) -> Option<i64> {
+    c.query_row("SELECT MIN(synced_at), COUNT(*) FROM pdb_sync", [], |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, i64>(1)?)))
+        .ok()
+        .and_then(|(t, n)| if n as usize == TABLES.len() { t } else { None })
+}
+
 impl Pdb {
     pub fn load(store: &Store) -> Pdb {
         store.with_conn(|c| Pdb::read(c).unwrap_or_default())
@@ -115,18 +123,12 @@ impl Pdb {
 
     /// When the tables were last synced, without loading them.
     pub fn last_sync(store: &Store) -> Option<i64> {
-        store.with_conn(|c| {
-            // The oldest table's time, and none until every table has synced once: a sync that stopped halfway is
-            // taken up again at the next refresh, not counted fresh.
-            c.query_row("SELECT MIN(synced_at), COUNT(*) FROM pdb_sync", [], |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, i64>(1)?)))
-                .ok()
-                .and_then(|(t, n)| if n as usize == TABLES.len() { t } else { None })
-        })
+        store.with_conn(|c| synced_at(c))
     }
 
     fn read(c: &Connection) -> rusqlite::Result<Pdb> {
         let text = |r: &rusqlite::Row<'_>, i: usize| r.get::<_, Option<String>>(i).map(Option::unwrap_or_default);
-        let mut p = Pdb { synced_at: c.query_row("SELECT MAX(synced_at) FROM pdb_sync", [], |r| r.get(0))?, ..Pdb::default() };
+        let mut p = Pdb { synced_at: synced_at(c), ..Pdb::default() };
         for (table, _) in TABLES {
             p.rows += c.query_row(&format!("SELECT COUNT(*) FROM pdb_{table}"), [], |r| r.get::<_, i64>(0))? as usize;
         }
@@ -390,6 +392,21 @@ mod tests {
             }
             _ => unreachable!(),
         }
+    }
+
+    #[test]
+    fn synced_at_waits_for_every_table() {
+        let (store, path) = scratch();
+        for (i, (table, _)) in TABLES.iter().enumerate() {
+            store.with_conn(|c| {
+                c.execute("INSERT INTO pdb_sync(\"table\", synced_at, since) VALUES(?1, ?2, '0')", params![table, 100 + i as i64]).unwrap()
+            });
+            let want = (i + 1 == TABLES.len()).then_some(100);
+            assert_eq!(Pdb::load(&store).synced_at, want);
+            assert_eq!(Pdb::last_sync(&store), want);
+        }
+        drop(store);
+        remove(&path);
     }
 
     #[test]

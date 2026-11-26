@@ -18,13 +18,13 @@
   const x0 = $derived(multi ? 40 : 6);
   const x1 = $derived(w - 8);
 
-  type Strip = { y: number; label: string; s: Split };
+  type Strip = { y: number; label: string; idx: number; s: Split };
   const strips = $derived.by<Strip[]>(() => {
     const wire = path.rtt_ms;
     const out: Strip[] = [];
     for (const r of rows) {
       const s = split(wire, r.dist.cached.p50, r.dist.uncached.p50);
-      if (s) out.push({ y: TOP + out.length * STRIP + STRIP / 2, label: TRANSPORT_LABEL[r.target.transport], s });
+      if (s) out.push({ y: TOP + out.length * STRIP + STRIP / 2, label: TRANSPORT_LABEL[r.target.transport], idx: r.target.idx, s });
     }
     return out;
   });
@@ -97,7 +97,7 @@
         <line class="grid" x1={x(t)} x2={x(t)} y1={TOP} y2={height - AXIS} />
         <text class="xl" x={x(t)} y={height - 4} text-anchor={tickAnchor(t)}>{tickText(t)}</text>
       {/each}
-      {#each strips as { y, label, s } (label)}
+      {#each strips as { y, label, idx, s } (idx)}
         {#if multi}<text class="lane" x="0" y={y + 3.5}>{label}</text>{/if}
         <line class="rule" x1={x0} x2={x1} y1={y} y2={y} />
         {#each brackets(s) as br (br.a)}

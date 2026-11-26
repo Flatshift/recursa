@@ -268,11 +268,6 @@ export function rangeOf(v: { lo: number; hi: number }): string {
   return `${v.lo.toFixed(1)} to ${v.hi.toFixed(1)}`;
 }
 
-/** Bins sent so far, for the progress line. */
-export function binsDone(ext: Pick<ExtendedState, 'bins'>): number {
-  return ext.bins.filter((b) => b.r.some((c) => c.sent > 0)).length;
-}
-
 /** How many minutes a run takes: a count of lookups at one per `gap_ms`. */
 export function minutesOf(total: number, gapMs: number): number {
   return Math.round((total * gapMs) / 60000);

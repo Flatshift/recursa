@@ -26,7 +26,14 @@
   $effect(() => {
     status.load();
     const done = app.boot?.runs.find((r) => r.status === 'done');
-    if (done && last?.id !== done.id) api.get<RunState>(`/api/runs/${done.id}`).then((r) => (last = r)).catch(() => {});
+    if (!done) last = null;
+    else if (last?.id !== done.id)
+      api
+        .get<RunState>(`/api/runs/${done.id}`)
+        .then((r) => {
+          if (app.boot?.runs.find((x) => x.status === 'done')?.id === r.id) last = r;
+        })
+        .catch(() => {});
   });
 
   let filter = $state('');

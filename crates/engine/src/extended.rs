@@ -11,6 +11,7 @@ use crate::catalog::Resolver;
 use crate::dns::{self, QuerySpec};
 use crate::namelist::{self, Plan};
 use crate::net::{self, Exchanger, Transport};
+use crate::stats::round2;
 use crate::{clock, link, power, stats};
 use serde::Serialize;
 use serde_json::json;
@@ -26,7 +27,7 @@ const EMIT_EVERY: usize = 10;
 /// Bins in one cold bin.
 const COLD_BINS: usize = 5;
 /// A lost query ranks as this slow.
-const LOST_MS: f64 = 2000.0;
+const LOST_MS: f64 = QUERY_TIMEOUT_MS as f64;
 /// The kept bins are cut into this many stretches to size the range of a gap.
 const BATCHES: usize = 10;
 /// Fewer kept slots than this say too little to give a range or a call.
@@ -273,10 +274,6 @@ struct Seen {
 
 fn lost(o: Outcome) -> bool {
     o == Outcome::Timeout || o.costs()
-}
-
-fn round2(v: f64) -> f64 {
-    (v * 100.0).round() / 100.0
 }
 
 fn pct(sorted: &[f64], p: f64) -> Option<f64> {
@@ -763,7 +760,6 @@ struct Collector<'a> {
     /// When each sample was sent (the clock that runs in sleep), in the order they were recorded.
     sent_ns: Vec<u64>,
     batch: Vec<Sample>,
-    flushed: usize,
     last_flush: Instant,
     gaps: Vec<GapSpan>,
     /// Sends in these stretches that got no answer are the sleep's.
@@ -814,7 +810,6 @@ impl Collector<'_> {
             return;
         }
         let batch = std::mem::take(&mut self.batch);
-        self.flushed += batch.len();
         self.h.publish(|s| {
             s.samples.extend_from_slice(&batch);
             s.done += batch.len() as u32;
@@ -1013,7 +1008,6 @@ pub(crate) fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &
         grid: vec![vec![None; live.len()]; total],
         sent_ns: Vec::new(),
         batch: Vec::new(),
-        flushed: 0,
         last_flush: Instant::now(),
         gaps: Vec::new(),
         windows: Vec::new(),

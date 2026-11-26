@@ -197,7 +197,7 @@
             : `No resolver here ${lacks}, and none passes every privacy check.`;
 
     const differ = all.filter((l) => !l.same).length;
-    let detail = `${all.length} capabilities probed from this network with fresh names no cache can answer; the resolvers differ on ${differ}.`;
+    let detail = `${all.length} capabilities probed from this network with fresh names no cache can answer${resolvers.length > 1 && !running ? `; the resolvers differ on ${differ}` : ''}.`;
     // Measured failures, grouped by capability, so the sentence stays short however many resolvers there are. A far CDN
     // edge is a cost, not a missing capability, so routing stays out of it.
     const gaps = built

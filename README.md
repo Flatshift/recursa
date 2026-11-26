@@ -131,9 +131,13 @@ crates/engine/src/   the engine (library), shared by both front ends
   ntp_monitor.rs background NTP monitoring: uptime, offset and delay history for a few servers
   ntp_report.rs  an NTP run as JSON and CSV with a schema version, and the Nagios-style check
   calibrate.rs   loopback self-calibration
+  extended.rs    the Extended test: two to four resolvers asked the same names, thousands of times, with the analysis
+  namelist.rs    name lists for the Extended test and the plan that orders a run's lookups
+  power.rs       sleep and wake notifications from the OS, to tell a slept computer from a slow one
   intel.rs       Team Cymru lookups, status feeds, threat feeds (cached; never during measurement)
   rov.rs         route-origin filtering on a resolver's path, tested live over the Check My DNS websocket
   cymru.rs       Team Cymru DNS: address to origin AS, prefix and AS name
+  attribution.rs the monitor's pure drop attribution: which cycles count, which resolvers share an operator, what a failure is down to
   monitor.rs     background monitoring and history aggregation
   store.rs       SQLite: runs, monitoring, cache, settings, custom resolvers
   lock.rs        cross-process locks: one measurement at a time per machine, one monitor per database
@@ -153,7 +157,7 @@ data/
   incidents.json sourced incident history
   ntp.json       curated NTP servers and what their operators publish
 docs/            PLATFORMS.md (generated from caps.rs), PENDING.md (fixes we wait on upstream)
-tools/           notices.py (third-party notices), icons.mjs (app icons), dmg.sh (the disk image), ios.sh (the iOS build), pending.py (checks docs/PENDING.md); dev helper: gen-monitor.py (synthetic monitoring history)
+tools/           notices.py (third-party notices), icons.mjs (app icons), build-names.py (builds the Extended test's name pool), dmg.sh (the disk image), ios.sh (the iOS build), pending.py (checks docs/PENDING.md); dev helper: gen-monitor.py (synthetic monitoring history)
 web/             Svelte 5 + Vite + TypeScript interface; lib/api.ts picks HTTP or IPC at runtime
 ```
 

@@ -24,10 +24,10 @@ struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
     /// Port for the local UI (falls back to a free port if taken).
-    #[arg(long, default_value_t = 7353)]
+    #[arg(long, global = true, default_value_t = 7353)]
     port: u16,
     /// Don't open a browser window.
-    #[arg(long)]
+    #[arg(long, global = true)]
     no_open: bool,
     /// Database path (defaults to the OS application-data directory).
     #[arg(long, global = true)]
@@ -53,10 +53,10 @@ enum Cmd {
         /// Comma-separated transports: udp,tcp,dot,doh
         #[arg(long, value_delimiter = ',', default_value = "udp")]
         transports: Vec<String>,
-        /// Queries per test per target (30), or lookups per resolver with --extended (5000 or 10000).
+        /// Queries per test per target (30), or lookups per resolver with --extended (500 to 10000, in steps of 50).
         #[arg(long)]
         samples: Option<u32>,
-        /// Compare two to four resolvers on the same names, 5000 or 10000 lookups each (--samples), at the --pace given.
+        /// Compare two to four resolvers on the same names, 5000 lookups each (or --samples), at the --pace given.
         #[arg(long)]
         extended: bool,
         /// With --extended: fast (a lookup every 75 ms), standard (300 ms) or thorough (600 ms).
@@ -697,9 +697,16 @@ async fn serve(cli: Cli) {
     let srv = Arc::new(server::Server { app: app.clone(), sessions: Mutex::new(sessions), port });
     // Live event streams never end on their own, so Ctrl-C exits directly rather than
     // waiting for them to drain; the store is closed so no journal is left beside the database.
+    #[cfg(unix)]
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("SIGTERM handler");
+    #[cfg(unix)]
+    let terminated = term.recv();
+    #[cfg(not(unix))]
+    let terminated = std::future::pending::<Option<()>>();
     tokio::select! {
         r = axum::serve(listener, server::router(srv)) => r.expect("server"),
         _ = tokio::signal::ctrl_c() => eprintln!("\nStopped."),
+        _ = terminated => eprintln!("Stopped."),
     }
     app.close();
     if let Some(p) = page {

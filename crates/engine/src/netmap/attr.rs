@@ -213,7 +213,12 @@ where
     let s = store.clone();
     tokio::task::spawn_blocking(move || {
         let lines = BufReader::new(GzDecoder::new(&gz[..]).take(super::BODY_MAX as u64)).lines();
-        let rows = lines.map_while(Result::ok).filter_map(|l| parse_line(&l));
+        // Parse everything first: a bad or cut-short download must not replace the stored table.
+        let mut parsed = Vec::new();
+        for l in lines {
+            parsed.extend(parse_line(&l.map_err(|e| e.to_string())?));
+        }
+        let rows = parsed.into_iter();
         if v6 {
             s.pfx2as6_replace(rows.filter_map(|r| if let Row::V6(p, l, a, m) = r { Some((p, l, a, m)) } else { None }))
         } else {
@@ -1315,5 +1320,32 @@ pub(crate) mod tests {
         assert_eq!(store.get::<i64>(FETCHED_AT), Some(old));
         assert!(store.get::<i64>(FETCHED_AT6).unwrap() > old);
         assert_eq!(due(&store), [true, false]);
+    }
+
+    /// A download that is cut short is an error, and the stored table stays as it was.
+    #[tokio::test]
+    async fn a_cut_short_download_leaves_the_stored_table() {
+        use std::io::Write;
+        let gz = |rows: &str| {
+            let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            e.write_all(rows.as_bytes()).unwrap();
+            e.finish().unwrap()
+        };
+        let files = Scratch(temp_path());
+        let store = Arc::new(Store::open(files.0.clone()).unwrap());
+        let rows: String = (0..200).map(|i| format!("198.51.{i}.0\t24\t{}\n", 64000 + i)).collect();
+        let whole = gz(&rows);
+        let count = || store.with_conn(|c| c.query_row("SELECT COUNT(*) FROM pfx2as", [], |r| r.get::<_, i64>(0)).unwrap());
+        let serve = |body: Vec<u8>| {
+            move |url: String| {
+                let body = body.clone();
+                async move { if url.ends_with(".log") { Ok(b"1\t1\ttable.pfx2as.gz\n".to_vec()) } else { Ok(body) } }
+            }
+        };
+        fetch_table(&store, &serve(whole.clone()), "x.log", "d/", false).await.unwrap();
+        assert_eq!(count(), 200);
+        let half = whole[..whole.len() / 2].to_vec();
+        assert!(fetch_table(&store, &serve(half), "x.log", "d/", false).await.is_err());
+        assert_eq!(count(), 200);
     }
 }

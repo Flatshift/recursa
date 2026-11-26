@@ -1035,8 +1035,11 @@ impl Store {
     }
 
     /// Replace the whole AS-relationship table with `rows` (a, b, rel: -1 = a provides for b, 0 = peers), in one
-    /// transaction: a failure leaves the old table.
+    /// transaction: a failure leaves the old table. An empty `rows` is an error and leaves the old table.
     pub fn asrel_replace(&self, rows: &[(u32, u32, i8)]) -> rusqlite::Result<()> {
+        if rows.is_empty() {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         let mut c = self.conn.lock().unwrap();
         let tx = c.transaction()?;
         tx.execute("DELETE FROM asrel", [])?;
@@ -1566,6 +1569,9 @@ pub(crate) mod tests {
         // The relationship table is swapped whole too, and read by either side.
         store.asrel_replace(&[(9, 9, 0)]).unwrap();
         store.asrel_replace(&[(1299, 64500, -1), (2906, 64500, 0), (6461, 20055, -1)]).unwrap();
+        assert_eq!(store.asrel_count(), 3);
+        // An empty replacement is refused and the old table survives.
+        assert!(store.asrel_replace(&[]).is_err());
         assert_eq!(store.asrel_count(), 3);
         assert_eq!(store.asrel_touching(&[64500]), [(1299, 64500, -1), (2906, 64500, 0)]);
         assert_eq!(store.asrel_touching(&[1299, 20055]), [(1299, 64500, -1), (6461, 20055, -1)]);

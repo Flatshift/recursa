@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { asksOf, binsDone, gapSeconds, markPath, minutesLeft, sentOf, chartOf, chartsOf, slowsOf, colourOf, ecdfPoints, groupsOf, markOf, minutesOf, plannedSlots, rangeOf, shortlist, slotOf, toggled, verdictOf } from './extended';
+import { asksOf, gapSeconds, markPath, minutesLeft, sentOf, chartOf, chartsOf, slowsOf, colourOf, ecdfPoints, groupsOf, markOf, minutesOf, plannedSlots, rangeOf, shortlist, slotOf, toggled, verdictOf } from './extended';
 import type { ExtBin, ExtRow } from './types';
 
 const cell = (p50: number | null, sent = 50, lost = 0) => ({ sent, lost, p5: p50, p25: p50, p50, p75: p50, p95: p50 });
@@ -126,7 +126,6 @@ describe('verdictOf', () => {
 
 describe('small helpers', () => {
   it('formats a range', () => expect(rangeOf({ lo: 0.44, hi: 2.04 })).toBe('0.4 to 2.0'));
-  it('counts bins with queries sent', () => expect(binsDone({ bins: [bin(0), { ...bin(15000), r: [cell(null, 0), cell(null, 0)] }] })).toBe(1));
   it('gives minutes of queries', () => expect(minutesOf(5000, 300)).toBe(25));
   it('keeps a resolver on one colour and mark', () => {
     expect(colourOf(0)).toBe('var(--r-1)');

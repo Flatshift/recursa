@@ -10,7 +10,7 @@ license = "GPL-3.0-or-later"
 repository = "https://github.com/flatshift/recursa"
 
 [workspace.dependencies]
-recursa-engine = { path = "crates/engine", default-features = false }
+recursa-engine = { path = "crates/engine" }
 aes-siv = { version = "0.8.0", default-features = false, features = ["alloc"] }
 axum = "0.8.9"
 bzip2 = "0.6"

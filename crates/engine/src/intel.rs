@@ -199,7 +199,7 @@ impl Intel {
         }
     }
 
-    /// Origin AS, holder and prefix for one address. Null when the lookup failed and nothing is cached.
+    /// Origin AS, holder and prefix for one address. Null when the lookup failed and nothing is cached, including a holder name that could not be looked up.
     pub async fn asn_of(&self, ip: IpAddr) -> Value {
         let key = format!("asn:{ip}");
         self.cached(&key, 24 * HOUR, async {
@@ -208,6 +208,14 @@ impl Intel {
                 Some(a) => self.holder(a).await,
                 None => Value::Null,
             };
+            // `holder` caches a real "no name" as null and nothing on a failure: a null with no entry is a failure, so
+            // it is not cached under the address for a day.
+            if let Some(a) = asn
+                && holder.is_null()
+                && self.store.cache_get_any(&format!("holder:{a}")).is_none()
+            {
+                return None;
+            }
             Some(json!({ "ip": ip.to_string(), "asn": asn, "prefix": prefix, "holder": holder }))
         })
         .await
@@ -310,6 +318,9 @@ impl Intel {
             self.get_json("https://status.umbrella.cisco.com/api/v2/summary.json"),
             self.get_json("https://status.umbrella.cisco.com/api/v2/incidents.json"),
         );
+        if [&cf_sum, &cf_inc, &q9, &um_sum, &um_inc].iter().all(|v| v.is_none()) {
+            return None;
+        }
         let feeds = vec![
             statuspage(
                 "cloudflare",

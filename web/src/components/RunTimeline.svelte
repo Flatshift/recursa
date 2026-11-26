@@ -45,6 +45,7 @@
   const step = $derived((STEPS.find((s) => ((end - start) / 1000 / s) * 70 <= w - L) ?? 1800) * 1000);
   const xTicks = $derived.by(() => {
     const out: number[] = [];
+    if (!Number.isFinite(start)) return out;
     for (let t = Math.ceil(start / step) * step; t <= end; t += step) out.push(t);
     return out;
   });
@@ -71,7 +72,7 @@
   const blips = $derived([...new Set(samples.filter((s) => s.x).map((s) => Math.floor(s.at / BLIP_MS)))]);
   const tests = $derived([...new Set(samples.filter((s) => s.t === target && s.o === 'ok').map((s) => s.k))] as TestKind[]);
   const label = $derived(
-    `Every query by the time it was sent, over ${Math.round((end - start) / 1000)} seconds. ${name} by test, the other resolvers in grey.` +
+    `Every query by the time it was sent${Number.isFinite(start) ? `, over ${Math.round((end - start) / 1000)} seconds` : ''}. ${name} by test, the other resolvers in grey.` +
       (blips.length ? ` ${blips.length} moments failed across several resolvers at once.` : ''),
   );
 </script>

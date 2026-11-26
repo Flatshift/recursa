@@ -45,6 +45,11 @@ pub fn quantile(sorted: &[f64], q: f64) -> f64 {
     sorted[lo] + (h - lo as f64) * (sorted[hi] - sorted[lo])
 }
 
+/// `v` rounded to two decimals.
+pub(crate) fn round2(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
+}
+
 /// The median of `v` in any order (the mean of the middle pair for an even count), or `None` when there is none.
 pub fn median(v: impl Iterator<Item = f64>) -> Option<f64> {
     let mut v: Vec<f64> = v.collect();

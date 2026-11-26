@@ -257,7 +257,10 @@ pub(crate) fn latest_traces(store: &crate::store::Store, now: i64) -> Option<Vec
 fn gunzip(body: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let mut out = Vec::new();
-    flate2::read::GzDecoder::new(body).take(BODY_MAX as u64).read_to_end(&mut out).map_err(|e| e.to_string())?;
+    flate2::read::GzDecoder::new(body).take(BODY_MAX as u64 + 1).read_to_end(&mut out).map_err(|e| e.to_string())?;
+    if out.len() > BODY_MAX {
+        return Err("the download is too big.".into());
+    }
     Ok(out)
 }
 
@@ -283,16 +286,19 @@ async fn get(app: &AppState, url: String, gzip: bool) -> Result<Vec<u8>, String>
     if gzip {
         req = req.header("accept-encoding", "gzip");
     }
-    let resp = req.send().await.map_err(|e| format!("{url}: {e}"))?;
+    let mut resp = req.send().await.map_err(|e| format!("{url}: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!("{url}: HTTP {}", resp.status().as_u16()));
     }
     let packed = resp.headers().get("content-encoding").and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("gzip"));
-    let body = resp.bytes().await.map_err(|e| format!("{url}: {e}"))?;
-    if body.len() > BODY_MAX {
-        return Err(format!("{url}: the download is too big."));
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| format!("{url}: {e}"))? {
+        if body.len() + chunk.len() > BODY_MAX {
+            return Err(format!("{url}: the download is too big."));
+        }
+        body.extend_from_slice(&chunk);
     }
-    if gzip && packed { gunzip(&body) } else { Ok(body.to_vec()) }
+    if gzip && packed { gunzip(&body) } else { Ok(body) }
 }
 
 /// Fetch the prefix-to-AS table now. For a `run`, each download ends within a moment of the run's Cancel; a table

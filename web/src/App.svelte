@@ -93,7 +93,14 @@
 
   // A settings window changing the theme updates this one too, and clearing data reloads every window.
   function onStorage(e: StorageEvent) {
-    if (e.key === 'recursa.theme' && e.newValue) app.setTheme(JSON.parse(e.newValue));
+    if (e.key === 'recursa.theme' && e.newValue) {
+      try {
+        const t = JSON.parse(e.newValue);
+        if (t === 'system' || t === 'light' || t === 'dark') app.setTheme(t);
+      } catch {
+        /* a malformed value from another tab is ignored */
+      }
+    }
     if (e.key === 'recursa.reset' && e.newValue) location.reload();
   }
 

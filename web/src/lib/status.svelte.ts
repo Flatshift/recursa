@@ -14,7 +14,7 @@ class StatusStore {
   #inflight: Promise<void> | null = null;
 
   load(force = false): Promise<void> {
-    if (this.#inflight) return this.#inflight;
+    if (this.#inflight) return force ? this.#inflight.then(() => this.load(true)) : this.#inflight;
     if (this.data && !force) return Promise.resolve();
     this.loading = true;
     this.#inflight = api

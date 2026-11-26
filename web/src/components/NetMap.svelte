@@ -76,7 +76,7 @@
     if (g.members.length) bits.push(`${g.members.length} ${g.members.length === 1 ? 'router' : 'routers'}`);
     if (g.city_hint) bits.push(`consistent with ${g.city_hint}`);
     if (g.owner) bits.push(`owned by ${g.owner}`);
-    if (g.rtt_ms != null) bits.push(`${ms(g.rtt_ms, true)} round trip`);
+    if (g.rtt_ms != null) bits.push(`${ms(g.rtt_ms)} round trip`);
     if (g.role === 'content') bits.push(g.members.length ? `reached as ${leaves(g).join(', ')}` : `${leaves(g).join(', ')} not reached`);
     if (onlyV6(g)) bits.push('over IPv6');
     return `${bits.join('; ')}.`;
@@ -132,7 +132,6 @@
   });
   let open = $state<Record<string, boolean>>({});
   const toggle = (k: string) => (open[k] = !open[k]);
-  /** The groups a finding's destinations pass through, nearest first, that have routers to list. */
   // A cloud is drawn as one shaded block per column its boxes sit in, each wrapping that column's boxes with the
   // CDN's name under the last; the layout leaves that room.
   const blobs = (c: Cloud) => {
@@ -149,6 +148,7 @@
       })
       .sort((a, b) => a.col - b.col);
   };
+  /** The groups a finding's destinations pass through, nearest first, that have routers to list. */
   const path = (ids: string[]) => groups.filter((g) => g.members.length && g.targets.some((t) => ids.includes(t))).sort((a, b) => a.ttl_from - b.ttl_from);
 </script>
 
@@ -206,7 +206,7 @@
                 stroke-width="2"
               />
               <text class="xlabel" x={n.x + n.w / 2} y={cy + 28} text-anchor="middle"
-                >{g.label}{#if g.rtt_ms != null}<tspan class="rtt" dx="6">{ms(g.rtt_ms, true)}</tspan>{/if}</text
+                >{g.label}{#if g.rtt_ms != null}<tspan class="rtt" dx="6">{ms(g.rtt_ms)}</tspan>{/if}</text
               >
             {:else if g.role === 'home'}
               <rect x={n.x} y={n.y} width={n.w} height={n.h} rx="6" fill="color-mix(in oklch, {hue(g.role)} 12%, var(--surface))" stroke={hue(g.role)} stroke-width="1.5" />
@@ -232,14 +232,14 @@
                   {#if sub || g.rtt_ms != null}
                     <span class="meta">
                       {#if sub}<span class="nsub">{sub}</span>{/if}
-                      {#if g.rtt_ms != null}<span class="rtt">{ms(g.rtt_ms, true)}</span>{/if}
+                      {#if g.rtt_ms != null}<span class="rtt">{ms(g.rtt_ms)}</span>{/if}
                     </span>
                   {/if}
                 </div>
               </foreignObject>
             {/if}
             {#if g.role === 'home' && g.rtt_ms != null}
-              <text class="rtt" x={n.x + n.w} y={n.y + n.h + 13} text-anchor="end">{ms(g.rtt_ms, true)}</text>
+              <text class="rtt" x={n.x + n.w} y={n.y + n.h + 13} text-anchor="end">{ms(g.rtt_ms)}</text>
             {/if}
           </g>
         {/each}

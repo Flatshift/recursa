@@ -14,7 +14,7 @@
   // CDN mapping is a short round of lookups (about a fifth of it) and then the edge timing, each with its own count.
   const frac = $derived.by(() => {
     const t = run.cdn_timing;
-    if (run.phase === 'cdn' && t) return 0.2 + 0.8 * Math.min(1, t.timed / t.total);
+    if (run.phase === 'cdn' && t) return 0.2 + 0.8 * (t.total > 0 ? Math.min(1, t.timed / t.total) : 0);
     const f = run.total > 0 ? Math.min(1, run.done / run.total) : 0;
     return run.phase === 'cdn' ? 0.2 * f : f;
   });

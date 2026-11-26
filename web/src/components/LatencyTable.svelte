@@ -102,7 +102,7 @@
               <span><span class="k">{TEST_LABEL[k]}</span><span class="v num">{ms(r.dist[k].p50, false)} <span class="dim">/ {ms(r.dist[k].p95, false)}</span></span></span>
             {/each}
             <span><span class="k">Jitter</span><span class="v num">{ms(iqr(r), false)}</span></span>
-            <span><span class="k">Answered</span><span class="v num" class:bad={r.success < 0.98}>{pct(r.success)}</span></span>
+            <span><span class="k">Answered</span><span class="v num" class:bad={r.success < RELIABLE}>{pct(r.success)}</span></span>
             {#if hasSetup}<span><span class="k">Connect</span><span class="v num dim">{r.target.setup_ms != null ? ms(r.target.setup_ms, false) : '—'}</span></span>{/if}
             <span><span class="k">Hops</span><span class="v num" class:bad={r.intercepted && (r.target.hops ?? 99) <= 1}>{r.target.hops ?? '—'}</span></span>
           </span>

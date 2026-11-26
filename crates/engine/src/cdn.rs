@@ -18,7 +18,7 @@
 use crate::clock;
 use crate::dns::{self, QuerySpec, RData};
 use crate::net::{self, Endpoint, Exchanger, Transport};
-use crate::stats::median;
+use crate::stats::{median, round2};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
@@ -248,10 +248,6 @@ pub struct CdnReport {
 
 /// Resolver id → CDN id → hostname → mapping.
 pub type Answers = BTreeMap<String, BTreeMap<String, BTreeMap<String, HostMapping>>>;
-
-fn round2(v: f64) -> f64 {
-    (v * 100.0).round() / 100.0
-}
 
 /// Names of the table in lookup order: hostnames interleaved across CDNs, so no CDN is
 /// asked in a burst.

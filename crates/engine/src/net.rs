@@ -379,7 +379,7 @@ impl Exchanger for UdpX {
                         bytes: resp.to_vec(),
                         rtt_ns: t_rx.saturating_sub(t0),
                         user_rtt_ns: t_user.saturating_sub(t0),
-                        kernel_stamp: kstamp.is_some(),
+                        kernel_stamp: kstamp.is_some_and(|k| k >= t0),
                         ttl,
                     });
                 }
@@ -598,7 +598,7 @@ impl Exchanger for UdpX {
                 bytes: resp.to_vec(),
                 rtt_ns: t_rx.saturating_sub(t0),
                 user_rtt_ns: t_user.saturating_sub(t0),
-                kernel_stamp: kstamp.is_some(),
+                kernel_stamp: kstamp.is_some_and(|k| k >= t0),
                 ttl,
             });
         }

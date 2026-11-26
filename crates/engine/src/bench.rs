@@ -632,7 +632,7 @@ pub(crate) fn spawn(mut cfg: RunConfig, mut deps: Deps) -> Arc<RunHandle> {
                 s.cdn_naming = None;
             });
             let final_state = hh.with(|s| s.clone());
-            on_finish(&final_state);
+            let _ = catch_unwind(AssertUnwindSafe(|| on_finish(&final_state)));
             run_active.store(false, Ordering::SeqCst);
             hh.publish(|s| json!({"type": "done", "run": &*s}));
         })

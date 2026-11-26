@@ -713,7 +713,7 @@ class AppState {
     if (!this.boot) return;
     const row: RunRow = { id: r.id, started_at: r.started_at, finished_at: r.finished_at, status: r.status, summary: {}, saved: false };
     this.boot = { ...this.boot, active_run: null, runs: [row, ...this.boot.runs.filter((x) => x.id !== r.id)] };
-    api.get<RunRow[]>('/api/runs').then((runs) => this.boot && (this.boot = { ...this.boot, runs }));
+    api.get<RunRow[]>('/api/runs').then((runs) => this.boot && (this.boot = { ...this.boot, runs })).catch(() => {});
   }
 }
 

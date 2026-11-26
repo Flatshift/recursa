@@ -12,6 +12,10 @@ Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](
 - Start and Run again show the turning mark at once, while the engine gets the run going.
 - Time, Over time: the clock chart has labelled axes, a new chart compares every server's offset, and each server gets a daily answered strip.
 - The sidebar shows the Time monitor beside Monitoring and Peering, and opens Time, Over time.
+- `recursa serve` takes `--port` and `--no-open`, and stops cleanly on SIGTERM.
+- Peering: a table download that was cut short, or a PeeringDB sync that stopped halfway, no longer counts as complete.
+- Status feeds and network names that could not be fetched are tried again instead of kept as empty.
+- Fixed the Resolvers page showing a deleted run as the last one, and the capability note saying the resolvers differ while a run is still going.
 
 ## 0.6.0 (2026-11-25)
 
