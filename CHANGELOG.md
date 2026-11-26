@@ -2,7 +2,7 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.6.1 (2026-11-26)
 
 - Extended test: choose 5,000 or 10,000 lookups and a Fast, Standard or Thorough pace (`--samples`, `--pace`).
 - Extended test: a third chart shows all counted lookups together.
