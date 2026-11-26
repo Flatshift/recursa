@@ -300,6 +300,68 @@ fn kinds(plan: &Plan, q: usize) -> [&'static str; 2] {
     }
 }
 
+/// Each of [`GROUPS`] that slot `q` belongs to, by position.
+fn membership(plan: &Plan, q: usize) -> [bool; GROUPS.len()] {
+    let k = kinds(plan, q);
+    GROUPS.map(|key| k.contains(&key))
+}
+
+/// The slot count and each resolver's median and losses for every group, in one pass over the counted queries.
+fn groups_of(plan: &Plan, n: usize, done: usize, removed: &[bool], dropped: &dyn Fn(usize) -> bool, counted: &[Counted]) -> Vec<Group> {
+    let member: Vec<[bool; GROUPS.len()]> = (0..done).map(|q| membership(plan, q)).collect();
+    let mut count = [0u32; GROUPS.len()];
+    for q in (0..done).filter(|&q| !removed[q / PER_BIN] && !dropped(q)) {
+        for (g, c) in count.iter_mut().enumerate() {
+            *c += member[q][g] as u32;
+        }
+    }
+    let mut mine: Vec<Vec<Vec<Option<f64>>>> = vec![vec![Vec::new(); n]; GROUPS.len()];
+    for c in counted.iter().filter(|c| !removed[c.bin]) {
+        for (g, m) in mine.iter_mut().enumerate() {
+            if member[c.q][g] {
+                m[c.t].push(c.ms);
+            }
+        }
+    }
+    GROUPS
+        .iter()
+        .enumerate()
+        .map(|(g, &key)| {
+            let r = mine[g]
+                .iter()
+                .map(|mine| GroupCell { p50: median_of(&ranked(mine.iter())), lost: mine.iter().filter(|m| m.is_none()).count() as u32 })
+                .collect();
+            Group { key, count: count[g], r }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn groups_reference(
+    plan: &Plan,
+    n: usize,
+    done: usize,
+    removed: &[bool],
+    dropped: &dyn Fn(usize) -> bool,
+    counted: &[Counted],
+) -> Vec<Group> {
+    let kept_counted = || counted.iter().filter(|c| !removed[c.bin]);
+    GROUPS
+        .iter()
+        .map(|&key| {
+            let count = (0..done).filter(|&q| !removed[q / PER_BIN] && !dropped(q) && kinds(plan, q).contains(&key)).count();
+            let r = (0..n)
+                .map(|t| {
+                    let mine: Vec<Option<f64>> =
+                        kept_counted().filter(|c| c.t == t && kinds(plan, c.q).contains(&key)).map(|c| c.ms).collect();
+                    GroupCell { p50: median_of(&ranked(mine.iter())), lost: mine.iter().filter(|m| m.is_none()).count() as u32 }
+                })
+                .collect();
+            Group { key, count: count as u32, r }
+        })
+        .collect()
+}
+
 /// The ranking of the live targets over `by` (each target's counted times by bin) in the kept bins, best first, and the
 /// margin below which a gap counts as a tie. With `enough`, each row behind the lead gets its gap with a range, and with
 /// `call` the rows get their calls as well.
@@ -523,20 +585,9 @@ pub(crate) fn analyze(inp: &Input) -> Analysis {
     let ecdf = Ecdf { x, r };
 
     let kept_counted = || counted.iter().filter(|c| !removed[c.bin]);
-    let groups: Vec<Group> = GROUPS
-        .iter()
-        .map(|&key| {
-            let count = (0..done).filter(|&q| !removed[q / PER_BIN] && !dropped(q) && kinds(inp.plan, q).contains(&key)).count();
-            let r = (0..n)
-                .map(|t| {
-                    let mine: Vec<Option<f64>> =
-                        kept_counted().filter(|c| c.t == t && kinds(inp.plan, c.q).contains(&key)).map(|c| c.ms).collect();
-                    GroupCell { p50: median_of(&ranked(mine.iter())), lost: mine.iter().filter(|m| m.is_none()).count() as u32 }
-                })
-                .collect();
-            Group { key, count: count as u32, r }
-        })
-        .collect();
+    let groups = groups_of(inp.plan, n, done, &removed, &dropped, &counted);
+    #[cfg(test)]
+    assert_eq!(groups, groups_reference(inp.plan, n, done, &removed, &dropped, &counted));
 
     // A tail name answered faster by a resolver asked after another suggests the name was cached by then.
     let mut shared_cache = Vec::new();
@@ -837,7 +888,7 @@ impl Collector<'_> {
 
     /// Reads the first `upto` slots and sends the bins, gaps and result. Every bin goes in the event: a late answer or
     /// a sleep can change one already sent.
-    fn emit(&mut self, upto: usize) -> Analysis {
+    fn emit(&mut self, upto: usize) -> Vec<usize> {
         self.flush();
         let a = analyze(&Input {
             bin_s: self.bin_s,
@@ -847,18 +898,35 @@ impl Collector<'_> {
             live: self.live,
             total: self.total,
         });
-        let (bins, cold_bins, gaps, result) = (a.bins.clone(), a.cold_bins.clone(), self.gaps.clone(), a.result.clone());
-        self.h.publish(|s| {
+        let Analysis { bins, cold_bins, result, shared_cache } = a;
+        let gaps = self.gaps.clone();
+        self.h.publish_text(|s, seq| {
             let e = s.extended.as_mut().expect("extended state is set before the schedule starts");
             e.bins = bins;
             e.cold_bins = cold_bins;
             e.gaps = gaps;
             e.result = result;
-            json!({"type": "extended", "bins": e.bins, "cold_bins": e.cold_bins, "gaps": e.gaps, "result": e.result})
+            event_text(e, seq)
         });
         self.emitted = upto;
-        a
+        shared_cache
     }
+}
+
+/// The `extended` event for the state as it now stands, serialised without a tree of values in between.
+fn event_text(e: &ExtendedState, seq: u64) -> String {
+    #[derive(Serialize)]
+    struct Event<'a> {
+        #[serde(rename = "type")]
+        kind: &'static str,
+        bins: &'a [Bin],
+        cold_bins: &'a [Bin],
+        gaps: &'a [GapSpan],
+        result: &'a ExtResult,
+        seq: u64,
+    }
+    serde_json::to_string(&Event { kind: "extended", bins: &e.bins, cold_bins: &e.cold_bins, gaps: &e.gaps, result: &e.result, seq })
+        .expect("the extended state serialises")
 }
 
 pub(crate) fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
@@ -1020,8 +1088,8 @@ pub(crate) fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &
     drop(keep_awake);
 
     // What was measured is kept, a cancel included.
-    let a = collector.emit(collector.done);
-    for t in a.shared_cache {
+    let shared_cache = collector.emit(collector.done);
+    for t in shared_cache {
         let label = h.with(|s| format!("{} {}", s.targets[t].provider, s.targets[t].variant).trim().to_string());
         let id = h.with(|s| s.targets[t].resolver_id.clone());
         h.note(
@@ -1082,6 +1150,44 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    /// Names of every kind: common names, and tail names under a `.com`, another generic TLD and a country domain.
+    fn varied(total: usize) -> Plan {
+        Plan {
+            names: (0..total).map(|q| format!("q{q}.{}", ["com", "org", "de", "net", "io", "uk"][q % 6])).collect(),
+            touch: (0..total).map(|q| [0, 1, 2, 0, 2, 0, 2][q % 7]).collect(),
+        }
+    }
+
+    fn groups_match_the_reference(slots: usize, total: usize, f: impl Fn(usize, usize) -> (Outcome, f64)) {
+        // `analyze` asserts the one-pass groups against the reference as it builds them.
+        let plan = varied(total);
+        let a = analyze(&Input { bin_s: 15.0, grid: &grid(slots, f), plan: &plan, order: &ordered(total), live: &[true, true], total });
+        assert_eq!(a.result.groups.len(), GROUPS.len());
+        assert!(a.result.groups.iter().any(|g| g.count > 0));
+    }
+
+    #[test]
+    fn groups_in_one_pass_match_the_reference_on_a_full_run() {
+        groups_match_the_reference(600, 600, |q, t| (Outcome::Ok, 10.0 + noise(q) + t as f64));
+    }
+
+    #[test]
+    fn groups_in_one_pass_match_the_reference_on_a_partial_run() {
+        groups_match_the_reference(333, 900, |q, t| {
+            if q % 17 == 0 { (Outcome::Timeout, 0.0) } else { (Outcome::Ok, 20.0 + noise(q) * (t + 1) as f64) }
+        });
+    }
+
+    #[test]
+    fn groups_in_one_pass_match_the_reference_with_removed_bins_and_dropped_slots() {
+        // Bin 1 is the link's, and every seventh name nobody answers.
+        groups_match_the_reference(600, 600, |q, t| match q {
+            _ if (PER_BIN..2 * PER_BIN).contains(&q) => (Outcome::Timeout, 0.0),
+            _ if q % 7 == 3 => (Outcome::Nxdomain, 5.0),
+            _ => (Outcome::Ok, 15.0 + noise(q) + t as f64 * 2.0),
+        });
     }
 
     fn noise(q: usize) -> f64 {
@@ -1483,6 +1589,43 @@ mod tests {
             "{}",
             json!({"type": "extended", "bins": [bin], "gaps": v["gaps"], "result": {"final": v["result"]["final"], "rows": v["result"]["rows"]}})
         );
+    }
+
+    #[test]
+    fn the_event_text_is_what_the_value_tree_was() {
+        let g = grid(120, |q, t| (Outcome::Ok, 20.0 + 5.0 * t as f64 + noise(q)));
+        let a = run_on(&g, 120, &ordered(120));
+        let e = ExtendedState {
+            total: 120,
+            per_bin: 50,
+            bin_s: 15.0,
+            cold_bin_s: 75.0,
+            gap_ms: 300,
+            timeout_ms: 2000,
+            names: NamesUsed {
+                source: "bundled",
+                list_id: "pool-2026-11-01".into(),
+                list_date: "2026-11-01".into(),
+                seed: 7,
+                common: 5,
+                tail: 40,
+                region: None,
+                regional: 0,
+            },
+            plan: plan(120),
+            order: ordered(120),
+            bins: a.bins,
+            cold_bins: a.cold_bins,
+            gaps: vec![(1000, 5000, "sleep")],
+            result: a.result,
+        };
+        let old = {
+            let mut v = json!({"type": "extended", "bins": e.bins, "cold_bins": e.cold_bins, "gaps": e.gaps, "result": e.result});
+            v["seq"] = json!(9);
+            v
+        };
+        let new: serde_json::Value = serde_json::from_str(&event_text(&e, 9)).unwrap();
+        assert_eq!(new, old);
     }
 
     /// Answers at once, or never (a timeout after `lag`), and logs when each query came.

@@ -264,9 +264,8 @@ fn gunzip(body: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// GET `url`, refusing while a measurement runs. `gzip` asks for a compressed body and unpacks it; reqwest here has no
-/// gzip support of its own, and the PeeringDB listings are large.
-async fn get(app: &AppState, url: String, gzip: bool) -> Result<Vec<u8>, String> {
+/// Wait until nothing is measuring, up to 10 minutes.
+async fn idle(app: &AppState) -> Result<(), String> {
     // A measurement owns the network while it runs. Wait for it rather than give up: a sync that stops halfway leaves
     // the tables short until the next refresh.
     let mut waited = Duration::ZERO;
@@ -277,28 +276,56 @@ async fn get(app: &AppState, url: String, gzip: bool) -> Result<Vec<u8>, String>
         tokio::time::sleep(Duration::from_secs(1)).await;
         waited += Duration::from_secs(1);
     }
+    Ok(())
+}
+
+/// GET `url`, refusing while a measurement runs. A measurement that starts while the body streams drops the response:
+/// the download waits it out and asks again. It waits once more after the body is whole, so the caller's parse and
+/// table write start while nothing is measuring. After [`DROPS_MAX`] dropped responses the transfer runs to its end,
+/// so a machine that measures often (another copy's monitors) still gets its tables. `gzip` asks for a compressed body
+/// and unpacks it; reqwest here has no gzip support of its own, and the PeeringDB listings are large.
+async fn get(app: &AppState, url: String, gzip: bool) -> Result<Vec<u8>, String> {
+    const DROPS_MAX: u32 = 3;
+    let mut drops = 0;
     let client = reqwest::Client::builder()
         .user_agent(concat!("recursa/", env!("CARGO_PKG_VERSION"), " (+https://recursa.app)"))
         .timeout(Duration::from_secs(600))
         .build()
         .map_err(|e| e.to_string())?;
-    let mut req = client.get(&url);
-    if gzip {
-        req = req.header("accept-encoding", "gzip");
-    }
-    let mut resp = req.send().await.map_err(|e| format!("{url}: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("{url}: HTTP {}", resp.status().as_u16()));
-    }
-    let packed = resp.headers().get("content-encoding").and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("gzip"));
-    let mut body = Vec::new();
-    while let Some(chunk) = resp.chunk().await.map_err(|e| format!("{url}: {e}"))? {
-        if body.len() + chunk.len() > BODY_MAX {
-            return Err(format!("{url}: the download is too big."));
+    'ask: loop {
+        idle(app).await?;
+        let mut req = client.get(&url);
+        if gzip {
+            req = req.header("accept-encoding", "gzip");
         }
-        body.extend_from_slice(&chunk);
+        let mut resp = req.send().await.map_err(|e| format!("{url}: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("{url}: HTTP {}", resp.status().as_u16()));
+        }
+        let packed = resp.headers().get("content-encoding").and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("gzip"));
+        let mut body = Vec::new();
+        // The lock file is opened to read it, so it is looked at every 250 ms, not every chunk.
+        let mut looked = tokio::time::Instant::now();
+        while let Some(chunk) = resp.chunk().await.map_err(|e| format!("{url}: {e}"))? {
+            if drops < DROPS_MAX
+                && (app.measuring.load(Ordering::SeqCst)
+                    || (looked.elapsed() >= Duration::from_millis(250) && {
+                        looked = tokio::time::Instant::now();
+                        lock::busy()
+                    }))
+            {
+                drops += 1;
+                continue 'ask;
+            }
+            if body.len() + chunk.len() > BODY_MAX {
+                return Err(format!("{url}: the download is too big."));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let body = if gzip && packed { gunzip(&body)? } else { body };
+        idle(app).await?;
+        return Ok(body);
     }
-    if gzip && packed { gunzip(&body) } else { Ok(body) }
 }
 
 /// Fetch the prefix-to-AS table now. For a `run`, each download ends within a moment of the run's Cancel; a table

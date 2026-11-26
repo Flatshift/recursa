@@ -218,11 +218,17 @@ where
         for l in lines {
             parsed.extend(parse_line(&l.map_err(|e| e.to_string())?));
         }
-        let rows = parsed.into_iter();
+        // In key order, for the table's primary key. The sort is stable: of two rows with one key, the file's first still wins.
         if v6 {
-            s.pfx2as6_replace(rows.filter_map(|r| if let Row::V6(p, l, a, m) = r { Some((p, l, a, m)) } else { None }))
+            let mut rows: Vec<_> =
+                parsed.into_iter().filter_map(|r| if let Row::V6(p, l, a, m) = r { Some((p, l, a, m)) } else { None }).collect();
+            rows.sort_by_key(|&(p, l, ..)| (l, p));
+            s.pfx2as6_replace(rows.into_iter())
         } else {
-            s.pfx2as_replace(rows.filter_map(|r| if let Row::V4(p, l, a, m) = r { Some((p, l, a, m)) } else { None }))
+            let mut rows: Vec<_> =
+                parsed.into_iter().filter_map(|r| if let Row::V4(p, l, a, m) = r { Some((p, l, a, m)) } else { None }).collect();
+            rows.sort_by_key(|&(p, l, ..)| (l, p));
+            s.pfx2as_replace(rows.into_iter())
         }
         .map_err(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => "CAIDA's table had no rows.".to_string(),

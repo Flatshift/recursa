@@ -567,14 +567,28 @@
     height: 8px;
     border-radius: 50%;
     background: var(--s-uncached);
+    position: relative;
+    isolation: isolate;
+  }
+  /* The ring behind the dot grows by transform and fades, so the pulse never repaints. */
+  .dot::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: 50%;
+    background: var(--s-uncached);
+    opacity: 0;
     animation: pulse 1.4s var(--ease-out) infinite;
   }
   @keyframes pulse {
     0% {
-      box-shadow: 0 0 0 0 color-mix(in oklch, var(--s-uncached) 55%, transparent);
+      transform: scale(1);
+      opacity: 0.55;
     }
     100% {
-      box-shadow: 0 0 0 6px transparent;
+      transform: scale(2.5);
+      opacity: 0;
     }
   }
   .empty {
@@ -650,7 +664,9 @@
     flex: none;
     background: transparent;
     box-shadow: inset 0 0 0 1.5px var(--ink-3);
-    animation: none;
+  }
+  .mon .dot::after {
+    display: none;
   }
   .mon.on .dot {
     background: var(--good);
@@ -660,7 +676,7 @@
     .mon {
       transition: none;
     }
-    .dot {
+    .dot::after {
       animation: none;
     }
   }

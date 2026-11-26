@@ -488,6 +488,15 @@ impl RunHandle {
         v["seq"] = json!(s.seq);
         let _ = self.tx.send(v.to_string().into());
     }
+    /// [`publish`](Self::publish) for an event the caller serialises itself, from the state it just changed and the new
+    /// `seq`, which it must carry. Same lock, same `seq` order.
+    pub(crate) fn publish_text(&self, f: impl FnOnce(&mut RunState, u64) -> String) {
+        let mut s = self.state();
+        s.seq += 1;
+        let seq = s.seq;
+        let text = f(&mut s, seq);
+        let _ = self.tx.send(text.into());
+    }
     pub(crate) fn with<R>(&self, f: impl FnOnce(&mut RunState) -> R) -> R {
         f(&mut self.state())
     }
@@ -524,9 +533,18 @@ impl RunHandle {
     pub fn subscribe(&self) -> (broadcast::Receiver<Arc<str>>, String) {
         let s = self.state();
         let rx = self.tx.subscribe();
-        let snap = json!({"type": "snapshot", "run": &*s, "seq": s.seq}).to_string();
+        let snap = serde_json::to_string(&Snapshot { kind: "snapshot", run: &s, seq: s.seq }).expect("the run state serialises");
         (rx, snap)
     }
+}
+
+/// The event a subscriber starts from, serialised straight from the state.
+#[derive(Serialize)]
+struct Snapshot<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    run: &'a RunState,
+    seq: u64,
 }
 
 pub struct Deps {
@@ -3041,6 +3059,26 @@ mod tests {
             extended: None,
             seq: 0,
         }
+    }
+
+    #[test]
+    fn the_snapshot_and_text_events_carry_the_seq_in_order() {
+        let (tx, _) = broadcast::channel(16);
+        let h = RunHandle { id: "t".into(), cancel: AtomicBool::new(false), state: Mutex::new(run_with(&["google", "quad9"], &[])), tx };
+        let (mut rx, snap) = h.subscribe();
+        let state = h.state().clone();
+        assert_eq!(serde_json::from_str::<Value>(&snap).unwrap(), json!({"type": "snapshot", "run": state, "seq": 0}));
+        h.publish_text(|s, seq| {
+            s.done = 3;
+            format!(r#"{{"type":"x","seq":{seq}}}"#)
+        });
+        h.publish(|_| json!({"type": "y"}));
+        let a: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        let b: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        assert_eq!((a, b), (json!({"type": "x", "seq": 1}), json!({"type": "y", "seq": 2})));
+        assert_eq!(h.state().done, 3);
+        let (_, snap) = h.subscribe();
+        assert_eq!(serde_json::from_str::<Value>(&snap).unwrap()["seq"], 2);
     }
 
     #[test]

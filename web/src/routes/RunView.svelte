@@ -4,7 +4,7 @@
   import { selectKey } from '../lib/select';
   import { shortcut } from '../lib/keys';
   import { HIT_SHARE, blendRows, buildRows, rank, verdict, type Row, type SortKey } from '../lib/verdict';
-  import type { RunState, TestKind, Transport } from '../lib/types';
+  import type { RunState, Sample, TestKind, Transport } from '../lib/types';
   import { TEST_HINT, TRANSPORT_LABEL, duration, label, ms, plural, checkMs, resolverCount, runEstimateMs, timeOfDay, when } from '../lib/format';
   import { menu } from '../lib/menu.svelte';
   import { reduceMotion } from '../lib/motion';
@@ -43,7 +43,11 @@
   let snapshot = $state.raw<Row[] | null>(null);
   let lastSnap = 0;
   $effect(() => {
-    const current = live;
+    // Depend on what `live` depends on without reading it: building the rows sorts every sample, so it runs only
+    // when a copy is taken. The row count is the target count, as in `buildRows`.
+    void app.boot?.resolvers;
+    void app.mix;
+    const count = run && !ext ? run.targets.length : 0;
     if (!running) {
       snapshot = null;
       return;
@@ -51,9 +55,9 @@
     // Reads of the snapshot must not make this effect depend on its own output.
     untrack(() => {
       const now = Date.now();
-      if (!snapshot || now - lastSnap > SNAP_MS || snapshot.length !== current.length) {
+      if (!snapshot || now - lastSnap > SNAP_MS || snapshot.length !== count) {
         lastSnap = now;
-        snapshot = current;
+        snapshot = live;
       }
     });
   });
@@ -77,6 +81,27 @@
     return () => cancelAnimationFrame(id);
   });
   const rows = $derived(running && glided ? glided : live);
+  // The dot views redraw per sample, and samples land about 8 times a second: while measuring they take a copy at
+  // most every 250 ms, and a finished run hands them its samples as they are.
+  const SAMPLE_MS = 250;
+  let sampled = $state.raw<{ id: string; samples: Sample[] } | null>(null);
+  let lastSampled = 0;
+  $effect(() => {
+    const id = run?.id ?? '';
+    const samples = run?.samples ?? [];
+    if (!running) {
+      sampled = null;
+      return;
+    }
+    untrack(() => {
+      const now = Date.now();
+      if (sampled?.id !== id || now - lastSampled >= SAMPLE_MS) {
+        lastSampled = now;
+        sampled = { id, samples };
+      }
+    });
+  });
+  const dotSamples = $derived(running && sampled ? sampled.samples : (run?.samples ?? []));
 
   let test = $state<TestKind | 'all'>('all');
   let sortKey = $state<SortKey>('rank');
@@ -160,7 +185,9 @@
   let now = $state(Date.now());
   $effect(() => {
     if (!running) return;
-    const t = setInterval(() => (now = Date.now()), 1000);
+    const t = setInterval(() => {
+      if (!document.hidden) now = Date.now();
+    }, 1000);
     return () => clearInterval(t);
   });
   // When the current phase began: once the checks after the latency rounds start, time left is what remains of theirs.
@@ -456,7 +483,7 @@
                   <Verdict v={null} live={liveVerdict} cdn={run.config.cdn} onopen={open}>
                     <RankList
                       rows={rank(rows)}
-                      samples={run.samples}
+                      samples={dotSamples}
                       tests={run.config.tests}
                       {multi}
                       live
@@ -531,7 +558,7 @@
               <div class="panel ladder">
                 <Ladder
                   rows={ordered}
-                  samples={run.samples}
+                  samples={dotSamples}
                   {test}
                   tests={run.config.tests}
                   live={running}

@@ -187,10 +187,18 @@
   function density(list: Sample[] | undefined): Ridge | null {
     if (!list || list.length < 8) return null;
     const bins = list.map((s) => Math.round(Math.log10(Math.max(s.us, 1) / 1000) / BIN));
-    const b0 = Math.min(...bins) - KR;
-    const v = new Array<number>(Math.max(...bins) + KR + 1 - b0).fill(0);
+    // Loops, not spread: a long run's bins would overflow the argument limit.
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const b of bins) {
+      if (b < lo) lo = b;
+      if (b > hi) hi = b;
+    }
+    const b0 = lo - KR;
+    const v = new Array<number>(hi + KR + 1 - b0).fill(0);
     for (const b of bins) for (let j = 0; j < KERNEL.length; j++) v[b - b0 + j - KR] += KERNEL[j];
-    const peak = Math.max(...v);
+    let peak = -Infinity;
+    for (const n of v) if (n > peak) peak = n;
     // Thin tails would draw as needles out to every lone outlier; the dots already show those.
     return { b0, v: v.map((n) => (n / peak < 0.04 ? 0 : n / peak)) };
   }

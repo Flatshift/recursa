@@ -45,7 +45,9 @@
   });
   $effect(() => {
     if (!running) return;
-    const t = setInterval(() => (now = Date.now()), 1000);
+    const t = setInterval(() => {
+      if (!document.hidden) now = Date.now();
+    }, 1000);
     return () => clearInterval(t);
   });
   // The resolver that reported last in this check, newest key last.

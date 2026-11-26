@@ -617,21 +617,24 @@ fn write_frame<W: Write>(w: &mut W, query: &[u8], scratch: &mut Vec<u8>) -> io::
     w.flush()
 }
 
-fn read_frame<R: Read>(r: &mut R) -> io::Result<Vec<u8>> {
+/// The next frame, in `body` (resized to fit; a buffer with room for the frame allocates nothing).
+fn read_frame_into<R: Read>(r: &mut R, body: &mut Vec<u8>) -> io::Result<()> {
     let mut len = [0u8; 2];
     r.read_exact(&mut len)?;
-    let mut body = vec![0u8; u16::from_be_bytes(len) as usize];
-    r.read_exact(&mut body)?;
-    Ok(body)
+    body.clear();
+    body.resize(u16::from_be_bytes(len) as usize, 0);
+    r.read_exact(body)
 }
 
 /// One query as a frame on an armed stream (TCP or DoT), then the frame that answers it. Replies to other queries are
 /// skipped; the stream's deadline ends the wait.
 fn framed_exchange<S: Read + Write>(s: &mut S, query: &[u8], scratch: &mut Vec<u8>) -> Result<Reply, XErr> {
+    // Allocated before the clock starts; a reply that fits in it costs no allocation inside the window.
+    let mut body = Vec::with_capacity(4096);
     let t0 = clock::now_ns();
     write_frame(s, query, scratch).map_err(io_err)?;
     loop {
-        let body = read_frame(s).map_err(io_err)?;
+        read_frame_into(s, &mut body).map_err(io_err)?;
         let rtt_ns = clock::since(t0);
         if dns::is_response_to(&body, query) {
             return Ok(Reply { bytes: body, rtt_ns, user_rtt_ns: rtt_ns, kernel_stamp: false, ttl: None });
@@ -945,6 +948,7 @@ impl StreamX for DohX {
                     .header("content-length", body.len())
                     .body(())
                     .map_err(|e| XErr::Http(e.to_string()))?;
+                let mut out = Vec::with_capacity(512);
                 let t0 = clock::now_ns();
                 let (resp, mut stream) = send.send_request(req, false).map_err(|e| XErr::Http(e.to_string()))?;
                 stream.send_data(body, true).map_err(|e| XErr::Http(e.to_string()))?;
@@ -954,11 +958,10 @@ impl StreamX for DohX {
                 }
                 // A captive portal or proxy can answer 200 with a web page.
                 let ct = resp.headers().get(http::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
-                if !ct.trim_start().to_ascii_lowercase().starts_with("application/dns-message") {
+                if !ct.trim_start().as_bytes().get(..23).is_some_and(|p| p.eq_ignore_ascii_case(b"application/dns-message")) {
                     return Err(XErr::Http(format!("not a DNS reply (content-type {:?})", ct)));
                 }
                 let mut rx = resp.into_body();
-                let mut out = Vec::with_capacity(512);
                 while let Some(chunk) = rx.data().await {
                     let chunk = chunk.map_err(|e| XErr::Http(e.to_string()))?;
                     let _ = rx.flow_control().release_capacity(chunk.len());

@@ -700,7 +700,7 @@ class AppState {
     this.#liveTimer = setInterval(async () => {
       const id = this.live?.id;
       if (!id) return clearInterval(this.#liveTimer);
-      if (this.run?.id === id) return;
+      if (this.run?.id === id || document.hidden) return;
       const runs = await api.get<RunRow[]>('/api/runs').catch(() => null);
       if (this.live?.id !== id || !runs?.some((x) => x.id === id)) return;
       this.live = null;

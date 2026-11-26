@@ -480,7 +480,7 @@ impl Store {
 
     /// The setting at `key`: `Ok(None)` when there is no row or it isn't JSON, `Err` when the database couldn't be read.
     fn setting(&self, key: &str) -> rusqlite::Result<Option<serde_json::Value>> {
-        let c = self.conn.lock().unwrap();
+        let c = self.rd();
         let s: Option<String> = c.query_row("SELECT body FROM settings WHERE key=?1", params![key], |r| r.get(0)).optional()?;
         Ok(s.and_then(|s| serde_json::from_str(&s).ok()))
     }

@@ -102,7 +102,7 @@
     if (live && !timer) {
       let busy = false;
       timer = setInterval(async () => {
-        if (busy) return;
+        if (busy || document.hidden) return;
         busy = true;
         try {
           const r = await api.get<Pick<NtpInfo, 'run' | 'asked' | 'now'>>('/api/ntp?live=1');
@@ -215,7 +215,9 @@
   let clock = $state(Date.now());
   $effect(() => {
     if (!running) return;
-    const t = setInterval(() => (clock = Date.now()), reduceMotion ? 1000 : 200);
+    const t = setInterval(() => {
+      if (!document.hidden) clock = Date.now();
+    }, reduceMotion ? 1000 : 200);
     return () => clearInterval(t);
   });
   const elapsed = $derived(running && run ? Math.max(0, (clock - run.started_at) / 1000) : 0);

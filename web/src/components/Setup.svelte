@@ -1304,18 +1304,32 @@
     height: 7px;
     border-radius: 50%;
     background: currentColor;
+    position: relative;
+    isolation: isolate;
+  }
+  /* The ring behind the dot grows by transform and fades, so the pulse never repaints. */
+  .live-dot::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0;
     animation: live-pulse 1.4s var(--ease-out) infinite;
   }
   @keyframes live-pulse {
     0% {
-      box-shadow: 0 0 0 0 color-mix(in oklch, currentColor 55%, transparent);
+      transform: scale(1);
+      opacity: 0.55;
     }
     100% {
-      box-shadow: 0 0 0 5px transparent;
+      transform: scale(2.43);
+      opacity: 0;
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .live-dot {
+    .live-dot::after {
       animation: none;
     }
   }
