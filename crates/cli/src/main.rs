@@ -53,12 +53,15 @@ enum Cmd {
         /// Comma-separated transports: udp,tcp,dot,doh
         #[arg(long, value_delimiter = ',', default_value = "udp")]
         transports: Vec<String>,
-        /// Queries per test per target (30), or lookups per resolver with --extended (5000).
+        /// Queries per test per target (30), or lookups per resolver with --extended (5000 or 10000).
         #[arg(long)]
         samples: Option<u32>,
-        /// Compare two to four resolvers on the same names, one lookup every 300 ms, for about 25 minutes.
+        /// Compare two to four resolvers on the same names, 5000 or 10000 lookups each (--samples), at the --pace given.
         #[arg(long)]
         extended: bool,
+        /// With --extended: fast (a lookup every 75 ms), standard (300 ms) or thorough (600 ms).
+        #[arg(long, requires = "extended", value_parser = ["fast", "standard", "thorough"], default_value = "standard")]
+        pace: String,
         /// Ask one resolver twice, as A and B, to see how far two runs of the same resolver differ.
         #[arg(long, hide = true, requires = "extended")]
         aa: bool,
@@ -342,6 +345,7 @@ async fn main() {
             ref transports,
             samples,
             extended,
+            ref pace,
             aa,
             quick,
             latency_only,
@@ -364,8 +368,8 @@ async fn main() {
                 eprintln!("--extended measures one transport. Give one.");
                 std::process::exit(2);
             }
-            if extended && samples.is_some_and(|n| !(500..=5000).contains(&n) || n % 50 != 0) {
-                eprintln!("With --extended, --samples is 500 to 5000 in steps of 50.");
+            if extended && samples.is_some_and(|n| !(500..=10000).contains(&n) || n % 50 != 0) {
+                eprintln!("With --extended, --samples is 500 to 10000 in steps of 50.");
                 std::process::exit(2);
             }
             let mut names: Vec<String> = cached_names.clone();
@@ -407,6 +411,7 @@ async fn main() {
                 bench::Mode::Accurate
             };
             cfg.aa = aa;
+            cfg.pace = serde_json::from_value(serde_json::Value::String(pace.clone())).unwrap_or_default();
             cfg.probes = !latency_only;
             cfg.cdn = !latency_only;
             if !names.is_empty() {
@@ -531,14 +536,14 @@ fn print_ntp(results: &[recursa_engine::ntp::ServerResult], consensus: Option<&r
     }
     match consensus {
         Some(c) if c.median_ms.abs() <= c.bound_ms => println!(
-            "\nConsensus of {} servers{}: your clock is within the noise of them (± {:.1} ms, the surest server's error ceiling; the middle half agree within {:.2} ms).",
+            "\nConsensus of {} servers{}: your clock is within the noise of them (± {:.1} ms, the surest server's error ceiling; half of them agree within {:.2} ms).",
             c.voters,
             independent(c),
             c.bound_ms,
             c.spread_ms
         ),
         Some(c) => println!(
-            "\nConsensus of {} servers{}: your clock is {:.1} ms {} them (± {:.1} ms; the middle half agree within {:.2} ms).",
+            "\nConsensus of {} servers{}: your clock is {:.1} ms {} them (± {:.1} ms; half of them agree within {:.2} ms).",
             c.voters,
             independent(c),
             c.median_ms.abs(),

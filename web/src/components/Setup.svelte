@@ -5,11 +5,11 @@
   import { shortcut, shortcutParts } from '../lib/keys';
   import type { Check, Resolver, TestKind, Transport } from '../lib/types';
   import CachedNames from './CachedNames.svelte';
-  import { TEST_HINT, TRANSPORT_LABEL, documented, duration, label, ms, runEstimateMs } from '../lib/format';
+  import { TEST_HINT, TRANSPORT_LABEL, PACES, documented, duration, gapOf, label, ms, runEstimateMs } from '../lib/format';
   import { TEST_LABEL } from '../lib/phases';
   import { onResolverContext } from '../lib/resolverMenu';
   import { latestChecks } from '../lib/measured';
-  import { MAX_PICK, MIN_PICK, toggled } from '../lib/extended';
+  import { MAX_PICK, MIN_PICK, minutesOf, toggled } from '../lib/extended';
   import Icon from './Icon.svelte';
   import Toolbar from './Toolbar.svelte';
   import SetupExtended from './SetupExtended.svelte';
@@ -55,6 +55,9 @@
   });
 
   const extended = $derived(draft.mode === 'extended');
+  const extSamples = $derived(draft.ext_samples === 10000 ? 10000 : 5000);
+  const extPace = $derived(draft.pace ?? 'standard');
+  const perSecond = (ms: number) => (1000 / ms >= 10 ? Math.round(1000 / ms) : (1000 / ms).toFixed(1));
   // Extended keeps its own short pick, so switching pacing leaves the benchmark's selection alone.
   const selected = $derived(new Set(extended ? app.extPick : draft.resolvers));
   function toggle(id: string) {
@@ -127,7 +130,7 @@
   const chosenNames = $derived(chosen.map((r) => label(r.provider, r.variant)).join(' · '));
   const planLine = $derived(
     extended
-      ? 'Extended test · 5,000 lookups each'
+      ? `Extended test · ${extSamples.toLocaleString()} lookups each, ${PACES.find((p) => p.v === extPace)?.label.toLowerCase()}`
       : [
       draft.tests.map((k) => TEST_LABEL[k]).join(', ') || 'No tests',
       ...(draft.cdn ? ['CDN mapping'] : []),
@@ -150,8 +153,8 @@
   // One line per provider that publishes limits, among the resolvers picked.
   const limited = $derived([...new Map(chosen.filter((r) => r.limits).map((r) => [r.provider, r])).values()]);
   const estimate = $derived.by(() => {
-    // Extended sends 5,000 lookups to each resolver picked, over UDP on IPv4.
-    if (extended) return { targets: app.extPick.length, queries: 5000 * app.extPick.length, ms: runEstimateMs(app.extPick.length, app.extPick.length, { ...draft, samples: 5000 }) };
+    // Extended sends the lookups to each resolver picked, over UDP on IPv4.
+    if (extended) return { targets: app.extPick.length, queries: extSamples * app.extPick.length, ms: runEstimateMs(app.extPick.length, app.extPick.length, { ...draft, samples: extSamples, pace: extPace }) };
     let targets = 0;
     for (const r of chosen) {
       const fam = draft.family === 'both' ? 2 : 1;
@@ -266,8 +269,8 @@
             <span class="live-dot" aria-hidden="true"></span>Measuring… View run
           </button>
         {:else}
-          <button class="btn primary" disabled={!canStart} title={blocker ?? `Start (${shortcut('cmd+Enter')})`} onclick={() => app.startRun()}>
-            <Icon name="play" size={12} />Start
+          <button class="btn primary" disabled={!canStart || app.starting} title={blocker ?? `Start (${shortcut('cmd+Enter')})`} onclick={() => app.startRun()}>
+            <Icon name="play" size={12} />{app.starting ? 'Starting…' : 'Start'}
           </button>
         {/if}
       {/if}
@@ -451,7 +454,7 @@
         {#if liveId}
           <button class="btn primary" onclick={openLive}><span class="live-dot" aria-hidden="true"></span>View run</button>
         {:else}
-          <button class="btn primary" disabled={!canStart} onclick={() => app.startRun()}><Icon name="play" size={14} />Start</button>
+          <button class="btn primary" disabled={!canStart || app.starting} onclick={() => app.startRun()}><Icon name="play" size={14} />{app.starting ? 'Starting…' : 'Start'}</button>
         {/if}
       </div>
     {/if}
@@ -480,9 +483,42 @@
               ? 'One query in flight per resolver, sends 4 ms apart, so queries never queue on your link.'
               : draft.mode === 'quick'
                 ? 'Up to 8 queries in flight to different resolvers. Faster, slightly noisier.'
-                : 'One name every 300 ms to each resolver, for about 25 minutes. A long side-by-side comparison of two to four resolvers.'}
+                : 'One name every 75, 300 or 600 ms to each resolver, for 6 to 100 minutes. A long side-by-side comparison of two to four resolvers.'}
           </p>
         </fieldset>
+
+        {#if extended}
+        <fieldset>
+          <legend>Length</legend>
+          <div class="seg wide" role="radiogroup">
+            {#each [5000, 10000] as n}
+              <label class="segbtn">
+                <input type="radio" name="ext-length" value={n} aria-label="{n.toLocaleString()} lookups" bind:group={draft.ext_samples} />
+                <span class="num">{n.toLocaleString()}</span>
+              </label>
+            {/each}
+          </div>
+          <p class="hint">Lookups to each resolver. More of them narrow the range on a gap.</p>
+        </fieldset>
+
+        <fieldset>
+          <legend>Pace</legend>
+          <div class="seg three" role="radiogroup">
+            {#each PACES as p}
+              <label class="segbtn">
+                <input type="radio" name="ext-pace" value={p.v} aria-label="{p.label} pace" bind:group={draft.pace} />
+                <span>{p.label}</span>
+              </label>
+            {/each}
+          </div>
+          <p class="hint">
+            <span class="num">{perSecond(gapOf(extPace))}</span> a second to each resolver, about
+            <span class="num">{minutesOf(extSamples, gapOf(extPace))}</span> minutes.{extPace === 'fast'
+              ? ' Stays under the 1,000 queries a minute a Pi-hole allows each client by default.'
+              : ''}
+          </p>
+        </fieldset>
+        {/if}
 
         {#if !extended}
         <fieldset>
@@ -543,11 +579,11 @@
             <legend>What it sends</legend>
             <dl class="facts">
               <dt>Lookups</dt>
-              <dd><span class="num">5,000</span> to each resolver</dd>
+              <dd><span class="num">{extSamples.toLocaleString()}</span> to each resolver, one every <span class="num">{gapOf(extPace)} ms</span></dd>
               <dt>Transport</dt>
               <dd>UDP over IPv4</dd>
               <dt>Names</dt>
-              <dd><span class="num">500</span> common, asked 8 times each, and <span class="num">1,000</span> less common</dd>
+              <dd>Four in five common names asked again and again, one in five less common sites asked once</dd>
             </dl>
             <p class="hint">
               Both name lists ship with Recursa. They were screened through a family filter when they were built, and adult top-level

@@ -8,6 +8,7 @@
   import { CALL_LABEL, GAP_LABEL, GROUP_LABEL, REGION_LABEL, asksOf, chartOf, chartsOf, gapSeconds, groupsOf, minutesLeft, plannedSlots, rangeOf, sentOf, slowsOf, verdictOf } from '../lib/extended';
   import { isMac } from '../lib/keys';
   import { mobile } from '../lib/api';
+  import { lift, rise, unfold } from '../lib/motion';
   import OverTime from './OverTime.svelte';
   import ExtEcdf from './ExtEcdf.svelte';
   import ResolverMark from './ResolverMark.svelte';
@@ -30,18 +31,26 @@
   const sent = $derived(ext ? sentOf(ext, live) : 0);
   const pct = $derived(ext && ext.total ? Math.round((sent / ext.total) * 100) : 0);
   const left = $derived(ext ? minutesLeft(ext, live) : 0);
-  // While it runs, both charts are drawn to the whole planned span, so the warm-up stays a sliver at the start.
+  // While it runs, the charts are drawn to the whole planned span, so the warm-up stays a sliver at the start.
   const perCold = $derived(ext?.cold_bin_s ? ext.cold_bin_s / ext.bin_s : 1);
   const coldSlots = $derived(ext && live ? Math.ceil(plannedSlots(ext) / perCold) : undefined);
 
   // Runs from before the split charts have the one chart of every lookup.
   const charts = $derived(ext ? chartsOf(ext, names) : null);
   const split = $derived(!!charts);
+  // A run from before first asks were kept apart draws every lookup of the warm-up there.
+  const mixedWarm = $derived(!!ext?.bins.length && !ext.bins.some((b) => b.first));
   const chart = $derived(ext && !charts ? chartOf(ext, names) : null);
   const hasRepeat = $derived(!!charts?.repeat.series.some((s) => s.cells.some((c) => c)));
+  const hasAll = $derived(!!charts?.all?.series.some((s) => s.cells.some((c) => c)));
   const hasCold = $derived(!!charts?.cold.series.some((s) => s.cells.some((c) => c)));
+  // Whether this view watched the caches fill, so the first repeat chart takes the vessel's liquid as it arrives.
+  let sawVessel = $state(false);
+  $effect.pre(() => {
+    if (running && charts && !hasRepeat) sawVessel = true;
+  });
   // The caches fill over the first eighth of the run: how far, and the minutes to go at the run's own pace.
-  const fillN = $derived(ext ? ext.total / 8 : 1);
+  const fillN = $derived(ext ? ext.total / (asksOf(ext.names, ext.total) || 8) : 1);
   const fill = $derived(Math.min(1, sent / fillN));
   const fillLeft = $derived(ext ? Math.max(1, Math.ceil(((fillN - fill * fillN) * ext.bin_s) / ext.per_bin / 60)) : 1);
   // The liquid's surface: four swells over twice the vessel's width, so sliding it by half loops without a seam.
@@ -71,7 +80,7 @@
     }),
   );
   const shownGaps = $derived(charts?.repeat.gaps ?? chart?.gaps ?? []);
-  // Stretches where the resolvers slowed together: marked on both charts, and still counted. While the run sends, its
+  // Stretches where the resolvers slowed together: marked on every chart, and still counted. While the run sends, its
   // last bin is still filling and too thin to call slow.
   const slows = $derived(
     ext && split
@@ -114,10 +123,11 @@
 
   let cursor = $state<number | null>(null);
   let cursorCold = $state<number | null>(null);
+  let cursorAll = $state<number | null>(null);
   let binsOpen = $state(false);
 
   const gap = (v: { diff: number; lo: number; hi: number } | null) => (v ? `${v.diff > 0 ? '+' : ''}${f1(v.diff)}` : '');
-  const mins = (s: number) => (s >= 90 ? `${Math.round(s / 60)} minutes` : `${s} seconds`);
+  const mins = (s: number) => (s >= 90 ? `${Math.round(s / 60)} minutes` : `${Math.round(s)} seconds`);
   // Beaten resolvers, as the verdict's second line names them.
   const beaten = $derived(rows.filter((r) => r.call === 'slower' && r.vs));
   // Left-out bins come in stretches: the chart has already merged neighbours.
@@ -136,22 +146,24 @@
 {#snippet key()}
   <p class="chartkey" aria-hidden="true">
     <span><i class="sw-med"></i>Median</span>
-    <span><i class="sw-band"></i>Middle half, nine in ten</span>
+    <span><i class="sw-band"></i>Shaded: variation, darker holds half the lookups and lighter nine in ten</span>
     <span><i class="sw-loss"><b class="w"></b><b class="s"></b><b class="c"></b></i>Lost queries in a bin: a few, 1 in 10 or more, 1 in 4 or more</span>
-    {#if shownGaps.some((g) => g.kind !== 'warmup')}<span><i class="sw-gap"></i>In no figure: left out, asleep or stalled</span>{/if}
-    {#if split}<span><i class="sw-warm"></i>Cache filling: the first ask of each common name, not ranked</span>{/if}
-    {#each slowFamilies as f}<span><i class="sw-slow"><b class={f}></b></i>Slow together, still counted: {SLOW_KEY[f]}</span>{/each}
+    {#if shownGaps.some((g) => g.kind !== 'warmup')}<span in:rise={{ on: running }}><i class="sw-gap"></i>In no figure: left out, asleep or stalled</span>{/if}
+    {#if split}<span><i class="sw-warm"></i>Cache filling: {mixedWarm ? 'every lookup made then; the first ask of each common name is not ranked' : 'the first ask of each common name, not ranked'}</span>{/if}
+    {#each slowFamilies as f}<span in:rise={{ on: running }}><i class="sw-slow"><b class={f}></b></i>Slow together, still counted: {SLOW_KEY[f]}</span>{/each}
   </p>
 {/snippet}
 
 {#snippet chartBody(ext: ExtendedState)}
   {#if charts}
+    {#if hasRepeat || hasCold}<div class="unfold" in:unfold={{ on: running }}><div>{@render key()}</div></div>{/if}
     <h3 class="sh">Repeat lookups</h3>
     <p class="how note">common names after their first ask · {ext.bin_s}-second bins</p>
+    <div class="stage">
     {#if hasRepeat}
-      <OverTime series={charts.repeat.series} gaps={charts.repeat.gaps} {slows} slots={coldSlots != null ? coldSlots * perCold : undefined} bind:cursor formatTime={clock} unit="{ext.bin_s}-second bin" totals={repeatTotals} totalsLabel={spanLabel} />
+      <OverTime series={charts.repeat.series} gaps={charts.repeat.gaps} {slows} slots={coldSlots != null ? coldSlots * perCold : undefined} bind:cursor formatTime={clock} unit="{ext.bin_s}-second bin" totals={repeatTotals} totalsLabel={spanLabel} pour={sawVessel && running ? fill : undefined} />
     {:else}
-      <div class="vessel" role="progressbar" aria-label="Caches filling" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(fill * 100)}>
+      <div class="vessel" out:lift={{ on: running }} role="progressbar" aria-label="Caches filling" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(fill * 100)}>
         <div class="liquid" style:transform="translateY({(1 - fill) * 100}%)">
           <div class="bubbles" class:moving={running} style:height="max(0px, calc({fill * 100}% - 10px))" aria-hidden="true">
             {#each bubbles as b, i}
@@ -174,14 +186,24 @@
         </div>
       </div>
     {/if}
+    </div>
     {#if hasCold}
-      <h3 class="sh">Cold lookups</h3>
-      <p class="how note">names asked once · {ext.cold_bin_s}-second bins, wider because there are fewer of them</p>
-      <OverTime series={charts.cold.series} gaps={charts.cold.gaps} {slows} slots={coldSlots} bind:cursor={cursorCold} formatTime={clock} unit="{ext.cold_bin_s}-second bin" totals={coldTotals} totalsLabel={spanLabel} />
+      <div class="unfold" in:unfold={{ on: running }}><div>
+        <h3 class="sh">Cold lookups</h3>
+        <p class="how note">names asked once · {ext.cold_bin_s}-second bins, wider because there are fewer of them</p>
+        <OverTime series={charts.cold.series} gaps={charts.cold.gaps} {slows} slots={coldSlots} bind:cursor={cursorCold} formatTime={clock} unit="{ext.cold_bin_s}-second bin" totals={coldTotals} totalsLabel={spanLabel} />
+      </div></div>
     {/if}
-    {#if hasRepeat || hasCold}{@render key()}{/if}
+    {#if hasAll && charts.all}
+      <div class="unfold" in:unfold={{ on: running }}><div>
+        <h3 class="sh">All lookups</h3>
+        <p class="how note">repeat lookups and names asked once together, as the ranking counts them · {ext.bin_s}-second bins</p>
+        <OverTime series={charts.all.series} gaps={charts.all.gaps} {slows} slots={coldSlots != null ? coldSlots * perCold : undefined} bind:cursor={cursorAll} formatTime={clock} unit="{ext.bin_s}-second bin" totals={allTotals} totalsLabel={spanLabel} />
+      </div></div>
+    {/if}
   {:else if chart}
-    <OverTime series={chart.series} gaps={chart.gaps} bind:cursor formatTime={clock} unit="{ext.bin_s}-second bin" totals={allTotals} totalsLabel={spanLabel} />{@render key()}
+    {@render key()}
+    <OverTime series={chart.series} gaps={chart.gaps} bind:cursor formatTime={clock} unit="{ext.bin_s}-second bin" totals={allTotals} totalsLabel={spanLabel} />
   {/if}
 {/snippet}
 
@@ -239,7 +261,7 @@
     {/if}
 
     <div class="card">
-      <header><h2>The run so far</h2>{#if split}<span class="how">both charts share the time axis</span>{:else}<span class="how"><span class="num">{ext.bin_s}</span>-second bins, <span class="num">{ext.per_bin}</span> queries to each resolver in every bin</span>{/if}{@render legend()}</header>
+      <header><h2>The run so far</h2>{#if split}<span class="how">the charts share the time axis</span>{:else}<span class="how"><span class="num">{ext.bin_s}</span>-second bins, <span class="num">{ext.per_bin}</span> queries to each resolver in every bin</span>{/if}{@render legend()}</header>
       {@render chartBody(ext)}
     </div>
   </div>
@@ -272,7 +294,7 @@
                 Differences under {ms(res.margin)} count as a tie.
               </p>
             {:else}
-              <p>Cannot separate {names[lead.t]} and {names[next.t]}: the gap could be <span class="num">{rangeOf(next.vs)} ms</span>, and {ms(res.margin)} is the line. {ext.total < 5000 ? 'Run it longer.' : 'Run it again.'}</p>
+              <p>Cannot separate {names[lead.t]} and {names[next.t]}: the gap could be <span class="num">{rangeOf(next.vs)} ms</span>, and {ms(res.margin)} is the line. {ext.total < 10000 ? 'Run it longer.' : 'Run it again.'}</p>
             {/if}
             <p>
               {#if beaten.length}{verdict.kind === 'Lowest median' ? names[lead.t] + ' beat' : 'Both beat'} {#each beaten as r, i}{i ? ' and ' : ''}{names[r.t]}{#if isCurrent(r.t)}, your current resolver,{/if} by about <span class="num">{Math.round(r.vs?.diff ?? 0)} ms</span>{/each} a lookup.{' '}{/if}Measured from this network between <span class="num">{clock(0)}</span> and <span class="num">{clock(lastBin?.end ?? 0)}</span>{#if sleepS}, apart from the {mins(sleepS)} the {machine} was asleep{/if}{#if res.removed_s}{sleepS ? ' and' : ', apart from the'} {mins(res.removed_s)} when most queries were lost{/if}; another hour or network can order them differently.
@@ -367,7 +389,7 @@
     <div class="card">
       <header>
         <h2>Response time over the run</h2>
-        {#if split}<span class="how">log scale · both charts share the time axis</span>{:else}<span class="how"><span class="num">{ext.bin_s}</span>-second bins, <span class="num">{ext.per_bin}</span> queries to each resolver in every bin · log scale</span>{/if}
+        {#if split}<span class="how">log scale · the charts share the time axis</span>{:else}<span class="how"><span class="num">{ext.bin_s}</span>-second bins, <span class="num">{ext.per_bin}</span> queries to each resolver in every bin · log scale</span>{/if}
         {@render legend()}
       </header>
       {@render chartBody(ext)}
@@ -416,7 +438,7 @@
           <dd>The gap between two medians. Its range comes from the gap in ten equal stretches of the run and holds about <span class="num">19</span> times in <span class="num">20</span>. Gaps under <span class="num">{ms(res.margin)}</span> count as a tie</dd>
           <dt>Left out</dt>
           <dd>
-            {#if res.removed_s && removedFrom}<span class="num">{res.removed_s} s</span>{#if removedRuns > 1} in <span class="num">{removedRuns}</span> stretches, the first{/if} from <span class="num">{clock(removedFrom.at)}</span>, when every resolver lost half or more of its queries{:else}Nothing{/if}
+            {#if res.removed_s && removedFrom}<span class="num">{Math.round(res.removed_s)} s</span>{#if removedRuns > 1} in <span class="num">{removedRuns}</span> stretches, the first{/if} from <span class="num">{clock(removedFrom.at)}</span>, when every resolver lost half or more of its queries{:else}Nothing{/if}
           </dd>
           {#each ext.gaps as g}
             <dt>{GAP_LABEL[g[2]]}</dt><dd><span class="num">{clock(g[0])} to {clock(g[1])}</span>. Nothing was sent then</dd>
@@ -495,6 +517,16 @@
   }
   /* The caches filling before any repeat lookup: a vessel the height of the chart that replaces it, filled to the true
      share, with a few bubbles rising through it. The surface drifts and the bubbles rise only while the run sends. */
+  .stage {
+    position: relative;
+  }
+  /* A block opening in place mid-run (`unfold` in motion.ts). */
+  .unfold {
+    display: grid;
+  }
+  .unfold > div {
+    min-height: 0;
+  }
   .vessel {
     position: relative;
     height: 180px;
@@ -687,7 +719,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px 18px;
-    margin-top: 8px;
+    margin-bottom: 12px;
     font-size: var(--t-xs);
     color: var(--ink-2);
   }
@@ -744,7 +776,8 @@
     background:
       radial-gradient(circle at 3.5px 6px, transparent 0.9px, var(--ring) 1px 1.8px, transparent 1.9px),
       radial-gradient(circle at 10.5px 3.5px, transparent 0.7px, var(--ring) 0.8px 1.5px, transparent 1.6px),
-      radial-gradient(circle at 9px 7.5px, var(--s-cached) 1.3px, transparent 1.6px);
+      radial-gradient(circle at 9px 7.5px, var(--s-cached) 1.3px, transparent 1.6px),
+      color-mix(in oklch, var(--ink) 5%, var(--surface));
     outline: 1px solid var(--rule);
     outline-offset: -1px;
   }

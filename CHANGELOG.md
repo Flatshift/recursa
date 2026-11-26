@@ -2,6 +2,17 @@
 
 Notable changes to Recursa, newest first. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Extended test: choose 5,000 or 10,000 lookups and a Fast, Standard or Thorough pace (`--samples`, `--pace`).
+- Extended test: a third chart shows all counted lookups together.
+- Extended charts explain their shading, and "Medians together" shades every resolver's variation at once, blended, or only the line nearest the pointer (Variation: All · Nearest).
+- Extended test: charts and keys open smoothly as the run goes, and the filled cache pours into the repeat chart's warm-up when it starts, where its dots drift onto the lines while the run sends.
+- Extended test: the repeat chart now draws the first asks that fill the caches, in its Cache filling span.
+- Start and Run again show the turning mark at once, while the engine gets the run going.
+- Time, Over time: the clock chart has labelled axes, a new chart compares every server's offset, and each server gets a daily answered strip.
+- The sidebar shows the Time monitor beside Monitoring and Peering, and opens Time, Over time.
+
 ## 0.6.0 (2026-11-25)
 
 - Added the Extended test, sized to [Google Public DNS's benchmarking advice](https://developers.google.com/speed/public-dns/faq): 5,000 lookups per resolver, so packet loss and retransmits average out and each resolver's cache is thoroughly exercised. It compares two to four resolvers over about 25 minutes and gives a verdict, with charts of repeat and cold lookups over the run (`recursa run --extended`).

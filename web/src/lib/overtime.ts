@@ -143,6 +143,11 @@ export function linePath(xs: number[], ys: (number | null)[], hw = 0): string {
   return d;
 }
 
+/** What the medians-together chart must fit for one bin: the median and the band that holds half, falling back to the median. Never p5 or p95. */
+export function overlayValues(c: Pick<OverTimeCell, 'p25' | 'p50' | 'p75'>): (number | null)[] {
+  return [c.p25 ?? c.p50, c.p50, c.p75 ?? c.p50];
+}
+
 /** The filled band between `hi` and `lo` (pixel y per slot), one shape per unbroken run. */
 export function bandPath(xs: number[], hi: (number | null)[], lo: (number | null)[], hw: number): string {
   const f = (v: number) => v.toFixed(1);

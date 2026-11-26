@@ -1047,6 +1047,7 @@ impl AppState {
             "defaults": defaults,
             "monitor": *self.monitor.borrow(),
             "border_monitor": *self.border_monitor.borrow(),
+            "ntp_monitor": self.ntp_monitor.borrow().clone(),
             "active_run": *self.active_run.lock().unwrap(),
             "runs": self.store.list_runs(200),
             "method": {

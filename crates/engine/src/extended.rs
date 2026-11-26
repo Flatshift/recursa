@@ -1,8 +1,8 @@
-//! The Extended test: two to four resolvers asked the same names, one lookup every 300 ms, for about 25 minutes.
+//! The Extended test: two to four resolvers asked the same names, one lookup every 75, 300 or 600 ms, 5,000 or 10,000 times.
 //!
 //! Each slot asks one name of every resolver in a shuffled order, spread across the slot. A lost query never delays
-//! the next send: every resolver has eight connections and a scheduler thread hands each send to a free one. The
-//! results are read in bins of 50 slots (15 seconds); [`analyze`] turns the outcomes so far into the bins, the table,
+//! the next send: every resolver has enough connections to cover the timeout and a scheduler thread hands each send to a free one. The
+//! results are read in bins of 50 slots (50 gaps long); [`analyze`] turns the outcomes so far into the bins, the table,
 //! the curves and the call, and is a pure function of them.
 
 use crate::attribution::{GapWatch, Reading, Verdict};
@@ -19,17 +19,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-/// Slots in a bin, and the seconds a bin takes.
+/// Slots in a bin. A bin takes `PER_BIN` gaps: 3.75, 15 or 30 seconds.
 const PER_BIN: usize = 50;
-const BIN_S: u32 = 15;
 /// Slots between live chart updates, the last bin partly filled.
 const EMIT_EVERY: usize = 10;
 /// Bins in one cold bin.
 const COLD_BINS: usize = 5;
-/// One slot, in ms.
-const GAP_MS: u64 = 300;
-/// Connections per resolver.
-const WORKERS: usize = 8;
 /// A lost query ranks as this slow.
 const LOST_MS: f64 = 2000.0;
 /// The kept bins are cut into this many stretches to size the range of a gap.
@@ -92,6 +87,12 @@ pub struct Bin {
     /// By target index, the later asks of common names alone. Empty on a cold bin.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rep: Vec<BinCell>,
+    /// By target index, the counted lookups: repeat asks and names asked once, leaving out first asks. What the headline ranks. Empty on a cold bin.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub all: Vec<BinCell>,
+    /// By target index, the first asks of common names alone, which fill the caches. Empty on a cold bin.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub first: Vec<BinCell>,
 }
 
 /// The gap to the lead, with its range.
@@ -149,7 +150,7 @@ pub struct ExtResult {
     pub margin: f64,
     pub loss_flag: bool,
     /// Seconds of removed bins.
-    pub removed_s: u32,
+    pub removed_s: f64,
     pub dropped_names: u32,
     /// Best first.
     pub rows: Vec<Row>,
@@ -168,9 +169,9 @@ pub struct ExtendedState {
     /// Slots, which is lookups per resolver.
     pub total: u32,
     pub per_bin: u32,
-    pub bin_s: u32,
-    /// Seconds in a cold bin.
-    pub cold_bin_s: u32,
+    pub bin_s: f64,
+    /// Seconds in a cold bin. Fractions of a second at the Fast pace; runs before that stored whole seconds.
+    pub cold_bin_s: f64,
     pub gap_ms: u32,
     pub timeout_ms: u32,
     pub names: NamesUsed,
@@ -235,6 +236,8 @@ pub(crate) fn summary(s: &bench::RunState, e: &ExtendedState) -> serde_json::Val
 
 /// What [`analyze`] reads: the outcome of every slot for every target (none while not yet in), the plan and the order.
 pub(crate) struct Input<'a> {
+    /// Seconds in a bin.
+    pub bin_s: f64,
     /// By slot, then target index.
     pub grid: &'a [Vec<Option<Sample>>],
     pub plan: &'a Plan,
@@ -430,13 +433,18 @@ pub(crate) fn analyze(inp: &Input) -> Analysis {
         by[c.t][c.bin].push(c.ms);
     }
 
-    // The counted queries of the repeat asks (`touch >= 2`) and of all but the first asks, by target, then bin.
+    // The counted queries of the repeat asks (`touch >= 2`), of the first asks (`touch == 1`) and of all but the first
+    // asks, by target, then bin.
     let mut by_rep: Vec<Vec<Vec<Option<f64>>>> = vec![vec![Vec::new(); nbins]; n];
+    let mut by_first: Vec<Vec<Vec<Option<f64>>>> = vec![vec![Vec::new(); nbins]; n];
     let mut head: Vec<Vec<Vec<Option<f64>>>> = vec![vec![Vec::new(); nbins]; n];
     for c in &counted {
         let touch = inp.plan.touch[c.q];
         if touch >= 2 {
             by_rep[c.t][c.bin].push(c.ms);
+        }
+        if touch == 1 {
+            by_first[c.t][c.bin].push(c.ms);
         }
         if touch != 1 {
             head[c.t][c.bin].push(c.ms);
@@ -468,7 +476,9 @@ pub(crate) fn analyze(inp: &Input) -> Analysis {
             let (lo, hi) = at.fold((i64::MAX, 0), |(lo, hi), a| (lo.min(a), hi.max(a)));
             let r = (0..n).map(|t| bin_cell(&by[t][b])).collect();
             let rep = (0..n).map(|t| bin_cell(&by_rep[t][b])).collect();
-            Bin { at: lo.min(hi), end: hi, removed: removed[b], r, rep }
+            let all = (0..n).map(|t| bin_cell(&head[t][b])).collect();
+            let first = (0..n).map(|t| bin_cell(&by_first[t][b])).collect();
+            Bin { at: lo.min(hi), end: hi, removed: removed[b], r, rep, all, first }
         })
         .collect();
     // One cold bin for each run of `COLD_BINS` fine bins, from the once-asked lookups in those that are kept.
@@ -477,7 +487,15 @@ pub(crate) fn analyze(inp: &Input) -> Analysis {
             let members = g * COLD_BINS..((g + 1) * COLD_BINS).min(nbins);
             let kept_in: Vec<usize> = members.clone().filter(|&b| !removed[b]).collect();
             let r = (0..n).map(|t| bin_cell(&kept_in.iter().flat_map(|&b| cold_by[t][b].iter().copied()).collect::<Vec<_>>())).collect();
-            Bin { at: bins[members.start].at, end: bins[members.end - 1].end, removed: kept_in.is_empty(), r, rep: Vec::new() }
+            Bin {
+                at: bins[members.start].at,
+                end: bins[members.end - 1].end,
+                removed: kept_in.is_empty(),
+                r,
+                rep: Vec::new(),
+                all: Vec::new(),
+                first: Vec::new(),
+            }
         })
         .collect();
 
@@ -543,7 +561,7 @@ pub(crate) fn analyze(inp: &Input) -> Analysis {
         no_verdict,
         margin,
         loss_flag,
-        removed_s: removed_n as u32 * BIN_S,
+        removed_s: removed_n as f64 * inp.bin_s,
         dropped_names,
         rows,
         cold,
@@ -682,7 +700,7 @@ fn schedule(d: &Drive, jobs: Vec<Option<mpsc::Sender<Job>>>, mut pace: impl FnMu
                     Some(left) => std::thread::sleep(left.min(Duration::from_millis(50))),
                     None => {
                         // Held up for a moment too short to be a gap: carry on from here, with no burst to catch up.
-                        if now.saturating_sub(base + due) > Duration::from_secs(1) {
+                        if now.saturating_sub(base + due) > (d.slot * 4).min(Duration::from_secs(1)) {
                             base = now.saturating_sub(due);
                         }
                         break;
@@ -736,6 +754,7 @@ pub(crate) fn check(cfg: &RunConfig, all: &[Resolver]) -> Result<(), String> {
 /// Collects what the schedule reports: samples to the UI, a bin at a time to the analysis.
 struct Collector<'a> {
     h: &'a RunHandle,
+    bin_s: f64,
     plan: &'a Plan,
     order: &'a [Vec<u8>],
     live: &'a [bool],
@@ -826,6 +845,7 @@ impl Collector<'_> {
     fn emit(&mut self, upto: usize) -> Analysis {
         self.flush();
         let a = analyze(&Input {
+            bin_s: self.bin_s,
             grid: &self.grid[..upto.min(self.total)],
             plan: self.plan,
             order: self.order,
@@ -848,6 +868,8 @@ impl Collector<'_> {
 
 pub(crate) fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &Deps) {
     let timeout = Duration::from_millis(QUERY_TIMEOUT_MS);
+    let (gap_ms, workers) = (cfg.pace.gap_ms(), cfg.pace.workers());
+    let bin_s = PER_BIN as f64 * gap_ms as f64 / 1000.0;
 
     // ---- Setup: the targets, then the names.
     h.phase("setup", 0);
@@ -886,7 +908,11 @@ pub(crate) fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &
             .map(|(x, (_, ep))| {
                 sc.spawn(move || {
                     let mut v: Vec<Box<dyn Exchanger>> = x.into_iter().collect();
-                    while let Some(ep) = ep.as_ref().filter(|_| !v.is_empty() && v.len() < WORKERS) {
+                    // A resolver holds state for every TCP or TLS connection, so those keep to the slower paces' count.
+                    let cap = |ep: &net::Endpoint| {
+                        if matches!(ep.transport, Transport::Udp) { workers } else { workers.min(bench::Pacing::Standard.workers()) }
+                    };
+                    while let Some(ep) = ep.as_ref().filter(|ep| !v.is_empty() && v.len() < cap(ep)) {
                         match net::open(ep, timeout) {
                             Ok(x) => v.push(x),
                             Err(_) => break,
@@ -953,9 +979,9 @@ pub(crate) fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &
         s.extended = Some(ExtendedState {
             total: total as u32,
             per_bin: PER_BIN as u32,
-            bin_s: BIN_S,
-            cold_bin_s: BIN_S * COLD_BINS as u32,
-            gap_ms: GAP_MS as u32,
+            bin_s,
+            cold_bin_s: bin_s * COLD_BINS as f64,
+            gap_ms: gap_ms as u32,
             timeout_ms: QUERY_TIMEOUT_MS as u32,
             names: NamesUsed {
                 source: source.kind,
@@ -979,6 +1005,7 @@ pub(crate) fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &
     h.phase("extended", (live_n * total) as u32);
     let mut collector = Collector {
         h,
+        bin_s,
         plan: &names,
         order: &order,
         live: &live,
@@ -994,7 +1021,7 @@ pub(crate) fn run(h: &RunHandle, cfg: &RunConfig, selected: &[Resolver], deps: &
         emitted: 0,
     };
     let keep_awake = power::KeepAwake::hold();
-    let d = Drive { slot: Duration::from_millis(GAP_MS), timeout, plan: &names, order: &order, cancel: &h.cancel, origin_ns };
+    let d = Drive { slot: Duration::from_millis(gap_ms), timeout, plan: &names, order: &order, cancel: &h.cancel, origin_ns };
     drive(&d, conns, watch(), &mut |ev| collector.on(ev));
     drop(keep_awake);
 
@@ -1068,7 +1095,7 @@ mod tests {
     }
 
     fn run_on(g: &[Vec<Option<Sample>>], total: usize, order: &[Vec<u8>]) -> Analysis {
-        analyze(&Input { grid: g, plan: &plan(total), order, live: &[true, true], total })
+        analyze(&Input { bin_s: 15.0, grid: g, plan: &plan(total), order, live: &[true, true], total })
     }
 
     fn ordered(n: usize) -> Vec<Vec<u8>> {
@@ -1085,7 +1112,7 @@ mod tests {
             names: (0..total).map(|q| format!("q{q}.example.com")).collect(),
             touch: (0..total).map(|q| if q % 5 == 0 { 0 } else { 1 + (q % 8) as u8 }).collect(),
         };
-        analyze(&Input { grid: &grid(slots, f), plan: &plan, order: &ordered(total), live: &[true, true], total })
+        analyze(&Input { bin_s: 15.0, grid: &grid(slots, f), plan: &plan, order: &ordered(total), live: &[true, true], total })
     }
 
     /// A is quicker on common names and slower on tail names; common names are most of the run.
@@ -1147,7 +1174,7 @@ mod tests {
                 })
                 .collect(),
         };
-        let a = analyze(&Input { grid: &grid(total, f), plan: &plan, order: &ordered(total), live: &[true, true], total });
+        let a = analyze(&Input { bin_s: 15.0, grid: &grid(total, f), plan: &plan, order: &ordered(total), live: &[true, true], total });
         (a, plan)
     }
 
@@ -1181,7 +1208,23 @@ mod tests {
             let later = (b * PER_BIN..(b + 1) * PER_BIN).filter(|&q| plan.touch[q] >= 2).count() as u32;
             assert_eq!(a.bins[b].rep[1].sent, later);
             assert_eq!(a.bins[b].r[1].sent, 50);
+            let counted = (b * PER_BIN..(b + 1) * PER_BIN).filter(|&q| plan.touch[q] != 1).count() as u32;
+            assert_eq!(a.bins[b].all[1].sent, counted);
         }
+        let firsts = plan.touch.iter().take(a.bins.len() * PER_BIN).filter(|&&k| k == 1).count() as u32;
+        assert!(firsts > 0);
+        assert_eq!(a.bins.iter().map(|b| b.all[1].sent).sum::<u32>() + firsts, a.bins.iter().map(|b| b.r[1].sent).sum::<u32>());
+    }
+
+    #[test]
+    fn first_cells_hold_the_first_asks_alone() {
+        let (a, plan) = phased(1000, |q, _| (Outcome::Ok, 20.0 + noise(q)));
+        for b in [0, 4, 10] {
+            let firsts = (b * PER_BIN..(b + 1) * PER_BIN).filter(|&q| plan.touch[q] == 1).count() as u32;
+            assert_eq!(a.bins[b].first[1].sent, firsts);
+            assert_eq!(a.bins[b].first[1].sent + a.bins[b].all[1].sent, a.bins[b].r[1].sent);
+        }
+        assert!(a.bins[0].first[0].sent > 0);
     }
 
     #[test]
@@ -1192,7 +1235,7 @@ mod tests {
             let row = a.result.cold.iter().find(|r| r.t == t).unwrap();
             assert_eq!(a.cold_bins.iter().map(|b| b.r[t].sent).sum::<u32>(), row.sent);
         }
-        assert!(a.cold_bins.iter().all(|b| b.rep.is_empty() && !b.removed));
+        assert!(a.cold_bins.iter().all(|b| b.rep.is_empty() && b.all.is_empty() && b.first.is_empty() && !b.removed));
         assert_eq!((a.cold_bins[1].at, a.cold_bins[1].end), (a.bins[5].at, a.bins[9].end));
     }
 
@@ -1286,7 +1329,7 @@ mod tests {
         let a = simple(1000, |q, _| if (150..200).contains(&q) { (Outcome::Timeout, 0.0) } else { (Outcome::Ok, 20.0) });
         assert!(a.bins[3].removed);
         assert!(!a.result.no_verdict);
-        assert_eq!(a.result.removed_s, BIN_S);
+        assert_eq!(a.result.removed_s, 15.0);
         assert_eq!(a.result.rows[0].sent, 950);
         assert_eq!(a.result.rows[0].lost, 0);
     }
@@ -1390,8 +1433,8 @@ mod tests {
         let e = ExtendedState {
             total: 50,
             per_bin: 50,
-            bin_s: 15,
-            cold_bin_s: 75,
+            bin_s: 15.0,
+            cold_bin_s: 75.0,
             gap_ms: 300,
             timeout_ms: 2000,
             names: NamesUsed {
@@ -1430,8 +1473,9 @@ mod tests {
             assert!(v.get(k).is_some(), "{k}");
         }
         assert!(v["bins"][0]["rep"].is_array());
-        assert_eq!(v["cold_bin_s"], 75);
+        assert_eq!(v["cold_bin_s"], 75.0);
         assert!(v["cold_bins"][0].get("rep").is_none());
+        assert!(v["cold_bins"][0].get("all").is_none());
         assert_eq!(v["cold_bins"][0]["r"][0]["sent"], 50);
         for k in ["final", "no_verdict", "margin", "loss_flag", "removed_s", "dropped_names", "rows", "ecdf", "groups"] {
             assert!(v["result"].get(k).is_some(), "{k}");
@@ -1472,7 +1516,7 @@ mod tests {
         let log = Arc::new(Mutex::new(Vec::new()));
         let conns: Vec<Vec<Box<dyn Exchanger>>> = (0..2)
             .map(|t| {
-                (0..WORKERS)
+                (0..8)
                     .map(|_| {
                         Box::new(Fake { t, lag: (t == 1).then(|| Duration::from_millis(200)), log: log.clone() }) as Box<dyn Exchanger>
                     })

@@ -323,7 +323,7 @@
                 <p>
                   Each column is {mon.data.history.cell === 3_600_000 ? 'an hour' : `${mon.data.history.cell / 3_600_000} hours`}. The top chart
                   draws every resolver's median on one log scale, each in its own colour. Show each resolver opens a panel per resolver
-                  with its median, the middle half of its answers (darker band) and nine in ten (lighter band); the bars beneath are the
+                  with its median and its variation: the darker band holds half its answers and the lighter nine in ten; the bars beneath are the
                   share left unanswered.
                 </p>
                 {#if app.env?.interception?.verdict === 'intercepted'}<p>While port 53 is intercepted on this network, resolvers that offer DoT or DoH are monitored over encrypted DNS instead, which has one endpoint.</p>{/if}
@@ -336,7 +336,7 @@
           {/if}
           <p class="legend" aria-hidden="true">
             <span><i class="sw-med"></i>Median</span>
-            <span><i class="sw-band"></i>Middle half, nine in ten</span>
+            <span><i class="sw-band"></i>Variation: half, nine in ten</span>
             <span><i class="sw-loss"><b class="w"></b><b class="s"></b><b class="c"></b></i>Unanswered: some, most, all</span>
             <span><i class="sw-out"></i>Down</span>
             <span><i class="sw-gap"></i>No checks, asleep or stalled</span>

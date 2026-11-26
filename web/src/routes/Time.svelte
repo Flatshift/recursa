@@ -39,6 +39,16 @@
   let customHosts = $state<string[]>([]);
   let customText = $state('');
   let view = $state<'accuracy' | 'features' | 'monitor'>('accuracy');
+  // "Over time" has its own address, so the sidebar's Time monitor button can open it.
+  const routed = $derived(app.route.name === 'time' && app.route.view === 'monitor');
+  $effect(() => {
+    if (routed) view = 'monitor';
+    else if (view === 'monitor') view = 'accuracy';
+  });
+  function show(v: typeof view) {
+    view = v;
+    app.navigate(v === 'monitor' ? '/time/monitor' : '/time', true);
+  }
   let sort = $state<{ key: string; dir: 1 | -1 }>({ key: 'fit', dir: 1 });
   let loaded = $state(false);
   let starting = $state(false);
@@ -420,9 +430,9 @@
   <Toolbar title="Time" subtitle="How accurate and how fast public NTP servers are from this network">
     {#snippet center()}
       <div class="segmented" role="tablist" aria-label="View">
-        <button role="tab" aria-selected={view === 'accuracy'} onclick={() => (view = 'accuracy')}>{mobile ? 'Accuracy' : 'Accuracy & latency'}</button>
-        <button role="tab" aria-selected={view === 'features'} onclick={() => (view = 'features')}>Features</button>
-        <button role="tab" aria-selected={view === 'monitor'} onclick={() => (view = 'monitor')}>Over time</button>
+        <button role="tab" aria-selected={view === 'accuracy'} onclick={() => show('accuracy')}>{mobile ? 'Accuracy' : 'Accuracy & latency'}</button>
+        <button role="tab" aria-selected={view === 'features'} onclick={() => show('features')}>Features</button>
+        <button role="tab" aria-selected={view === 'monitor'} onclick={() => show('monitor')}>Over time</button>
       </div>
     {/snippet}
     {#snippet actions()}
@@ -702,7 +712,7 @@
               {:else}
                 {Math.abs(c.median_ms).toFixed(1)} ms {c.median_ms > 0 ? 'behind' : 'ahead of'} the servers' median (± {num(c.bound_ms)} ms).
               {/if}
-              {c.voters} servers close enough to judge{#if c.independent < c.voters}{' '}({c.independent} independent: those of one operator or one upstream count once){/if} agree within {c.spread_ms.toFixed(2)} ms across their middle half,
+              Of the {c.voters} servers close enough to judge{#if c.independent < c.voters}{' '}({c.independent} independent: those of one operator or one upstream count once){/if}, half agree within {c.spread_ms.toFixed(2)} ms,
               but they are all reached over your connection and share its error, so that agreement can't shrink the ±. No server is the truth.
               {verdict}
             </p>

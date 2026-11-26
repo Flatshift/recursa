@@ -12,7 +12,7 @@ type Route =
   | { name: 'run'; id: string }
   | { name: 'resolvers' }
   | { name: 'reliability' }
-  | { name: 'time' }
+  | { name: 'time'; view: 'main' | 'monitor' }
   | { name: 'network'; view: 'map' | 'monitor' }
   | { name: 'method' }
   | { name: 'settings' };
@@ -36,7 +36,7 @@ function parse(path: string): Route {
   if (m) return { name: 'run', id: m[1] };
   if (path.startsWith('/resolvers')) return { name: 'resolvers' };
   if (path.startsWith('/reliability')) return { name: 'reliability' };
-  if (path.startsWith('/time')) return { name: 'time' };
+  if (path.startsWith('/time')) return { name: 'time', view: path.startsWith('/time/monitor') ? 'monitor' : 'main' };
   if (path.startsWith('/network')) return { name: 'network', view: path.startsWith('/network/monitor') ? 'monitor' : 'map' };
   if (path.startsWith('/method')) return { name: 'method' };
   if (path.startsWith('/settings')) return { name: 'settings' };
@@ -116,6 +116,8 @@ class AppState {
   /** The resolvers picked for the Extended test, in slot order. */
   extPick = $state<string[]>([]);
   toast = $state<{ text: string; tone: 'info' | 'error' } | null>(null);
+  /** A run has been asked for and the engine has not answered yet: it may be waiting out a monitoring cycle. */
+  starting = $state(false);
   /** Bumped when monitoring changes outside the UI (the desktop menu-bar item). */
   monitorRev = $state(0);
 
@@ -276,6 +278,10 @@ class AppState {
             resolvers: [...new Set(saved.resolvers.map((id) => folded.get(id) ?? id))].filter((id) => ids.has(id)),
           }
         : $state.snapshot(this.boot.defaults);
+      this.draft.ext_samples = this.draft.ext_samples === 10000 ? 10000 : 5000;
+      // A draft saved before the pace was renamed holds 'quick'.
+      if ((this.draft.pace as string | undefined) === 'quick') this.draft.pace = 'fast';
+      this.draft.pace ??= 'standard';
       // A draft saved with a mode this version doesn't know opens as Accurate.
       if (!['accurate', 'quick', 'extended'].includes(this.draft.mode)) this.draft.mode = 'accurate';
       this.#onRoute();
@@ -383,7 +389,7 @@ class AppState {
   }
 
   async startRun() {
-    if (!this.draft || (this.draft.mode === 'extended' && this.extPick.length < MIN_PICK)) return;
+    if (this.starting || !this.draft || (this.draft.mode === 'extended' && this.extPick.length < MIN_PICK)) return;
     // An Extended run never does the live threat test, whatever the saved setup says.
     if (this.draft.live && this.draft.mode !== 'extended') {
       const n = this.draft.resolvers.length;
@@ -392,25 +398,23 @@ class AppState {
       if (!(await confirmAction(msg, 'Start run'))) return;
     }
     this.saveDraft();
-    try {
-      // Extended compares two to four resolvers, over UDP on IPv4, and runs none of the other checks.
-      const body: RunConfig = this.draft.mode === 'extended' ? { ...this.draft, resolvers: this.extPick, samples: 5000, transports: ['udp'], family: 'v4', tests: [], probes: false, cdn: false, live: false } : this.draft;
-      const { id } = await api.post<{ id: string }>('/api/runs', body);
-      this.run = null;
-      this.navigate(`/run/${id}`);
-    } catch (e) {
-      this.notify((e as Error).message, 'error');
-    }
+    // Extended compares two to four resolvers, over UDP on IPv4, and runs none of the other checks.
+    const { ext_samples, ...sent } = this.draft;
+    await this.rerun(this.draft.mode === 'extended' ? { ...sent, resolvers: this.extPick, samples: ext_samples === 10000 ? 10000 : 5000, transports: ['udp'], family: 'v4', tests: [], probes: false, cdn: false, live: false } : sent);
   }
 
   /** Start a stored run's own configuration again, leaving the saved setup as it is. */
   async rerun(config: RunConfig) {
+    if (this.starting) return;
+    this.starting = true;
     try {
       const { id } = await api.post<{ id: string }>('/api/runs', config);
       this.run = null;
       this.navigate(`/run/${id}`);
     } catch (e) {
       this.notify((e as Error).message, 'error');
+    } finally {
+      this.starting = false;
     }
   }
 

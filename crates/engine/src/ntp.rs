@@ -1103,7 +1103,7 @@ fn independence_groups(items: &[(&str, Option<&str>)]) -> Vec<usize> {
 }
 
 /// The consensus of the servers measured: the median offset of the truechimers among those good enough to vote,
-/// and how far the middle half of them spread. A server votes if it is synchronized (stratum 1 to 3), answered most
+/// and their variation (the range that holds half of them). A server votes if it is synchronized (stratum 1 to 3), answered most
 /// queries and its offset is pinned down to 50 ms; of those, [`select`] drops the falsetickers, whose error
 /// intervals miss the majority's. Fills in each server's deviation from the consensus of the *others*, so a
 /// server that sits at the median isn't credited with agreeing with itself, and whether it agrees: the two

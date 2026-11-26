@@ -5,8 +5,9 @@
   import { W, line, monitor } from '../lib/monitor.svelte';
   import type { NtpEntry, NtpMonitorConfig, NtpMonitorPoint, NtpMonitorResp, NtpMonitorServer } from '../lib/types';
   import { ago, ms, signedMs, when } from '../lib/format';
-  import { MAX_CUSTOM, MAX_SERVERS, idMap, nameOf } from '../lib/ntp';
+  import { MAX_CUSTOM, MAX_SERVERS, answeredCells, cut, idMap, nameOf, type TimeSeries } from '../lib/ntp';
   import Icon from './Icon.svelte';
+  import TimeChart from './TimeChart.svelte';
   import MonitorPanel from './MonitorPanel.svelte';
 
   let { catalog }: { catalog: NtpEntry[] } = $props();
@@ -18,6 +19,9 @@
     endpoint: '/api/ntp/monitor',
     query: () => `days=${days}`,
     saved: (c) => (c.enabled ? `Checking ${c.servers.length} time servers every ${c.interval_min} min while Recursa runs.` : 'Time monitoring paused.'),
+    onsaved: (c) => {
+      if (app.boot) app.boot = { ...app.boot, ntp_monitor: c };
+    },
     clearPrompt: 'Delete all time monitoring history? This can’t be undone.',
   });
 
@@ -81,18 +85,21 @@
 
   const h = $derived(mon.data?.history);
   const clock = $derived(h?.clock);
-  const clockChart = $derived.by(() => {
-    if (!h || !clock || clock.points.length < 2) return null;
-    const lo = Math.min(...clock.points.map((p) => p.median_ms));
-    const hi = Math.max(...clock.points.map((p) => p.median_ms));
-    const span = Math.max(1, h.until - h.since);
-    const y = (v: number) => (hi === lo ? 28 : 54 - ((v - lo) / (hi - lo)) * 52);
-    return {
-      d: clock.points.map((p, i) => `${i ? 'L' : 'M'}${(((p.ts - h.since) / span) * W).toFixed(1)} ${y(p.median_ms).toFixed(1)}`).join(''),
-      lo,
-      hi,
-    };
-  });
+  const windowDays = $derived(h ? Math.max(1, Math.round((h.until - h.since) / 86_400_000)) : days);
+  const clockSeries = $derived<TimeSeries[]>(clock ? [{ name: 'Median offset', color: 'var(--ink)', pts: clock.points.map((p) => ({ ts: p.ts, v: p.median_ms })) }] : []);
+  // Series colours are the app's six data hues; a seventh and eighth server repeat them dashed.
+  const serverSeries = $derived<TimeSeries[]>(
+    (h?.servers ?? []).map((s, i) => ({
+      name: nameOf(byId, s.id),
+      color: `var(--r-${(i % 6) + 1})`,
+      dash: i >= 6 ? '4 3' : undefined,
+      pts: s.points.map((p) => ({ ts: p.ts, v: p.offset_ms })),
+    })),
+  );
+  const stamp = (t: number, hourly: boolean) =>
+    new Date(t).toLocaleString(undefined, hourly ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' } : { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const cellTitle = (c: { start: number; sent: number; ok: number }, hourly: boolean) =>
+    `${stamp(c.start, hourly)}${hourly ? ' UTC' : ''}: ${c.sent ? `${cut((c.ok / c.sent) * 100, c.ok === c.sent ? 0 : 2)}% answered (${c.ok} of ${c.sent})` : 'no checks'}`;
 </script>
 
 <div class="content scroll wrap">
@@ -135,17 +142,13 @@
     {#if h && clock}
       <section class="panel clock">
         <h3>This computer’s clock</h3>
-        {#if clockChart}
-          <div class="cc">
-            <svg viewBox="0 0 {W} 56" preserveAspectRatio="none" role="img" aria-label="The median offset of the servers over the window, from {signedMs(clockChart.lo, true)} to {signedMs(clockChart.hi, true)}">
-              <path d={clockChart.d} fill="none" stroke="var(--ink)" stroke-width="1.5" vector-effect="non-scaling-stroke" />
-            </svg>
-            <span class="axis num"><span>{signedMs(clockChart.hi, true)}</span><span>{signedMs(clockChart.lo, true)}</span></span>
-          </div>
+        {#if clock.points.length >= 2}
+          <p class="fine cap">Offset of the servers’ median, in ms. Line is the median of the servers that could vote in each check.</p>
+          <TimeChart series={clockSeries} since={h.since} until={h.until} height={140} legend={false} label="The median offset of the servers over the window" />
         {/if}
         <dl class="kv">
           <div><dt>Typical offset</dt><dd class="num">{signedMs(clock.median_ms, true)}</dd></div>
-          <div><dt>Wanders by</dt><dd class="num" title="How far the middle half of the checks spread.">{ms(clock.spread_ms)}</dd></div>
+          <div><dt>Wanders by</dt><dd class="num" title="Its variation: the range that holds half the checks.">{ms(clock.spread_ms)}</dd></div>
           <div>
             <dt>Trend</dt>
             <dd class="num" title="Least-squares slope of the checks' medians; needs six hours and eight checks.">
@@ -160,9 +163,24 @@
         </p>
       </section>
 
+      {#if serverSeries.some((s) => s.pts.length)}
+        <section class="panel clock">
+          <h3>Servers compared</h3>
+          <p class="fine cap">Each server’s offset on one scale. Above zero, the server’s clock is ahead of this computer’s; below, behind.</p>
+          <TimeChart series={serverSeries} since={h.since} until={h.until} height={200} label="Offset of each watched server over the window, in milliseconds" />
+        </section>
+      {/if}
+
       <div class="hist panel">
+        <p class="fine cell-key" aria-hidden="true">
+          Answered, one cell per {windowDays <= 1 ? 'hour' : 'day'} (UTC):
+          <span class="lg"><i class="cell good"></i>99.9% or more</span>
+          <span class="lg"><i class="cell fair"></i>99% or more</span>
+          <span class="lg"><i class="cell poor"></i>under 99%</span>
+          <span class="lg"><i class="cell none"></i>no checks</span>
+        </p>
         <div class="hrow hhead" aria-hidden="true">
-          <span>Server</span><span title="Share of checks answered">Answered</span><span title="Median offset, and how far the middle half spread">Offset</span><span title="Median round trip, and the 95th percentile">Delay</span>
+          <span>Server</span><span title="Share of checks answered">Answered</span><span title="Median offset, and its variation: the range that holds half the checks">Offset</span><span title="Median round trip, and the 95th percentile">Delay</span>
           <span class="charts">Offset · delay, oldest left</span>
         </div>
         {#each h.servers as s (s.id)}
@@ -172,7 +190,7 @@
               {nameOf(byId, s.id)}
               {#if s.stats.falseticks}<span class="tag" title="Checks in which its interval fell outside the majority's.">off {s.stats.falseticks} of {s.stats.voted}</span>{/if}
             </span>
-            <span class="num {upClass(s.stats.up_pct)}">{s.stats.up_pct.toFixed(s.stats.up_pct === 100 ? 0 : 1)}%</span>
+            <span class="num {upClass(s.stats.up_pct)}">{cut(s.stats.up_pct, s.stats.up_pct === 100 ? 0 : 1)}%</span>
             <span class="num">{signedMs(s.stats.offset_median_ms, true)}{#if s.stats.offset_spread_ms != null}<small>±{ms(s.stats.offset_spread_ms / 2, false)}</small>{/if}</span>
             <span class="num">{ms(s.stats.delay_median_ms, false)}{#if s.stats.delay_p95_ms != null}<small>/ {ms(s.stats.delay_p95_ms, false)}</small>{/if}</span>
             <span class="charts">
@@ -185,6 +203,11 @@
                 <path d={c.delLine} fill="none" stroke="var(--ink-2)" stroke-width="1.25" vector-effect="non-scaling-stroke" />
               </svg>
             </span>
+          </div>
+          <div class="strip" role="img" aria-label="{nameOf(byId, s.id)} answered share, one cell per {windowDays <= 1 ? 'hour' : 'day'}, oldest left">
+            {#each answeredCells(s.points, h.until, windowDays) as c (c.start)}
+              <i class="cell {c.state}" title={cellTitle(c, windowDays <= 1)}></i>
+            {/each}
           </div>
           {#if s.stats.last_ok === false}
             <p class="note"><Icon name="warn" size={12} /> Last check {when(s.stats.last_ts)}: {why(s.stats.last_kind)}.{s.stats.flaps > 1 ? ` It has gone quiet or come back ${s.stats.flaps} times in this window.` : ''}</p>
@@ -270,25 +293,50 @@
     margin: 0 0 8px;
     font-size: var(--t-md);
   }
-  .cc {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 72px;
-    gap: 10px;
-    height: 56px;
+  .cap {
+    margin: 0 0 8px;
   }
-  .cc svg {
-    width: 100%;
-    height: 56px;
-    display: block;
-    border-bottom: 1px solid var(--rule);
-  }
-  .axis {
+  .cell-key {
     display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    font-size: var(--t-xs);
-    color: var(--ink-3);
-    text-align: right;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 14px;
+    margin: 4px 0 6px;
+  }
+  .lg {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .cell {
+    display: block;
+    width: 100%;
+    height: 12px;
+    border-radius: 2px;
+    background: var(--surface-2);
+    box-shadow: inset 0 0 0 1px var(--rule-2);
+  }
+  .cell-key .cell {
+    width: 12px;
+  }
+  .cell.good {
+    background: var(--good);
+    box-shadow: none;
+  }
+  .cell.fair {
+    background: var(--warning);
+    box-shadow: none;
+  }
+  .cell.poor {
+    background: var(--critical);
+    box-shadow: none;
+  }
+  .strip {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    gap: 2px;
+    margin: -2px 0 8px;
   }
   .kv {
     display: flex;

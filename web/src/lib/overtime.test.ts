@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bandPath, blendSeries, fitSpans, lastFilled, linePath, lossClass, lossHeight, slotAt, slotGrid, spreadLabels, timeTicks, type OverTimeCell, type OverTimeSeries } from './overtime';
+import { bandPath, blendSeries, fitSpans, lastFilled, linePath, lossClass, lossHeight, overlayValues, slotAt, slotGrid, spreadLabels, timeTicks, type OverTimeCell, type OverTimeSeries } from './overtime';
 
 const cell = (t0: number, w = 15_000, over: Partial<OverTimeCell> = {}): OverTimeCell => ({ t0, t1: t0 + w, p5: 4, p25: 5, p50: 6, p75: 8, p95: 12, sent: 50, lost: 0, ...over });
 const series = (cells: (OverTimeCell | null)[]): OverTimeSeries => ({ id: 'a', name: 'Example', cells });
@@ -74,6 +74,16 @@ describe('bandPath', () => {
   it('skips a slot missing either edge', () => {
     expect(bandPath([0, 10], [1, 1], [null, 3], 0).match(/Z/g)).toHaveLength(1);
     expect(bandPath([0], [null], [null], 1)).toBe('');
+  });
+});
+
+describe('overlayValues', () => {
+  it('covers the half band and the median, never the nine-in-ten ends', () => {
+    expect(overlayValues(cell(0))).toEqual([5, 6, 8]);
+  });
+  it('falls back to the median where the half band is missing', () => {
+    expect(overlayValues(cell(0, 15_000, { p25: null, p75: null }))).toEqual([6, 6, 6]);
+    expect(overlayValues(cell(0, 15_000, { p50: null, p25: null, p75: null }))).toEqual([null, null, null]);
   });
 });
 

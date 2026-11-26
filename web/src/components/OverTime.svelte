@@ -1,15 +1,16 @@
 <script lang="ts">
   // Response time over time on one shared axis: the medians together on a log scale, then, behind a toggle, one small
-  // panel per series with its median line, middle half (p25 to p75) and nine in ten (p5 to p95), and under each a strip of lost queries.
+  // panel per series with its median line and its variation (half, p25 to p75, and nine in ten, p5 to p95), and under each a strip of lost queries.
   // Gaps and left-out stretches are hatched across every panel and named. A stretch where the series slowed together
   // keeps its data under a plain tint, with a cap whose shape says where the cause sits. Pointer and arrow keys share one cursor.
-  import { untrack } from 'svelte';
+  import { flushSync, onDestroy, untrack } from 'svelte';
   import { Tween } from 'svelte/motion';
   import type { OverTimeGap, OverTimeMark, OverTimeOutage, OverTimeSeries, OverTimeSlow } from '../lib/overtime';
-  import { REVEAL, ZOOM, reduceMotion } from '../lib/motion';
-  import { SLOW_FAMILY, bandPath, blendSeries, fitSpans, lastFilled, linePath, lossClass, lossHeight, slotAt, slotGrid, spreadLabels, timeTicks } from '../lib/overtime';
+  import { BUBBLES, FEED, POUR, REVEAL, ZOOM, feedDip, feedDots, feedPath, pourAt, ramp, reduceMotion, wander } from '../lib/motion';
+  import { SLOW_FAMILY, bandPath, blendSeries, fitSpans, lastFilled, linePath, lossClass, lossHeight, overlayValues, slotAt, slotGrid, spreadLabels, timeTicks } from '../lib/overtime';
   import { logDomain, logScale, logTicks, tickLabel } from '../lib/scale';
   import { ms } from '../lib/format';
+  import { readLocal, writeLocal } from '../lib/store.svelte';
   import Icon from './Icon.svelte';
 
   let {
@@ -24,6 +25,7 @@
     totals,
     totalsLabel,
     slots,
+    pour,
   }: {
     series: OverTimeSeries[];
     gaps: OverTimeGap[];
@@ -41,6 +43,9 @@
     totalsLabel?: string;
     /** While a run sends: the slots it will fill. The chart keeps that width and fills from the left, easing each update in. */
     slots?: number;
+    /** The chart taking over from the filled vessel: how full it was (0 to 1). Read once, as the chart opens; the liquid
+     *  then pours into the warm-up sliver while the rest of the chart fades in. */
+    pour?: number;
   } = $props();
 
   const uid = $props.id();
@@ -56,6 +61,18 @@
   let sel = $state<number | null>(null);
   let tip = $state<{ x: number; y: number; text: string } | null>(null);
   let live = $state('');
+  // The series whose end label is pointed at or focused; with three or more series only it shows its variation.
+  let pick = $state<number | null>(null);
+  // Middle halves: every one shaded and blended at once, or only the line nearest the pointer's.
+  let shade = $state<'all' | 'nearest'>(readLocal<string>('recursa.middleHalf', 'all') === 'nearest' ? 'nearest' : 'all');
+  function setShade(v: typeof shade) {
+    shade = v;
+    writeLocal('recursa.middleHalf', v);
+  }
+  // The header switch's width, so the caption beside it is cut short of it.
+  let switchW = $state(0);
+  // The median line nearest the pointer in the medians chart.
+  let near = $state<number | null>(null);
 
   const grid = $derived(slotGrid(series));
   // The slots with data; a live run is drawn to all it will fill, so the chart keeps one width as it fills.
@@ -94,7 +111,7 @@
       for (const c of s.cells) if (c) for (const v of pick(c)) if (v != null && v > 0) (lo = Math.min(lo, v)), (hi = Math.max(hi, v));
     return logDomain(lo, hi);
   }
-  const wantOv = $derived(domainOf((c) => [c.p50]));
+  const wantOv = $derived(domainOf((c) => overlayValues(c)));
   const wantP = $derived(domainOf((c) => [c.p5 ?? c.p50, c.p95 ?? c.p50]));
   // While a run is live each axis eases to its new bounds (in log space, as it is drawn); otherwise it snaps.
   const toLog = (d: [number, number]): [number, number] => [Math.log10(d[0]), Math.log10(d[1])];
@@ -141,12 +158,18 @@
 
   // A new bin's line draws on from the last point to it over about one update, rather than appearing at once.
   const lastSlot = $derived(series.reduce((m, s) => Math.max(m, lastFilled(s.cells)), 0));
-  const reveal = new Tween(untrack(() => lastSlot), REVEAL);
+  // Poured from the vessel: the lines wait at their start until the liquid lands, then draw on from there.
+  const pourLevel = untrack(() => (pour != null && slots != null && !reduceMotion ? Math.min(1, Math.max(0, pour)) : null));
+  const firstSlot = untrack(() => Math.min(...series.map((s) => s.cells.findIndex((c) => c)).filter((k) => k >= 0)));
+  const pourT = new Tween(pourLevel != null ? 0 : 1);
+  const pouring = $derived(pourT.current < 1);
+  let poured = pourLevel == null;
+  const reveal = new Tween(untrack(() => (pourLevel != null && Number.isFinite(firstSlot) ? firstSlot - 0.5 : lastSlot)), REVEAL);
   $effect.pre(() => {
     const at = lastSlot;
-    untrack(() => reveal.set(at, growing && at > reveal.target ? REVEAL : { duration: 0 }));
+    untrack(() => poured && reveal.set(at, growing && at > reveal.target ? REVEAL : { duration: 0 }));
   });
-  const drawing = $derived(growing && reveal.current < reveal.target);
+  const drawing = $derived(growing && (pouring || reveal.current < reveal.target));
   const revealX = $derived(drawing ? xm(reveal.current) : W);
 
   const hwLine = $derived(Math.min(slotW / 2, 4));
@@ -158,7 +181,8 @@
       const cells = cellsOf(s);
       const ys = cells.map((c) => (c?.p50 != null ? yOv(c.p50) : null));
       const last = lastFilled(ys);
-      return { i, d: linePath(slotXs, ys, hwLine), ys, last, ly: last >= 0 ? ys[last]! : 0 };
+      const at = (k: 'p25' | 'p75') => cells.map((c) => (c?.[k] != null ? yOv(c[k]!) : null));
+      return { i, d: linePath(slotXs, ys, hwLine), band: bandPath(slotXs, at('p75'), at('p25'), slotW / 2), ys, last, ly: last >= 0 ? ys[last]! : 0 };
     }),
   );
   /** Where a line ends as drawn: its last point, or mid-draw the point the reveal has reached on the way to it. */
@@ -178,6 +202,23 @@
     const ys = spreadLabels(tips.map((p) => p[1]), 16, OV_TOP + 6, OV_BOTTOM - 4);
     return seen.map((t, k) => ({ i: t.i, x: tips[k][0], y: tips[k][1], labelY: ys[k] }));
   });
+  // Two series always show their middle halves; with more, bands would pile up, so one shows while its name is pointed at.
+  const fewSeries = $derived(series.length <= 2);
+  // The series picked out: its name pointed at, the line nearest the pointer, or the one picked with the arrow keys.
+  const hot = $derived(many ? null : (pick ?? near ?? sel));
+  const switching = $derived(!fewSeries && !many);
+  const blend = $derived(switching && shade === 'all');
+  const bandOn = (i: number) => (fewSeries || blend ? true : hot === i);
+  // Beside the switch, which names the shading, the caption only says what the line is or how to pick one.
+  const caption = $derived(
+    fewSeries
+      ? 'line is each median, shaded is its variation'
+      : many || blend
+        ? 'line is each median'
+        : 'point near a line to shade it',
+  );
+  // Characters of caption that fit beside the title, short of the switch at the plot's right edge.
+  const captionFit = $derived(Math.max(8, Math.floor((pw - (switching ? switchW + 12 : 0)) / 6.2) - 20));
   const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, Math.max(1, n - 1))}…` : s);
 
   const panels = $derived(
@@ -262,6 +303,149 @@
   });
   const gapBoxes = $derived(boxes.gaps);
 
+  // The pour: the vessel becomes the plot and its liquid tips into the warm-up sliver while the rest of the chart
+  // fades in and the chart grows from the vessel's height to its own. Without a sliver to pour into, the chart just opens.
+  const warm = $derived(gapBoxes.find((b) => b.g.soft));
+  const pf = $derived(
+    pouring && warm
+      ? pourAt(pourT.current, {
+          w: W,
+          floor: OV_BOTTOM,
+          level: (pourLevel ?? 1) * OV_BOTTOM,
+          left: warm.x0,
+          right: warm.x0 + Math.max(3, warm.x1 - warm.x0),
+          top: OV_TOP,
+          end: W - padR,
+        })
+      : null,
+  );
+  const chartIn = $derived(pouring ? ramp(pourT.current, 0.2, 0.5) : undefined);
+  const landed = $derived(pouring ? ramp(pourT.current, POUR.arrive, POUR.arrive + 0.15) : undefined);
+  const settled = $derived(pouring ? ramp(pourT.current, 0.8, 1) : undefined);
+
+  // The warm-up's dots. The pour carries them in with the liquid; while the run sends they drift across the warm-up
+  // and bend onto the lines at its edge, since the names it cached are what the repeat lookups ask.
+  const warmEnd = $derived(warm ? warm.x0 + Math.max(3, warm.x1 - warm.x0) : 0);
+  const feed = $derived(warm ? feedDots(warm.x0, warmEnd, OV_TOP, OV_H) : null);
+  const feeding = $derived(growing && !reduceMotion && !pf);
+  // Where each line crosses the warm-up's edge, and its first point past it.
+  const intakes = $derived.by(() => {
+    const k = slotXs.findIndex((x) => x >= warmEnd);
+    if (!warm || k < 0) return [];
+    return together.flatMap((t) => {
+      const y = t.ys[k];
+      const before = k > 0 ? t.ys[k - 1] : null;
+      if (y == null) return [];
+      const along: [number, number][] = [];
+      for (let i = k; i < t.ys.length && t.ys[i] != null && xm(i) - warmEnd < FEED.reach + slotW; i++) along.push([xm(i), t.ys[i]!]);
+      return [{ along, edge: before == null ? y : y + ((before - y) * (xm(k) - warmEnd)) / (xm(k) - xm(k - 1)) }];
+    });
+  });
+  /** The line a dot in row `y` feeds, the nearest at the edge: how far off it is there, and its points past it. */
+  const intake = (y: number) => {
+    const to = intakes.reduce<(typeof intakes)[number] | null>((m, n) => (m == null || Math.abs(n.edge - y) < Math.abs(m.edge - y) ? n : m), null);
+    return to ? { dy: Math.round(to.edge - y), along: to.along.map(([x, ly]): [number, number] => [Math.round(x), Math.round(ly - y)]) } : { dy: 0, along: [] };
+  };
+  // The lines have stopped easing to a live update: until then a dot keeps the round it has.
+  const still = $derived(step.current >= 1 && domOv === wantOv);
+  type Flow = { on: boolean; still: boolean; x: number; dy: number; along: [number, number][]; p: number };
+  let flowT0: number | undefined;
+  /** One dot's round: from the axis across the warm-up at an even drift, bending onto its line by the edge, then along
+   *  the line into the plot, fading. It rests where the round starts it, and holds where it is when the run stops. */
+  function flow(node: SVGGElement, o: Flow) {
+    let anim: Animation | undefined;
+    let key = '';
+    const set = (o: Flow) => {
+      if (!o.on) {
+        // Stopped: a dot on its way out goes back to wait behind the axis.
+        if (anim && feed && ((anim.currentTime as number) % feed.total) > feed.travel) anim.currentTime = 0;
+        anim?.pause();
+        return;
+      }
+      const k = `${feed?.from} ${warmEnd} ${o.x} ${o.dy} ${o.along}`;
+      if (!feed || (anim?.playState === 'running' && (k === key || !o.still))) return;
+      // One clock for every dot, so they stay evenly spread when the chart's width changes their round.
+      flowT0 ??= performance.now();
+      const at = o.p * feed.total + performance.now() - flowT0;
+      anim?.cancel();
+      key = k;
+      anim = node.animate(
+        feedPath(feed, warmEnd, o.dy, o.along).map((s) => ({
+          transform: `translate(${(s.x - o.x).toFixed(1)}px, ${s.y.toFixed(1)}px)`,
+          opacity: s.o,
+          offset: s.at,
+        })),
+        { duration: feed.total, iterations: Infinity },
+      );
+      anim.currentTime = at;
+    };
+    set(o);
+    return { update: set, destroy: () => anim?.cancel() };
+  }
+  /** One dot hanging in the liquid: it wanders about its place while the run sends, and holds where it is after. */
+  function hang(node: SVGCircleElement, o: { on: boolean; i: number }) {
+    let anim: Animation | undefined;
+    const set = (o: { on: boolean; i: number }) => {
+      if (!o.on) return anim?.pause();
+      if (!anim) {
+        const w = wander(o.i);
+        anim = node.animate(
+          w.path.map(([x, y]) => ({ transform: `translate(${x.toFixed(2)}px, ${y.toFixed(2)}px)` })),
+          { duration: w.ms, iterations: Infinity },
+        );
+        anim.currentTime = w.p * w.ms;
+      }
+      anim.play();
+    };
+    set(o);
+    return { update: set, destroy: () => anim?.cancel() };
+  }
+  let ot: HTMLDivElement;
+  let held = $state(pourLevel != null);
+  let started = false;
+  const pourTimers: ReturnType<typeof setTimeout>[] = [];
+  onDestroy(() => pourTimers.forEach(clearTimeout));
+  $effect(() => {
+    if (started || pourLevel == null || !(W > 0 && grid && series.length)) return;
+    started = true;
+    untrack(() => {
+      const done = () => {
+        poured = true;
+        reveal.set(lastSlot, { duration: warm ? POUR.draw : 0 });
+      };
+      if (!warm) {
+        pourT.set(1, { duration: 0 }).then(done);
+        held = false;
+        return;
+      }
+      // Measured as the growth starts, once everything it opens onto is drawn.
+      pourTimers.push(setTimeout(() => {
+        ot.style.height = 'auto';
+        const h = ot.offsetHeight;
+        ot.style.height = `${OV_BOTTOM}px`;
+        if (h <= OV_BOTTOM) {
+          held = false;
+          return;
+        }
+        const grow = ot.animate([{ height: `${OV_BOTTOM}px` }, { height: `${h}px` }], {
+          duration: POUR.grow,
+          easing: 'cubic-bezier(0.65, 0, 0.35, 1)',
+          fill: 'forwards',
+        });
+        grow.finished
+          .then(() => {
+            held = false;
+            flushSync();
+            grow.cancel();
+          })
+          .catch(() => {});
+      }, POUR.hold + POUR.growAt * POUR.ms));
+      // The lines start out of the sliver as the liquid lands in it, while it settles.
+      pourTimers.push(setTimeout(done, POUR.hold + POUR.arrive * POUR.ms));
+      pourT.set(1, { duration: POUR.ms, delay: POUR.hold });
+    });
+  });
+
   const cur = $derived(cursor != null && cursor >= 0 && cursor < N ? cursor : null);
   const pillText = $derived(cur == null ? '' : formatTime(startOf(cur)));
   const pillW = $derived(pillText.length * 6.4 + 16);
@@ -338,16 +522,29 @@
     cursor = i;
     const p = off ? panelAt(py) : null;
     sel = p;
+    if (!off) near = nearest(i, py);
     if (p == null) tip = null;
     else {
       const m = panels[p].marks.find((k) => Math.abs(k.x - px) < 6 && py - panels[p].top < 10);
       tip = { x: e.clientX, y: box.top + panels[p].top - off, text: m ? `Operator reported, ${formatTime(m.t)}: ${m.title}` : summary(p, i) };
     }
   }
+  /** The series whose median at slot `i` is closest to height `py`, if within reach of the pointer. */
+  function nearest(i: number, py: number): number | null {
+    if (many || py < OV_TOP - 8 || py > OV_BOTTOM + 8) return null;
+    let best: number | null = null;
+    let gap = 28;
+    for (const t of together) {
+      const y = t.ys[i];
+      if (y != null && Math.abs(y - py) < gap) [best, gap] = [t.i, Math.abs(y - py)];
+    }
+    return best;
+  }
   function leave() {
     tip = null;
     cursor = null;
     sel = null;
+    near = null;
   }
   function key(e: KeyboardEvent) {
     if (!N) return;
@@ -397,8 +594,17 @@
   {/if}
 {/snippet}
 
-<div class="ot" bind:clientWidth={W}>
+<div class="ot" bind:clientWidth={W} bind:this={ot} style:height={held ? `${OV_BOTTOM}px` : undefined} style:overflow={held ? 'clip' : undefined}>
   {#if W > 0 && grid && series.length}
+    {#if switching}
+      <div class="halves" style:right="{padR}px" style:opacity={chartIn} bind:clientWidth={switchW}>
+        <span id="{uid}-halves">Variation</span>
+        <div class="segmented" role="group" aria-labelledby="{uid}-halves">
+          <button aria-pressed={shade === 'all'} onclick={() => setShade('all')}>All</button>
+          <button aria-pressed={shade === 'nearest'} onclick={() => setShade('nearest')}>Nearest</button>
+        </div>
+      </div>
+    {/if}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
     <svg
       width={W}
@@ -417,43 +623,65 @@
           <rect width="5" height="5" class="hatch-bg" />
           <line x1="0" y1="0" x2="0" y2="5" class="hatch" />
         </pattern>
-        <!-- The warm-up's bubbles, one in four tinted by the kind of name asked; they rise slowly while the run sends. -->
+        <!-- The warm-up's bubbles in the panels, one in four tinted by the kind of name asked; they drift toward the plot while the run sends. -->
         <pattern id="{uid}-bubbles" x={PAD_L} y={OV_TOP} width="48" height="144" patternUnits="userSpaceOnUse">
-          <circle cx="6" cy="8" r="1.25" class="bub" />
-          <circle cx="27" cy="18" r="1.5" class="bub" />
-          <circle cx="40" cy="31" r="1.5" class="bub c" />
-          <circle cx="14" cy="42" r="1.25" class="bub" />
-          <circle cx="33" cy="55" r="1.5" class="bub" />
-          <circle cx="21" cy="67" r="1.5" class="bub u" />
-          <circle cx="44" cy="79" r="1.25" class="bub" />
-          <circle cx="9" cy="90" r="1.5" class="bub" />
-          <circle cx="30" cy="102" r="1.5" class="bub c" />
-          <circle cx="17" cy="114" r="1.25" class="bub" />
-          <circle cx="38" cy="126" r="1.5" class="bub" />
-          <circle cx="4" cy="136" r="1.25" class="bub" />
-          {#if growing && !reduceMotion}<animateTransform attributeName="patternTransform" type="translate" from="0 0" to="0 -144" dur="96s" repeatCount="indefinite" />{/if}
+          {#each BUBBLES as [cx, cy, r, tint]}<circle {cx} {cy} {r} class="bub {tint}" />{/each}
+          {#if growing && !reduceMotion}<animateTransform attributeName="patternTransform" type="translate" from="0 0" to="48 0" dur="{48 / FEED.v}s" repeatCount="indefinite" />{/if}
         </pattern>
         <pattern id="{uid}-comb" width="4" height="5" patternUnits="userSpaceOnUse">
           <line x1="0.5" y1="0" x2="0.5" y2="5" class="comb" />
         </pattern>
         <clipPath id="{uid}-reveal"><rect x="0" y="0" width={revealX} height={H} /></clipPath>
         <clipPath id="{uid}-reveal-slot"><rect x="0" y="0" width={revealX + (drawing ? slotW / 2 : 0)} height={H} /></clipPath>
+        {#if pf}
+          <clipPath id="{uid}-pour"><rect x={pf.clip.x} y="0" width={pf.clip.w} height={OV_BOTTOM} rx={pf.clip.rx} /></clipPath>
+          <clipPath id="{uid}-liquid"><path d={pf.d} /></clipPath>
+        {:else if warm}
+          <clipPath id="{uid}-feed"><rect x={warm.x0} y="0" width={W} height={OV_BOTTOM} /></clipPath>
+        {/if}
       </defs>
 
       {#each gapBoxes as b}
         {#if b.g.soft}
-          <rect class="gap" x={b.x0} y={OV_TOP} width={Math.max(3, b.x1 - b.x0)} height={OV_H} fill="url(#{uid}-bubbles)" />
-          <line class="ref lead" x1={b.x1} x2={b.x1} y1={OV_TOP} y2={OV_BOTTOM} />
-        {:else}
-          <rect class="gap" x={b.x0} y={OV_TOP} width={Math.max(3, b.x1 - b.x0)} height={OV_H} fill="url(#{uid}-hatch)" />
-          <line class="ref" x1={b.x0} x2={b.x0} y1={OV_TOP} y2={OV_BOTTOM} />
-          <line class="ref" x1={b.x1} x2={b.x1} y1={OV_TOP} y2={OV_BOTTOM} />
-          {#if b.named}
-            <line class="ref" x1={b.x0} x2={b.x0} y1={OV_TOP - 14} y2={OV_TOP} />
-            <text class="note" x={b.tx} y={OV_TOP - 6} text-anchor={b.anchor}>{b.g.label}</text>
+          {#if !pf}
+            <rect class="gap liquid" x={b.x0} y={OV_TOP} width={Math.max(3, b.x1 - b.x0)} height={OV_H} />
+            <line class="ref lead" x1={b.x1} x2={b.x1} y1={OV_TOP} y2={OV_BOTTOM} />
           {/if}
+        {:else}
+          <g opacity={chartIn}>
+            <rect class="gap" x={b.x0} y={OV_TOP} width={Math.max(3, b.x1 - b.x0)} height={OV_H} fill="url(#{uid}-hatch)" />
+            <line class="ref" x1={b.x0} x2={b.x0} y1={OV_TOP} y2={OV_BOTTOM} />
+            <line class="ref" x1={b.x1} x2={b.x1} y1={OV_TOP} y2={OV_BOTTOM} />
+            {#if b.named}
+              <line class="ref" x1={b.x0} x2={b.x0} y1={OV_TOP - 14} y2={OV_TOP} />
+              <text class="note" x={b.tx} y={OV_TOP - 6} text-anchor={b.anchor}>{b.g.label}</text>
+            {/if}
+          </g>
         {/if}
       {/each}
+      {#if pf}
+        <!-- The vessel's liquid on its way into the sliver: tint and its waterline. -->
+        <g class="gap" clip-path="url(#{uid}-pour)">
+          <path class="liquid" d={pf.d} />
+          <path class="waterline" d={pf.surface} opacity={1 - (settled ?? 1)} />
+        </g>
+        <rect class="frame" x={pf.frame.x} y={pf.frame.y} width={pf.frame.w} height={pf.frame.h} rx={pf.frame.rx} opacity={pf.frame.op} />
+        <line class="ref lead" x1={pf.wall.x} x2={pf.wall.x} y1={pf.wall.y} y2={OV_BOTTOM} opacity={pf.wall.op} />
+      {/if}
+      {#if warm && feed}
+        <!-- The warm-up's dots, under the lines they feed. -->
+        <g class="gap" clip-path="url(#{uid}-{pf ? 'liquid' : 'feed'})">
+          {#each feed.dots as b, i (i)}
+            {@const to = intake(b.y)}
+            <!-- Poured in already leaning toward its line, where the flow picks it up. -->
+            {@const [cx, cy] = pf ? pf.at((b.x - warm.x0) / (warmEnd - warm.x0), (OV_BOTTOM - b.y - feedDip(b.x, feed.from, warmEnd, to.dy)) / OV_H) : [b.x, b.y]}
+            <g use:flow={{ on: feeding, still, x: b.x, dy: to.dy, along: to.along, p: b.p }}>
+              <circle class="bub {b.tint}" {cx} {cy} r={b.r} use:hang={{ on: growing && !reduceMotion, i }} />
+            </g>
+          {/each}
+        </g>
+      {/if}
+      <g opacity={chartIn}>
       {#each boxes.slows as b}
         <rect class="slow" x={b.x0} y={OV_TOP} width={b.w} height={OV_H} />
         {#if b.family === 'host'}<rect class="cap" x={b.x0} y={OV_TOP} width={b.w} height="5" fill="url(#{uid}-comb)" />
@@ -466,28 +694,49 @@
       {/each}
 
       <!-- Medians together -->
-      <text class="rowname" x={PAD_L} y="12">Medians together</text>
+      <text class="rowname" x={PAD_L} y="12">Medians together<tspan class="sub" dx="8">{clip(caption, captionFit)}</tspan></text>
       <text class="tick" x={PAD_L - 8} y={OV_TOP - 6} text-anchor="end">ms</text>
       {#each ticksOv as g}
         <line class="grid" x1={PAD_L} x2={PAD_L + pw} y1={yOv(g)} y2={yOv(g)} />
         <text class="tick" x={PAD_L - 8} y={yOv(g) + 3.5} text-anchor="end">{tickLabel(g)}</text>
       {/each}
       <g clip-path={growing ? `url(#${uid}-reveal)` : undefined}>
+        <g class="bands">
+          {#each together as t (t.i)}
+            {#if t.band && bandOn(t.i)}
+              <path class="ov-band" class:blend class:hot={blend && hot === t.i} class:faded={blend && hot != null && hot !== t.i} style:--c={colour(t.i)} d={t.band} />
+            {/if}
+          {/each}
+        </g>
         {#each together as t (t.i)}
           {#if t.d && !(many && sel === t.i)}
-            <path class="ln" class:neutral={many} style:--c={many ? 'var(--s-neutral)' : colour(t.i)} d={t.d} />
+            <path class="ln" class:neutral={many} class:dim={hot != null && hot !== t.i} style:--c={many ? 'var(--s-neutral)' : colour(t.i)} d={t.d} />
           {/if}
         {/each}
       </g>
       {#each gapBoxes as b}
         {#each b.inside as line, i}
-          <text class="note in" x={(b.x0 + b.x1) / 2} y={OV_TOP + 14 + i * 12} text-anchor="middle">{line}</text>
+          <text class="note in" x={(b.x0 + b.x1) / 2} y={OV_TOP + 14 + i * 12} text-anchor="middle" opacity={settled}>{line}</text>
         {/each}
       {/each}
       {#if many && sel != null && together[sel]?.d}<path class="ln pick" d={together[sel].d} clip-path={growing ? `url(#${uid}-reveal)` : undefined} />{/if}
+      <g opacity={landed}>
       {#each ends as e (e.i)}
-        <g style:--c={colour(e.i)}>
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+        <g
+          style:--c={colour(e.i)}
+          class="end"
+          class:dim={hot != null && hot !== e.i}
+          role="group"
+          tabindex="0"
+          aria-label="{series[e.i].name}: variation shown while focused"
+          onpointerenter={() => (pick = e.i)}
+          onpointerleave={() => (pick = null)}
+          onfocus={() => (pick = e.i)}
+          onblur={() => (pick = null)}
+        >
           {#if wide}
+            <rect class="hit" x={e.x + 2} y={e.labelY - 9} width={padR - 4} height="18" />
             {@render shape(e.i, e.x + 10, e.labelY)}
             <text class="endlabel" x={e.x + 20} y={e.labelY + 4}>{clip(series[e.i].name, Math.floor((padR - 24) / 6.4))}</text>
           {:else}
@@ -495,11 +744,13 @@
           {/if}
         </g>
       {/each}
+      </g>
 
       {@render timeAxis(OV_BOTTOM, OV_TOP)}
+      </g>
     </svg>
 
-    <button class="each" aria-expanded={open} aria-controls="{uid}-each" onclick={() => (open = !open)}>
+    <button class="each" style:opacity={chartIn} aria-expanded={open} aria-controls="{uid}-each" onclick={() => (open = !open)}>
       <Icon name={open ? 'chevron-down' : 'chevron-right'} size={12} />{open ? 'Hide each resolver' : `Show each resolver (${series.length})`}
     </button>
 
@@ -525,6 +776,7 @@
         {#each gapBoxes as b}
           {#if b.g.soft}
             {#each panels as p (p.i)}
+              <rect class="gap liquid" x={b.x0} y={p.top} width={Math.max(3, b.x1 - b.x0)} height={panelH} />
               <rect class="gap" x={b.x0} y={p.top} width={Math.max(3, b.x1 - b.x0)} height={panelH} fill="url(#{uid}-bubbles)" />
               <line class="ref lead" x1={b.x1} x2={b.x1} y1={p.top} y2={p.bottom} />
             {/each}
@@ -581,7 +833,7 @@
     {/if}
 
     <!-- One row per series at rest and on hover alike, so picking a bin never moves the page. -->
-    <div class="read" class:picking={many && sel != null} aria-hidden="true">
+    <div class="read" style:opacity={chartIn} class:picking={many && sel != null} aria-hidden="true">
       <p class="rhead">
         {#if cur != null}<b class="num">{formatTime(startOf(cur))}</b> · one {unit}{:else if totalsLabel}<b>{totalsLabel}</b> · p{hint}{:else}P{hint}{/if}
       </p>
@@ -604,7 +856,24 @@
 
 <style>
   .ot {
+    position: relative;
     width: 100%;
+    /* The warm-up's liquid, the same as the vessel's that pours into it. */
+    --liquid: color-mix(in oklch, var(--ink) 5%, var(--surface));
+  }
+  /* The middle-half switch sits on the medians title row, right-aligned to the plot. */
+  .halves {
+    position: absolute;
+    top: 0;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    font-size: var(--t-xs);
+    color: var(--ink-3);
+  }
+  .halves .segmented button {
+    height: 18px;
+    padding: 0 8px;
   }
   svg[role='group'] {
     display: block;
@@ -695,9 +964,22 @@
   .ref.lead {
     stroke-dasharray: 2 3;
   }
+  .liquid {
+    fill: var(--liquid);
+  }
+  .waterline {
+    fill: none;
+    stroke: var(--ink-3);
+    stroke-width: 1;
+  }
+  .frame {
+    fill: none;
+    stroke: var(--rule);
+    stroke-width: 1;
+  }
   .note.in {
     paint-order: stroke;
-    stroke: var(--surface);
+    stroke: var(--liquid);
     stroke-width: 4px;
     stroke-linejoin: round;
   }
@@ -743,6 +1025,47 @@
   .ln.neutral {
     stroke-width: 1;
     stroke-opacity: 0.7;
+  }
+  .ln.dim,
+  .end.dim {
+    opacity: 0.35;
+  }
+  .ov-band {
+    fill: var(--c);
+    fill-opacity: 0.16;
+    pointer-events: none;
+    transition: fill-opacity 120ms;
+  }
+  /* Bands blend with each other only, so overlaps deepen without muddying the grid. */
+  .bands {
+    isolation: isolate;
+  }
+  .ov-band.blend {
+    fill-opacity: 0.14;
+    mix-blend-mode: multiply;
+  }
+  .ov-band.blend.hot {
+    fill-opacity: 0.3;
+  }
+  .ov-band.blend.faded {
+    fill-opacity: 0.05;
+  }
+  :global(:root[data-theme='dark']) .ov-band.blend {
+    mix-blend-mode: screen;
+  }
+  @media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme='light'])) .ov-band.blend {
+      mix-blend-mode: screen;
+    }
+  }
+  .end {
+    outline: none;
+  }
+  .end:focus-visible .endlabel {
+    text-decoration: underline;
+  }
+  .hit {
+    fill: transparent;
   }
   .ln.pick {
     stroke: var(--ink);

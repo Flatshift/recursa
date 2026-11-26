@@ -371,7 +371,7 @@
         <button class="tb-icon" aria-label="Run actions" title="Export or delete this run" onclick={(e) => runMenu(e, run.id)}><Icon name="more" size={16} /></button>
         {#if ext}
           {#if app.boot?.caps.export}<button class="btn" onclick={() => app.exportRun('csv')}>Export CSV</button>{/if}
-          <button class="btn" onclick={again}>Run again</button>
+          <button class="btn" disabled={app.starting} onclick={again}>{app.starting ? 'Starting…' : 'Run again'}</button>
         {:else}
           <button
             class="tb-icon"
@@ -405,7 +405,7 @@
           <div class="content scroll" id="run-panel" tabindex="0" role="region" aria-label="Extended test">
             <ExtendedRun {run} />
             {#if mobile && !running}
-              <div class="extacts"><button class="btn" onclick={again}>Run again</button></div>
+              <div class="extacts"><button class="btn" disabled={app.starting} onclick={again}>{app.starting ? 'Starting…' : 'Run again'}</button></div>
             {/if}
           </div>
         {:else if split && inspected}

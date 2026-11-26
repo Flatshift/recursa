@@ -17,6 +17,7 @@
   import Method from './routes/Method.svelte';
   import Settings from './routes/Settings.svelte';
   import Icon from './components/Icon.svelte';
+  import SetupDial from './components/SetupDial.svelte';
 
   app.init();
 
@@ -181,6 +182,10 @@
         {:else if app.route.name === 'settings'}
           <Settings />
         {/if}
+        {#if app.starting}
+          <!-- The engine can take seconds to answer a start, while it waits out a monitoring cycle. -->
+          <div class="starting" role="status" aria-label="Starting the run"><SetupDial /></div>
+        {/if}
       </main>
       <InstrumentStrip env={stripEnv} now={app.env} link={onRun ? app.run!.link : undefined} frozen={!!onRun && app.run?.status !== 'running'} />
     </div>
@@ -284,8 +289,17 @@
     height: 100%;
   }
   .route {
+    position: relative;
     min-height: 0;
     min-width: 0;
+  }
+  .starting {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
   }
   .skip {
     position: absolute;

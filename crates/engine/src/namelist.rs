@@ -118,15 +118,22 @@ pub(crate) fn bundled(country: Option<&str>) -> TailSource {
 pub struct Plan {
     /// `total` names in asked order.
     pub names: Vec<String>,
-    /// 0 for a tail name; 1 to `ASKS` for the nth ask of a common name.
+    /// 0 for a tail name; 1 to the plan's asks per common name for the nth ask of one.
     pub touch: Vec<u8>,
 }
 
-/// How many times a common name is asked across a run.
+/// How many times a common name is asked across a run, unless the list is too short to fill four fifths of it.
 const ASKS: usize = 8;
 
-/// A tenth of `total` common names, each asked once in each eighth of the run at the same position in the eighth, and
-/// tail names from `source` in every other slot. The same list, country and seed give the same plan.
+/// How many times each of `pick` common names is asked to fill four fifths of `total`: `ASKS`, or more when the list
+/// ran out before a tenth of `total`.
+fn asks_for(total: usize, pick: usize) -> usize {
+    if pick < total / 10 { (total / 10 * ASKS).div_ceil(pick.max(1)).min(u8::MAX as usize) } else { ASKS }
+}
+
+/// A tenth of `total` common names (as many as the list has), each asked once in each part of the run at the same
+/// position in the part, and tail names from `source` in every other slot. Eight asks and parts, more when the list is
+/// too short, so that four fifths of the lookups stay common. The same list, country and seed give the same plan.
 pub(crate) fn plan(total: usize, source: &TailSource, seed: u64) -> Plan {
     let mut rng = Rng(seed);
     let pick = (total / 10).min(common().len());
@@ -134,20 +141,21 @@ pub(crate) fn plan(total: usize, source: &TailSource, seed: u64) -> Plan {
     rng.shuffle(&mut chosen);
     chosen.truncate(pick);
 
-    // The common names' places in an eighth; the end of the run also holds the remainder, all tail.
-    let part = total / ASKS;
+    // The common names' places in a part; the end of the run also holds the remainder, all tail.
+    let asks = asks_for(total, pick);
+    let part = total / asks;
     let mut slots: Vec<usize> = (0..part).collect();
     rng.shuffle(&mut slots);
     slots.truncate(pick);
     let at: HashMap<usize, &str> = slots.into_iter().zip(chosen).collect();
 
-    let tail_n = total - ASKS * pick;
+    let tail_n = total - asks * pick;
     let mut tail = tail_names(source, tail_n, &mut rng).into_iter();
     let mut names = Vec::with_capacity(total);
     let mut touch = Vec::with_capacity(total);
     for pos in 0..total {
-        let (in_part, ask) = (pos % part.max(1), (pos / part.max(1)).min(ASKS - 1) as u8 + 1);
-        match at.get(&in_part).filter(|_| pos < ASKS * part) {
+        let (in_part, ask) = (pos % part.max(1), (pos / part.max(1)).min(asks - 1) as u8 + 1);
+        match at.get(&in_part).filter(|_| pos < asks * part) {
             Some(name) => {
                 names.push(name.to_string());
                 touch.push(ask);
@@ -415,6 +423,28 @@ mod tests {
         assert_eq!(a, b);
         let tail = |p: &Plan| p.names.iter().zip(&p.touch).filter(|(_, t)| **t == 0).map(|(n, _)| n.clone()).collect::<Vec<_>>();
         assert_ne!(tail(&a), tail(&c));
+    }
+
+    /// 10,000 lookups: the list holds fewer than a tenth of them, so each common name is asked more often.
+    #[test]
+    fn a_long_plan_keeps_the_mix() {
+        let total = 10_000;
+        let p = plan(total, &source(20_000), 7);
+        assert_eq!(p.names.len(), total);
+        let asks = asks_for(total, common().len());
+        assert_eq!(asks, 16);
+        let mut per_name: HashMap<&str, usize> = HashMap::new();
+        for (n, _) in p.names.iter().zip(&p.touch).filter(|(_, t)| **t > 0) {
+            *per_name.entry(n).or_default() += 1;
+        }
+        assert_eq!(per_name.len(), common().len());
+        assert!(per_name.values().all(|&c| c == asks));
+        let common_n = p.touch.iter().filter(|t| **t > 0).count();
+        assert!((7_800..=8_400).contains(&common_n), "{common_n}");
+        assert_eq!(*p.touch.iter().max().unwrap() as usize, asks);
+        let tail: Vec<&String> = p.names.iter().zip(&p.touch).filter(|(_, t)| **t == 0).map(|(n, _)| n).collect();
+        assert_eq!(tail.iter().collect::<HashSet<_>>().len(), tail.len(), "no tail name twice");
+        assert_eq!(total - common_n, tail.len());
     }
 
     #[test]

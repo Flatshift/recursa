@@ -57,15 +57,31 @@ describe('chartsOf', () => {
   it('is null for a run from before the split', () => {
     expect(chartsOf({ bin_s: 15, bins: [bin(0)], gaps: [], cold_bin_s: undefined, cold_bins: undefined }, ['A', 'B'])).toBeNull();
   });
-  it('leaves the warm-up bins empty and shades them as a soft gap', () => {
+  it('shows the first asks of the warm-up bins in the repeat chart and shades them as a soft gap', () => {
+    const firsts = { ...split, bins: split.bins.map((b) => ({ ...b, first: [cell(30), cell(null, 0)] })) };
+    const c = chartsOf(firsts, ['A', 'B'])!;
+    expect(c.repeat.series[0].cells.map((x) => x?.p50)).toEqual([30, 30, 8, 8, 8, 8, 8, 8, 8, 8]);
+    expect(c.repeat.series[1].cells.map((x) => x?.p50)).toEqual([undefined, undefined, 9, 9, 9, 9, 9, 9, 9, 9]);
+    expect(c.repeat.gaps).toEqual([{ t0: 0, t1: 30000, kind: 'warmup', label: 'Cache filling', soft: true }]);
+  });
+  it('shows every lookup of the warm-up bins on a run without first-ask cells', () => {
     const c = chartsOf(split, ['A', 'B'])!;
-    expect(c.repeat.series[0].cells.map((x) => x != null)).toEqual([false, false, true, true, true, true, true, true, true, true]);
+    expect(c.repeat.series[0].cells.map((x) => x?.p50)).toEqual([10, 10, 8, 8, 8, 8, 8, 8, 8, 8]);
+    expect(c.repeat.series[1].cells.map((x) => x?.p50)).toEqual([11, 11, 9, 9, 9, 9, 9, 9, 9, 9]);
     expect(c.repeat.gaps).toEqual([{ t0: 0, t1: 30000, kind: 'warmup', label: 'Cache filling', soft: true }]);
     expect(c.cold.gaps).toEqual([]);
   });
   it('has no warm-up gap when the first bin has repeat cells', () => {
     const c = chartsOf({ ...split, bins: split.bins.map((b) => ({ ...b, rep: [cell(8), cell(9)] })) }, ['A', 'B'])!;
     expect(c.repeat.gaps).toEqual([]);
+  });
+  it('is null for all lookups when no bin has them, and otherwise shares the repeat slots and gaps', () => {
+    expect(chartsOf(split, ['A', 'B'])!.all).toBeNull();
+    const c = chartsOf({ ...split, bins: split.bins.map((b, i) => ({ ...b, all: [cell(12 + i), cell(13)] })) }, ['A', 'B'])!;
+    expect(c.all!.series[0].cells).toHaveLength(10);
+    expect(c.all!.series[0].cells[0]!.p50).toBe(12);
+    expect(c.all!.gaps).toEqual(c.repeat.gaps);
+    expect(c.all!.gaps[0].kind).toBe('warmup');
   });
   it('draws cold cells one cold bin wide over the same span', () => {
     const c = chartsOf(split, ['A', 'B'])!;
@@ -126,6 +142,11 @@ describe('progress', () => {
   it('counts the lookups in the bins sent', () => expect(sentOf(ext)).toBe(100));
   it('counts a bin whose lookups are out of the figures', () => expect(sentOf({ ...ext, bins: [{ ...bin(0), r: [] }] })).toBe(50));
   it('counts minutes left at the run pace', () => expect(minutesLeft(ext)).toBe(Math.ceil((98 * 15) / 60)));
+  it('counts minutes left at the Fast pace, whose bins are 3.75 s', () => expect(minutesLeft({ ...ext, bin_s: 3.75 })).toBe(Math.ceil((98 * 3.75) / 60)));
+  it('counts the minutes of a length and pace', () => {
+    expect(minutesOf(5000, 75)).toBe(6);
+    expect(minutesOf(10000, 600)).toBe(100);
+  });
   it('has none left at the end', () => expect(minutesLeft({ ...ext, total: 100 })).toBe(0));
   it('counts a live run by its answers, not its bins', () => {
     expect(sentOf(ext, { done: 3 * 120, total: 3 * 5000 })).toBe(120);

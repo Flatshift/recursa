@@ -216,7 +216,7 @@ pub struct Stats {
     /// How often it went from answering to silent or back.
     pub flaps: u32,
     pub offset_median_ms: Option<f64>,
-    /// How far the middle half of its offsets spread: how steadily it reads from here.
+    /// Its variation, the range that holds half its offsets: how steadily it reads from here.
     pub offset_spread_ms: Option<f64>,
     pub delay_median_ms: Option<f64>,
     pub delay_p95_ms: Option<f64>,
@@ -248,7 +248,7 @@ pub struct ClockPoint {
 pub struct ClockHistory {
     pub points: Vec<ClockPoint>,
     pub cycles: u32,
-    /// Median of the cycles' medians, and how far the middle half of them spread.
+    /// Median of the cycles' medians, and their variation (the range that holds half of them).
     pub median_ms: Option<f64>,
     pub spread_ms: Option<f64>,
     /// The slope of those medians over time, in ms per hour, when the record spans at least six hours and eight cycles.

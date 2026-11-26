@@ -2,7 +2,7 @@
   import { tick } from 'svelte';
   import { app } from '../lib/store.svelte';
   import { api } from '../lib/api';
-  import { label, shortWhen } from '../lib/format';
+  import { gapOf, label, shortWhen } from '../lib/format';
   import { buildRows, rank } from '../lib/verdict';
   import { MAX_PICK, MIN_PICK, minutesOf, shortlist } from '../lib/extended';
   import type { RunRow, RunState } from '../lib/types';
@@ -79,15 +79,16 @@
   });
 
   const offered = $derived(!!offer && (offer.ids.length !== app.extPick.length || offer.ids.some((id) => !app.extPick.includes(id))));
-  const mins = minutesOf(5000, 300);
+  const samples = $derived(app.draft?.ext_samples === 10000 ? 10000 : 5000);
+  const mins = $derived(minutesOf(samples, gapOf(app.draft?.pace)));
 </script>
 
 <div class="ext">
   <h2 class="section-title">Extended test</h2>
   <p class="lede">
-    Each resolver you pick gets the same <span class="num">5,000</span> lookups, paced slowly: mostly common names asked again, as
-    in ordinary use, and <span class="num">1,000</span> less common sites asked once. That is enough to tell whether a gap of a few
-    milliseconds is real or a tie.
+    Each resolver you pick gets the same <span class="num">{samples.toLocaleString()}</span> lookups, paced evenly: mostly common
+    names asked again, as in ordinary use, and a fifth of them less common sites asked once. That is enough to tell whether a gap
+    of a few milliseconds is real or a tie.
   </p>
 
   <ol class="slots" aria-label="Resolvers to compare" tabindex="-1" bind:this={slots}>

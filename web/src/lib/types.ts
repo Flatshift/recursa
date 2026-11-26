@@ -345,6 +345,10 @@ export interface RunConfig {
   live: boolean;
   /** The names the Cached test asks, in rotation. */
   cached_names: string[];
+  /** Extended only: the time between lookups. Runs from before there were paces lack it and ran at Standard. */
+  pace?: 'fast' | 'standard' | 'thorough';
+  /** Setup only, never sent: the lookups per resolver the Extended test will ask (5,000 or 10,000). */
+  ext_samples?: number;
 }
 
 /** Where the Extended test's names came from. */
@@ -382,6 +386,10 @@ export interface ExtBin {
   r: ExtBinCell[];
   /** The later asks of common names alone, by target index. Runs from before the split charts lack it; empty on a cold bin. */
   rep?: ExtBinCell[];
+  /** The counted lookups by target index: repeat asks and names asked once, leaving out first asks, as the ranking counts them. Older runs lack it; empty on a cold bin. */
+  all?: ExtBinCell[];
+  /** The first asks of common names alone, which fill the caches, by target index. Older runs lack it; empty on a cold bin. */
+  first?: ExtBinCell[];
 }
 
 /** The gap to the lowest median, with its range. */
@@ -438,6 +446,7 @@ export type ExtGap = [number, number, 'sleep' | 'stall'];
 export interface ExtendedState {
   total: number;
   per_bin: number;
+  /** Seconds in a bin: 3.75, 15 or 30, by pace. Runs from before the paces stored whole seconds (15). */
   bin_s: number;
   /** Seconds in a cold bin. Runs from before the split charts lack it and `cold_bins`. */
   cold_bin_s?: number;
@@ -717,6 +726,8 @@ export interface Bootstrap {
   monitor: MonitorConfig;
   /** The border-link monitor's config, for the sidebar's footer. */
   border_monitor?: BorderMonitorConfig;
+  /** The time monitor's config, for the sidebar's footer. */
+  ntp_monitor?: NtpMonitorConfig;
   active_run: string | null;
   runs: RunRow[];
   method: {

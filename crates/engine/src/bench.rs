@@ -105,8 +105,38 @@ pub enum Mode {
     #[default]
     Accurate,
     Quick,
-    /// Two to four resolvers asked one name every 300 ms for about 25 minutes (see [`crate::extended`]).
+    /// Two to four resolvers asked one name every slot (75, 300 or 600 ms, see [`Pacing`]), 5,000 or 10,000 times (see [`crate::extended`]).
     Extended,
+}
+
+/// How fast an Extended run asks: one slot every `gap_ms`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Pacing {
+    /// Saved runs from before the rename hold "quick".
+    #[serde(alias = "quick")]
+    Fast,
+    #[default]
+    Standard,
+    Thorough,
+}
+
+impl Pacing {
+    pub fn gap_ms(self) -> u64 {
+        match self {
+            Pacing::Fast => 75,
+            Pacing::Standard => 300,
+            Pacing::Thorough => 600,
+        }
+    }
+
+    /// Connections per resolver: enough that a query lost to the timeout doesn't hold up the next sends.
+    pub(crate) fn workers(self) -> usize {
+        match self {
+            Pacing::Fast => 32,
+            Pacing::Standard | Pacing::Thorough => 8,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,6 +211,9 @@ pub struct RunConfig {
     /// Extended only: the one resolver given is opened twice, as targets A and B, to check the test against itself.
     #[serde(default)]
     pub aa: bool,
+    /// Extended only: the time between slots.
+    #[serde(default)]
+    pub pace: Pacing,
 }
 
 impl RunConfig {
@@ -198,6 +231,7 @@ impl RunConfig {
             live: false,
             cached_names: crate::names::defaults(),
             aa: false,
+            pace: Pacing::default(),
         }
     }
 }
@@ -518,7 +552,7 @@ fn new_id() -> String {
 pub(crate) fn spawn(mut cfg: RunConfig, mut deps: Deps) -> Arc<RunHandle> {
     if cfg.mode == Mode::Extended {
         // Lookups per resolver, a whole number of bins; one transport and one family.
-        cfg.samples = cfg.samples.clamp(500, 5000) / 50 * 50;
+        cfg.samples = cfg.samples.clamp(500, 10000) / 50 * 50;
         cfg.transports.truncate(1);
         if cfg.family == Family::Both {
             cfg.family = Family::V4;

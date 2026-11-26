@@ -224,19 +224,20 @@
         Quick and Accurate rank resolvers for this moment. Extended compares two to four of them over thousands of different
         sites, enough to tell a real gap of a few milliseconds from a tie. You pick the resolvers in Setup, which can also
         fill the slots with the three fastest of your latest Accurate run and the resolver this computer uses now. It sends every
-        resolver the same 5,000 lookups, one name every 300 ms, in a random order each time, over plain UDP on IPv4. A run takes about 25
-        minutes, and Recursa keeps the computer awake while it runs. A lookup with no answer after 2 s counts as lost, and ranks as slower
+        resolver the same lookups, 5,000 or 10,000 as you choose, in a random order each time, over plain UDP on IPv4. The pace is one name every
+        75 ms (Fast), 300 ms (Standard) or 600 ms (Thorough), so a run takes from about 6 minutes to about 100. Fast stays under the
+        1,000 queries a minute a Pi-hole allows each client by default. Recursa keeps the computer awake while it runs. A lookup with no answer after 2 s counts as lost, and ranks as slower
         than any answer.
       </p>
       <p>
-        The names are 500 common ones, each asked 8 times across the run, and 1,000 less common sites sampled from a larger list.
+        The names are about 500 common ones, each asked 8 times across a 5,000-lookup run and 16 times across a 10,000 one, and the less common sites sampled from a larger list to fill the rest.
         The run is built like ordinary use: about 8 in 10 lookups are for names asked before, and most of those come from a resolver’s
         cache, while 2 in 10 are sites asked once. The first ask of each common name fills the resolver’s cache, as earlier lookups in a
         household would have; it is shown as a warm-up and is not ranked. The main result, the median and the call, covers the later asks
         and the sites asked once. A resolver that no longer holds a common name in its cache pays for that there. The once-asked sites
         are also ranked on their own as cold lookups, with the same method: the median, a range for the gap and a 3 ms floor under which
-        a gap counts as a tie. The two are charted apart on the same time axis: repeat lookups in 15-second bins and cold lookups in
-        75-second bins.
+        a gap counts as a tie. The two are charted apart on the same time axis: repeat lookups in bins of 50 slots (15 seconds at the Standard pace) and cold lookups in
+        bins five times as long. A third chart shows all the counted lookups together, as the ranking counts them.
         A later ask of a common name comes from the resolver’s cache only if the resolver still holds it. Both lists ship with Recursa,
         and nothing is downloaded for a run. The larger list is built from the official websites recorded in Wikidata, with each site’s
         country where one is known. Recursa takes your country from Cloudflare’s answer about your public address and picks the less
@@ -251,7 +252,7 @@
         of every list, so a blocked name is not read as a lost one. Adult top-level domains such as .xxx and .porn are left out too.
       </p>
       <p>
-        The run is cut into bins of 15 s, 50 queries to each resolver in every bin, so you can see whether a gap held the whole time.
+        The run is cut into bins of 50 slots (3.75, 15 or 30 s by pace), 50 queries to each resolver in every bin, so you can see whether a gap held the whole time.
         A bin in which every resolver lost half or more of its queries points at your link and is left out of every figure. When more
         than a fifth of the bins are left out, the run makes no call. Time while the computer sleeps is a hole in the record, and nothing is counted for it.
       </p>
@@ -576,7 +577,7 @@
         you choose (up to eight, up to four of them your own). It sends one query per address every 15 minutes or more (30 by
         default) while Recursa is open, and keeps the answers for the number of days you set. For each server it shows:
         checks answered (%), dropouts and returns, how steady its offset is from here, median and 95th-percentile delay, and delay
-        by hour of day (UTC). The hourly delay follows how busy your own path is.
+        by hour of day (UTC). The hourly delay follows how busy your own path is. One chart sets every server's offset on a shared axis, and a strip of cells per server shows the share answered in each hour or day (UTC).
       </p>
       <p>
         It also draws the consensus of each check as a line, with its spread. After six hours and eight checks, it shows the slope
@@ -630,6 +631,7 @@
 recursa run --samples 30    # benchmark the default set in the terminal
 recursa run --resolvers quad9,cloudflare --transports udp,doh --json
 recursa run --extended --resolvers quad9,cloudflare     # the Extended test, about 25 minutes
+recursa run --extended --samples 10000 --pace fast ... # 10,000 lookups at the Fast pace, about 13 minutes
 recursa run --cached-names example.com,wikipedia.org    # your own names for the Cached test
 recursa run --cached-names-file names.txt               # or a file of them
 recursa check               # is port 53 direct or answered locally?

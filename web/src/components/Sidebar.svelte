@@ -25,6 +25,7 @@
   const current = $derived(app.route.name === 'run' ? app.route.id : null);
   const monitoring = $derived(app.boot?.monitor ?? null);
   const border = $derived(app.boot?.border_monitor ?? null);
+  const clock = $derived(app.boot?.ntp_monitor ?? null);
 
   function go(e: MouseEvent, href: string) {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
@@ -208,6 +209,22 @@
       </span>
       <Icon name="chevron-right" size={mobile ? 16 : 12} />
     </a>
+    {#if clock}
+      <a
+        class="mon"
+        href="/time/monitor"
+        onclick={(e) => go(e, '/time/monitor')}
+        class:on={clock.enabled}
+        title={clock.enabled ? `Time servers are checked every ${clock.interval_min} min. Open Time.` : 'Time monitoring is off. Open Time to switch it on.'}
+      >
+        <span class="dot" aria-hidden="true"></span>
+        <span class="ml">
+          <span class="mt">Time</span>
+          <span class="sub">{#if clock.enabled}Every {clock.interval_min} min{:else}Off{/if}</span>
+        </span>
+        <Icon name="chevron-right" size={mobile ? 16 : 12} />
+      </a>
+    {/if}
     {#if border}
       <a
         class="mon"

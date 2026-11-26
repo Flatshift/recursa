@@ -66,14 +66,24 @@ export function duration(msTotal: number): string {
   return r ? `${m} m ${r} s` : `${m} m`;
 }
 
+/** The Extended test's paces: one lookup to each resolver every `ms`. */
+export const PACES = [
+  { v: 'fast', label: 'Fast', ms: 75 },
+  { v: 'standard', label: 'Standard', ms: 300 },
+  { v: 'thorough', label: 'Thorough', ms: 600 },
+] as const;
+export type Pace = (typeof PACES)[number]['v'];
+/** The slot of a pace in ms; a run from before there were paces ran at Standard. */
+export const gapOf = (pace: string | undefined): number => PACES.find((p) => p.v === pace)?.ms ?? 300;
+
 /** How long a run should take: the Setup estimate, and the yardstick for time left while one runs. */
 export function runEstimateMs(
   targets: number,
   resolvers: number,
-  c: { tests: unknown[]; samples: number; mode: 'accurate' | 'quick' | 'extended'; probes: boolean; cdn: boolean; live: boolean },
+  c: { tests: unknown[]; samples: number; pace?: string; mode: 'accurate' | 'quick' | 'extended'; probes: boolean; cdn: boolean; live: boolean },
 ): number {
-  // Extended asks 50 names per resolver every 15 seconds, so the length follows the count of 15-second bins.
-  if (c.mode === 'extended') return Math.ceil(c.samples / 50) * 15000 + 5000;
+  // Extended asks 50 names per resolver in every bin of 50 slots, so the length follows the count of bins.
+  if (c.mode === 'extended') return Math.ceil(c.samples / 50) * 50 * gapOf(c.pace) + 5000;
   const queries = targets * (c.tests.length * c.samples + 11);
   let msTotal: number;
   if (c.mode === 'accurate') {

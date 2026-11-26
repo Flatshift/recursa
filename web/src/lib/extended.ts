@@ -1,7 +1,7 @@
 // Pure helpers of the Extended test's screens. The engine decides the verdict, the gaps and the calls; these only
 // lay its figures out for the shared over-time chart, the setup and the text.
 
-import type { ExtBin, ExtCall, ExtendedState, ExtGroup, ExtNames, ExtRow, HostSample } from './types';
+import type { ExtBin, ExtBinCell, ExtCall, ExtendedState, ExtGroup, ExtNames, ExtRow, HostSample } from './types';
 import type { OverTimeCell, OverTimeGap, OverTimeSeries, OverTimeSlow, SlowKind } from './overtime';
 
 export const MIN_PICK = 2;
@@ -123,7 +123,11 @@ function gapsOf(ext: Pick<ExtendedState, 'bins' | 'gaps' | 'bin_s'>): OverTimeGa
 export function chartsOf(
   ext: Pick<ExtendedState, 'bins' | 'gaps' | 'bin_s' | 'cold_bin_s' | 'cold_bins'>,
   names: string[],
-): { repeat: { series: OverTimeSeries[]; gaps: OverTimeGap[] }; cold: { series: OverTimeSeries[]; gaps: OverTimeGap[] } } | null {
+): {
+  repeat: { series: OverTimeSeries[]; gaps: OverTimeGap[] };
+  cold: { series: OverTimeSeries[]; gaps: OverTimeGap[] };
+  all: { series: OverTimeSeries[]; gaps: OverTimeGap[] } | null;
+} | null {
   if (ext.cold_bin_s == null || !ext.cold_bins) return null;
   const coldBins = ext.cold_bins;
   const w = ext.bin_s * 1000;
@@ -133,17 +137,31 @@ export function chartsOf(
   const coldSlots = Math.ceil(fine / k);
   const repeatSlots = coldSlots * k;
   let firstRepeat = -1;
-  const repeat = names.map((name, t): OverTimeSeries => {
-    const cells: (OverTimeCell | null)[] = Array.from({ length: repeatSlots }, () => null);
-    for (const b of ext.bins) {
-      const c = b.rep?.[t];
-      if (!c || b.removed || c.sent === 0) continue;
-      const i = slotOf(b, ext.bin_s);
-      cells[i] = { t0: i * w, t1: (i + 1) * w, p5: c.p5, p25: c.p25, p50: c.p50, p75: c.p75, p95: c.p95, sent: c.sent, lost: c.lost };
-      if (firstRepeat < 0 || i < firstRepeat) firstRepeat = i;
-    }
-    return { id: String(t), name, cells };
-  });
+  const fineCell = (i: number, c: ExtBinCell): OverTimeCell => ({ t0: i * w, t1: (i + 1) * w, p5: c.p5, p25: c.p25, p50: c.p50, p75: c.p75, p95: c.p95, sent: c.sent, lost: c.lost });
+  const fineSeries = (pick: (b: ExtBin) => ExtBinCell[] | undefined, mark: boolean) =>
+    names.map((name, t): OverTimeSeries => {
+      const cells: (OverTimeCell | null)[] = Array.from({ length: repeatSlots }, () => null);
+      for (const b of ext.bins) {
+        const c = pick(b)?.[t];
+        if (!c || b.removed || c.sent === 0) continue;
+        const i = slotOf(b, ext.bin_s);
+        cells[i] = fineCell(i, c);
+        if (mark && (firstRepeat < 0 || i < firstRepeat)) firstRepeat = i;
+      }
+      return { id: String(t), name, cells };
+    });
+  const repeat = fineSeries((b) => b.rep, true);
+  // While the caches fill there are no repeat asks yet, so the warm-up shows the first asks that fill them (everything
+  // asked then, on a run from before first asks were kept apart).
+  for (const b of ext.bins) {
+    const i = slotOf(b, ext.bin_s);
+    if (b.removed || i >= firstRepeat) continue;
+    repeat.forEach((s, t) => {
+      const c = (b.first ?? b.r)[t];
+      if (c?.sent) s.cells[i] = fineCell(i, c);
+    });
+  }
+  const all = ext.bins.some((b) => b.all) ? fineSeries((b) => b.all, false) : null;
   const cold = names.map((name, t): OverTimeSeries => {
     const cells: (OverTimeCell | null)[] = Array.from({ length: coldSlots }, () => null);
     for (const b of coldBins) {
@@ -158,9 +176,12 @@ export function chartsOf(
   const gaps = gapsOf(ext);
   const warm: OverTimeGap[] =
     firstRepeat > 0 ? [{ t0: 0, t1: firstRepeat * w, kind: 'warmup', label: GAP_LABEL.warmup, soft: true }] : [];
+  const repeatGaps = () => [...warm, ...gaps.map((g) => ({ ...g }))].sort((a, b) => a.t0 - b.t0);
   return {
-    repeat: { series: repeat, gaps: [...warm, ...gaps.map((g) => ({ ...g }))].sort((a, b) => a.t0 - b.t0) },
+    repeat: { series: repeat, gaps: repeatGaps() },
     cold: { series: cold, gaps },
+    // While the caches fill, these bins hold only names asked once, so the warm-up is marked as on the repeat chart.
+    all: all && { series: all, gaps: repeatGaps() },
   };
 }
 
@@ -237,7 +258,7 @@ export function verdictOf(rows: ExtRow[], noVerdict: boolean): ExtVerdict {
   return { kind: next.call === 'tie' ? 'Practical tie for first' : 'Too close to call', head: [lead.t, next.t], lead, next };
 }
 
-/** How many times each common name was asked: 3 in runs from before the eight-ask plan, 8 since. */
+/** How many times each common name was asked: 3 in runs from before the eight-ask plan, 8 since, 16 in a 10,000 run. */
 export function asksOf(names: Pick<ExtNames, 'common' | 'tail'>, total: number): number {
   return names.common ? Math.round((total - names.tail) / names.common) : 0;
 }
